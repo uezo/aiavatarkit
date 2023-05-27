@@ -1,0 +1,4 @@
+aiohttp==3.8.4
+numpy==1.24.3
+openai==0.27.7
+PyAudio==0.2.13
