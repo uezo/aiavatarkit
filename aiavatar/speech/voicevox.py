@@ -59,6 +59,7 @@ class VoicevoxSpeechController(SpeechController):
                 output_device_index=self.device_index,
                 channels=f.getnchannels(),
                 rate=f.getframerate(),
+                frames_per_buffer=1024,
                 output=True,
                 stream_callback=stream_callback,
             )
