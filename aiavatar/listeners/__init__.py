@@ -24,30 +24,30 @@ class SpeechListenerBase:
         self.device_index = device_index
         self.is_listening = False
 
-    def record_audio(self, device_index) -> list:
+    def record_audio(self, device_index) -> bytes:
         audio_data = []
 
         def callback(in_data, frame_count, time_info, status):
             audio_data.append(in_data)
             return (None, pyaudio.paContinue)
 
-        stream = pyaudio.PyAudio().open(
-            input_device_index=device_index,
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=self.rate,
-            input=True,
-            stream_callback=callback
-        )
-
-        start_time = time.time()
-        is_recording = False
-        silence_start_time = time.time()
-        is_silent = False
-        last_detected_time = time.time()
-        stream.start_stream()
-
         try:
+            stream = pyaudio.PyAudio().open(
+                input_device_index=device_index,
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=self.rate,
+                input=True,
+                stream_callback=callback
+            )
+
+            start_time = time.time()
+            is_recording = False
+            silence_start_time = time.time()
+            is_silent = False
+            last_detected_time = time.time()
+            stream.start_stream()
+
             while stream.is_active():
                 current_time = time.time()
                 volume = numpy.frombuffer(b"".join(audio_data[-10:]), dtype=numpy.int16).max() if audio_data else 0
@@ -102,7 +102,8 @@ class SpeechListenerBase:
             stream.stop_stream()
             stream.close()
 
-        return []
+        # Return empty bytes
+        return b"".join([])
 
     async def transcribe(self, audio_data: list) -> str:
         audio_b64 = base64.b64encode(audio_data).decode("utf-8")
@@ -124,6 +125,11 @@ class SpeechListenerBase:
                 json=request_body
             ) as resp:
                 j = await resp.json()
+
+                if resp.status != 200:
+                    self.logger.error(f"Failed in recognition: {resp.status}\n{j}")
+                    return None
+
                 if j.get("results"):
                     if j["results"][0]["alternatives"][0].get("transcript"):
                         return j["results"][0]["alternatives"][0]["transcript"]
@@ -138,17 +144,22 @@ class SpeechListenerBase:
             while self.is_listening:
                 audio_data = self.record_audio(self.device_index)
 
-                recognized_text = await self.transcribe(audio_data)
+                if audio_data:
+                    recognized_text = await self.transcribe(audio_data)
 
-                if recognized_text:
-                    await self.on_speech_recognized(recognized_text)
+                    if recognized_text:
+                        await self.on_speech_recognized(recognized_text)
+                    else:
+                        self.logger.info("No speech recognized")
+                
                 else:
-                    self.logger.info("No speech recognized")
+                    # Stop listening when no recorded data
+                    break
 
             self.logger.info(f"Stopped listening ({self.__class__.__name__})")
 
         except Exception as ex:
-            pass
+            self.logger.error(f"Error at start_listening: {str(ex)}\n{traceback.format_exc()}")
 
         finally:
             self.is_listening = False

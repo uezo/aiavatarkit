@@ -1,3 +1,5 @@
+import asyncio
+from threading import Thread
 from typing import Callable
 from . import SpeechListenerBase
 
@@ -10,3 +12,8 @@ class WakewordListener(SpeechListenerBase):
     async def invoke_on_wakeword(self, text: str):
         if text in self.wakewords:
             await self.on_wakeword(text)
+
+    def start(self):
+        th = Thread(target=asyncio.run, args=(self.start_listening(),), daemon=True)
+        th.start()
+        return th
