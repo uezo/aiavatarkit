@@ -29,12 +29,11 @@ $ pip install aiavatar
 Make the script as  `run.py`.
 
 ```python
-import asyncio
 import logging
-from aiavatar import AIAvatar
+from aiavatar import AIAvatar, WakewordListener
 
-GOOGLE_API_KEY = "YOUR API KEY"
-OPENAI_API_KEY = "YOUR API KEY"
+GOOGLE_API_KEY = "YOUR_API_KEY"
+OPENAI_API_KEY = "YOUR_API_KEY"
 VV_URL = "http://127.0.0.1:50021"
 VV_SPEAKER = 46
 
@@ -56,15 +55,30 @@ system_message_content = """あなたは「joy」「angry」「sorrow」「fun�
 
 # Create AIAvatar
 app = AIAvatar(
-    GOOGLE_API_KEY,
-    OPENAI_API_KEY,
-    VV_URL,
-    VV_SPEAKER,
+    google_api_key=GOOGLE_API_KEY,
+    openai_api_key=OPENAI_API_KEY,
+    voicevox_url=VV_URL,
+    voicevox_speaker_id=VV_SPEAKER,
     system_message_content=system_message_content,
 )
 
-# Start AIAvatar
-asyncio.run(app.start())
+# Create WakewordListener
+wakewords = ["こんにちは"]
+
+async def on_wakeword(text):
+    logger.info(f"Wakeword: {text}")
+    await app.start_chat()
+
+wakeword_listener = WakewordListener(
+    api_key=GOOGLE_API_KEY,
+    wakewords=wakewords,
+    on_wakeword=on_wakeword,
+    device_index=app.input_device
+)
+
+# Start listening
+ww_thread = wakeword_listener.start()
+ww_thread.join()
 ```
 
 Start AIAvatar.
@@ -128,3 +142,47 @@ $ run.py
 Launch VRChat as desktop mode on the machine that runs `run.py` and log in with the account for AIAvatar. Then set `VB-Cable-A` to microphone in VRChat setting window.
 
 That's all! Let's chat with the AIAvatar. Log in to VRChat on another machine (or Quest) and go to the world the AIAvatar is in.
+
+# ⚡️ Use custom listener
+
+It's very easy to add your original listeners. Just make it run on other thread and invoke `app.start_chat()` when the listener handles the event.
+
+Here the example of `FileSystemListener` that invokes chat when `test.txt` is found on the file system.
+
+```python
+import asyncio
+import os
+from threading import Thread
+from time import sleep
+
+class FileSystemListener:
+    def __init__(self, on_file_found):
+        self.on_file_found = on_file_found
+
+    def start_listening(self):
+        while True:
+            # Check file every 3 seconds
+            if os.path.isfile("test.txt"):
+                asyncio.run(self.on_file_found())
+            sleep(3)
+
+    def start(self):
+        th = Thread(target=self.start_listening, daemon=True)
+        th.start()
+        return th
+```
+
+Use this listener in `run.py` like below.
+
+```python
+# Event handler
+def on_file_found():
+    asyncio.run(app.chat())
+
+# Instantiate
+fs_listener = FileSystemListener(on_file_found)
+fs_thread = fs_listener.start()
+    :
+# Wait for finish
+fs_thread.join()
+```

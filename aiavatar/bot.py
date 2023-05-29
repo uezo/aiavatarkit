@@ -1,13 +1,12 @@
 import asyncio
 from logging import getLogger, NullHandler
 import traceback
-from typing import List, Callable
+from typing import Callable
 # Device
 from .device import AudioDevice
 # Processor
 from .processors.chatgpt import ChatGPTProcessor
 # Listener
-from .listeners.wakeword import WakewordListener
 from .listeners.voicerequest import VoiceRequestListener
 # Avatar
 from .speech.voicevox import VoicevoxSpeechController
@@ -22,8 +21,7 @@ class AIAvatar:
         openai_api_key: str,
         voicevox_url: str,
         voicevox_speaker_id: int=46,
-        wakewords: List[str]=None,
-        wakevoice: str="どうしたの",
+        start_voice: str="どうしたの",
         system_message_content: str=None,
         animation_controller: AnimationController=None,
         face_controller: FaceController=None,
@@ -62,12 +60,6 @@ class AIAvatar:
 
         # Listeners
         self.request_listener = VoiceRequestListener(self.google_api_key, device_index=self.input_device)
-        self.wakewords = wakewords or ["こんにちは"]
-        self.wakevoice = wakevoice
-        async def on_ww(text):
-            self.logger.info(f"Wakeword: {text}")
-            await self.chat()
-        self.wakeword_listener = WakewordListener(self.google_api_key, self.wakewords, on_ww, device_index=self.input_device)
 
         # Avatar
         speech_controller = VoicevoxSpeechController(self.voicevox_url, self.voicevox_speaker_id, device_index=self.output_device)
@@ -75,11 +67,16 @@ class AIAvatar:
         face_controller = face_controller or FaceControllerDummy()
         self.avatar_controller = AvatarController(speech_controller, animation_controller, face_controller, avatar_request_parser)
 
-    async def chat(self):
-        try:
-            await self.avatar_controller.speech_controller.speak(self.wakevoice)
-        except Exception as ex:
-            self.logger.error(f"Error at starting chat: {str(ex)}\n{traceback.format_exc()}")
+        # Chat
+        self.chat_task = None
+        self.start_voice = start_voice
+
+    async def chat(self, skip_start_voice=False):
+        if not skip_start_voice:
+            try:
+                await self.avatar_controller.speech_controller.speak(self.start_voice)
+            except Exception as ex:
+                self.logger.error(f"Error at starting chat: {str(ex)}\n{traceback.format_exc()}")
 
         while True:
             try:
@@ -106,7 +103,12 @@ class AIAvatar:
             
             except Exception as ex:
                 self.logger.error(f"Error at chatting loop: {str(ex)}\n{traceback.format_exc()}")
-    
 
-    async def start(self):
-        await self.wakeword_listener.start_listening()
+    async def start_chat(self):
+        self.stop_chat()
+        self.chat_task = asyncio.create_task(self.chat())
+        await self.chat_task
+
+    def stop_chat(self):
+        if self.chat_task is not None:
+            self.chat_task.cancel()
