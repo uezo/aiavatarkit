@@ -14,6 +14,22 @@ class AudioDevice:
         return PyAudio().get_device_info_by_index(index)
 
     @classmethod
+    def get_input_device_by_name(cls, name: str):
+        for d in AudioDevice.get_audio_devices():
+            if d["maxInputChannels"] > 0:
+                if name.lower() in d["name"].lower():
+                    return d
+        return None
+
+    @classmethod
+    def get_output_device_by_name(cls, name: str):
+        for d in AudioDevice.get_audio_devices():
+            if d["maxOutputChannels"] > 0:
+                if name.lower() in d["name"].lower():
+                    return d
+        return None
+
+    @classmethod
     def get_audio_devices(cls):
         devices = []
         pa = PyAudio()
