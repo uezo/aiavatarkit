@@ -1,9 +1,9 @@
 import pytest
-from aiavatar.processors import ChatGPTProcessor
+from aiavatar.processors.chatgpt import ChatGPTProcessor
 
 @pytest.fixture
 def chatgpt_processor():
-    return ChatGPTProcessor("YOUR API KEY", temperature=0.0)
+    return ChatGPTProcessor("YOUR_API_KEY", temperature=0.0)
 
 @pytest.mark.asyncio
 async def test_chat(chatgpt_processor: ChatGPTProcessor):

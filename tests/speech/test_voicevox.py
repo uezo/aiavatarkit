@@ -1,7 +1,7 @@
 import asyncio
 import pytest
 from time import time
-from aiavatar.speech import VoicevoxSpeechController
+from aiavatar.speech.voicevox import VoicevoxSpeechController
 
 @pytest.fixture
 def voicevox_controller():
