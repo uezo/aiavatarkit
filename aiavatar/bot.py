@@ -39,19 +39,33 @@ class AIAvatar:
         self.voicevox_speaker_id = voicevox_speaker_id
 
         # Audio Devices
-        if input_device < 0:
-            input_device_info = AudioDevice.get_default_input_device_info()
+        if isinstance(input_device, int):
+            if input_device < 0:
+                input_device_info = AudioDevice.get_default_input_device_info()
+                input_device = input_device_info["index"]
+            else:
+                input_device_info = AudioDevice.get_device_info(input_device)
+        elif isinstance(input_device, str):
+            input_device_info = AudioDevice.get_input_device_by_name(input_device)
+            if input_device_info is None:
+                input_device_info = AudioDevice.get_default_input_device_info()
             input_device = input_device_info["index"]
-        else:
-            input_device_info = AudioDevice.get_device_info(input_device)
+
         self.input_device = input_device
         self.logger.info(f"Input device: [{input_device}] {input_device_info['name']}")
 
-        if output_device < 0:
-            output_device_info = AudioDevice.get_default_output_device_info()
+        if isinstance(output_device, int):
+            if output_device < 0:
+                output_device_info = AudioDevice.get_default_output_device_info()
+                output_device = output_device_info["index"]
+            else:
+                output_device_info = AudioDevice.get_device_info(output_device)
+        elif isinstance(output_device, str):
+            output_device_info = AudioDevice.get_output_device_by_name(output_device)
+            if output_device_info is None:
+                output_device_info = AudioDevice.get_default_output_device_info()
             output_device = output_device_info["index"]
-        else:
-            output_device_info = AudioDevice.get_device_info(output_device)
+
         self.output_device = output_device
         self.logger.info(f"Output device: [{output_device}] {output_device_info['name']}")
 
