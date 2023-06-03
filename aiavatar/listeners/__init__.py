@@ -12,6 +12,7 @@ class SpeechListenerBase:
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
 
+        self.pa = pyaudio.PyAudio()
         self.api_key = api_key
         self.on_speech_recognized = on_speech_recognized
         self.volume_threshold = volume_threshold
@@ -32,7 +33,7 @@ class SpeechListenerBase:
             return (None, pyaudio.paContinue)
 
         try:
-            stream = pyaudio.PyAudio().open(
+            stream = self.pa.open(
                 input_device_index=device_index,
                 format=pyaudio.paInt16,
                 channels=1,
