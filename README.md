@@ -137,6 +137,14 @@ app = AIAvatar(
 )
 ```
 
+You can also set the name of audio devices instead of index (partial match, ignore case).
+
+```python
+    input_device="CABLE-B Out"      # Listen sound from VRChat
+    output_device="cable-a input",   # Speak to VRChat microphone
+```
+
+
 Run it.
 
 ```bash
