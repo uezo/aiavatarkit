@@ -85,7 +85,7 @@ class AIAvatar:
         self.chat_task = None
         self.start_voice = start_voice
 
-    async def chat(self, skip_start_voice=False):
+    async def chat(self, request_on_start: str=None, skip_start_voice: bool=False):
         if not skip_start_voice:
             try:
                 await self.avatar_controller.speech_controller.speak(self.start_voice)
@@ -94,9 +94,13 @@ class AIAvatar:
 
         while True:
             try:
-                req = await self.request_listener.get_request()
-                if not req:
-                    break
+                if request_on_start:
+                    req = request_on_start
+                    request_on_start = None
+                else:
+                    req = await self.request_listener.get_request()
+                    if not req:
+                        break
 
                 self.logger.info(f"User: {req}")
                 self.logger.info("AI:")
@@ -118,9 +122,9 @@ class AIAvatar:
             except Exception as ex:
                 self.logger.error(f"Error at chatting loop: {str(ex)}\n{traceback.format_exc()}")
 
-    async def start_chat(self):
+    async def start_chat(self, request_on_start: str=None, skip_start_voice: bool=False):
         self.stop_chat()
-        self.chat_task = asyncio.create_task(self.chat())
+        self.chat_task = asyncio.create_task(self.chat(request_on_start, skip_start_voice))
         await self.chat_task
 
     def stop_chat(self):
