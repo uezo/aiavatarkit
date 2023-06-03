@@ -79,6 +79,10 @@ wakeword_listener = WakewordListener(
 # Start listening
 ww_thread = wakeword_listener.start()
 ww_thread.join()
+
+# Tips: To terminate with Ctrl+C on Windows, use `while` below instead of `ww_thread.join()`
+# while True:
+#     time.sleep(1)
 ```
 
 Start AIAvatar.
@@ -142,6 +146,85 @@ $ run.py
 Launch VRChat as desktop mode on the machine that runs `run.py` and log in with the account for AIAvatar. Then set `VB-Cable-A` to microphone in VRChat setting window.
 
 That's all! Let's chat with the AIAvatar. Log in to VRChat on another machine (or Quest) and go to the world the AIAvatar is in.
+
+
+# 🎤 Testing audio I/O
+
+Using the script below to test the audio I/O before configuring AIAvatar.
+
+- Step-by-Step audio device configuration.
+- Speak immediately after start if the output device is correctly configured.
+- All recognized text will be shown in console if the input device is correctly configured.
+- Just echo on wakeword recognized.
+
+```python
+import asyncio
+import logging
+from aiavatar import (
+    AudioDevice,
+    VoicevoxSpeechController,
+    WakewordListener
+)
+
+GOOGLE_API_KEY = "YOUR_API_KEY"
+VV_URL = "http://127.0.0.1:50021"
+VV_SPEAKER = 46
+INPUT_DEVICE = -1
+OUTPUT_DEVICE = -1
+
+# Configure root logger
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+log_format = logging.Formatter("[%(levelname)s] %(asctime)s : %(message)s")
+streamHandler = logging.StreamHandler()
+streamHandler.setFormatter(log_format)
+logger.addHandler(streamHandler)
+
+# Select input device
+if INPUT_DEVICE < 0:
+    input_device_info = AudioDevice.get_input_device_with_prompt()
+else:
+    input_device_info = AudioDevice.get_device_info(INPUT_DEVICE)
+input_device = input_device_info["index"]
+
+# Select output device
+if OUTPUT_DEVICE < 0:
+    output_device_info = AudioDevice.get_output_device_with_prompt()
+else:
+    output_device_info = AudioDevice.get_device_info(OUTPUT_DEVICE)
+output_device = output_device_info["index"]
+
+logger.info(f"Input device: [{input_device}] {input_device_info['name']}")
+logger.info(f"Output device: [{output_device}] {output_device_info['name']}")
+
+# Create speaker
+speaker = VoicevoxSpeechController(
+    VV_URL,
+    VV_SPEAKER,
+    device_index=output_device
+)
+
+asyncio.run(speaker.speak("オーディオデバイスのテスターを起動しました。私の声が聞こえていますか？"))
+
+# Create WakewordListener
+wakewords = ["こんにちは"]
+async def on_wakeword(text):
+    logger.info(f"Wakeword: {text}")
+    await speaker.speak(f"{text}")
+
+wakeword_listener = WakewordListener(
+    api_key=GOOGLE_API_KEY,
+    wakewords=["こんにちは"],
+    on_wakeword=on_wakeword,
+    verbose=True,
+    device_index=input_device
+)
+
+# Start listening
+ww_thread = wakeword_listener.start()
+ww_thread.join()
+```
+
 
 # ⚡️ Use custom listener
 
