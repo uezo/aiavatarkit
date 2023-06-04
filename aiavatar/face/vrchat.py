@@ -1,13 +1,11 @@
 import asyncio
-from logging import getLogger, NullHandler
 from time import time
 from pythonosc import udp_client
-from . import FaceController
+from . import FaceControllerBase
 
-class VRChatFaceController(FaceController):
-    def __init__(self, osc_address: str="/avatar/parameters/FaceOSC", faces: dict=None, neutral_key: str="neutral", host: str="127.0.0.1", port: int=9000):
-        self.logger = getLogger(__name__)
-        self.logger.addHandler(NullHandler())
+class VRChatFaceController(FaceControllerBase):
+    def __init__(self, osc_address: str="/avatar/parameters/FaceOSC", faces: dict=None, neutral_key: str="neutral", host: str="127.0.0.1", port: int=9000, verbose: bool=False):
+        super().__init__(verbose)
 
         self.osc_address = osc_address
         self.faces = faces or {
@@ -25,18 +23,18 @@ class VRChatFaceController(FaceController):
         self.client = udp_client.SimpleUDPClient(self.host, self.port)
 
     async def set_face(self, name: str, duration: float):
-        start_at = time()
+        self.subscribe_reset(time() + duration)
+
         osc_value = self.faces.get(name)
         if osc_value is None:
-            print(f"Face '{name}' is not registered")
             self.logger.warning(f"Face '{name}' is not registered")
             return
 
         self.logger.info(f"face: {name} ({osc_value})")
         self.client.send_message(self.osc_address, osc_value)
-        while time() - start_at <= duration:
-            await asyncio.sleep(0.1)
-        self.logger.info(f"face: {self.neutral_key} ({self.faces[self.neutral_key]})")
+
+    def reset(self):
+        self.logger.info(f"Reset face: {self.neutral_key} ({self.faces[self.neutral_key]})")
         self.client.send_message(self.osc_address, self.faces[self.neutral_key])
 
     def test_osc(self):
