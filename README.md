@@ -59,6 +59,7 @@ app = AIAvatar(
     openai_api_key=OPENAI_API_KEY,
     voicevox_url=VV_URL,
     voicevox_speaker_id=VV_SPEAKER,
+    # volume_threshold=2000,    # <- Set to adjust microphone sensitivity
     system_message_content=system_message_content,
 )
 
@@ -71,6 +72,7 @@ async def on_wakeword(text):
 
 wakeword_listener = WakewordListener(
     api_key=GOOGLE_API_KEY,
+    volume_threshold=app.volume_threshold,
     wakewords=wakewords,
     on_wakeword=on_wakeword,
     device_index=app.input_device
@@ -177,6 +179,7 @@ from aiavatar import (
 GOOGLE_API_KEY = "YOUR_API_KEY"
 VV_URL = "http://127.0.0.1:50021"
 VV_SPEAKER = 46
+VOLUME_THRESHOLD = 3000
 INPUT_DEVICE = -1
 OUTPUT_DEVICE = -1
 
@@ -222,6 +225,7 @@ async def on_wakeword(text):
 
 wakeword_listener = WakewordListener(
     api_key=GOOGLE_API_KEY,
+    volume_threshold=VOLUME_THRESHOLD,
     wakewords=["こんにちは"],
     on_wakeword=on_wakeword,
     verbose=True,
