@@ -21,6 +21,7 @@ class AIAvatar:
         openai_api_key: str,
         voicevox_url: str,
         voicevox_speaker_id: int=46,
+        volume_threshold: int=3000,
         start_voice: str="どうしたの",
         system_message_content: str=None,
         animation_controller: AnimationController=None,
@@ -37,6 +38,7 @@ class AIAvatar:
         self.openai_api_key = openai_api_key
         self.voicevox_url = voicevox_url
         self.voicevox_speaker_id = voicevox_speaker_id
+        self.volume_threshold = volume_threshold
 
         # Audio Devices
         if isinstance(input_device, int):
@@ -73,7 +75,7 @@ class AIAvatar:
         self.chat_processor = ChatGPTProcessor(self.openai_api_key, system_message_content=system_message_content)
 
         # Listeners
-        self.request_listener = VoiceRequestListener(self.google_api_key, device_index=self.input_device)
+        self.request_listener = VoiceRequestListener(self.google_api_key, volume_threshold=volume_threshold, device_index=self.input_device)
 
         # Avatar
         speech_controller = VoicevoxSpeechController(self.voicevox_url, self.voicevox_speaker_id, device_index=self.output_device)
