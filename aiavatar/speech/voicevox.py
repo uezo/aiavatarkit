@@ -4,7 +4,8 @@ import io
 from logging import getLogger, NullHandler
 import traceback
 import wave
-import pyaudio
+import numpy
+import sounddevice
 from . import SpeechController
 
 class VoiceClip:
@@ -23,7 +24,6 @@ class VoicevoxSpeechController(SpeechController):
         self.speaker_id = speaker_id
         self.device_index = device_index
         self.voice_clips = {}
-        self.pa = pyaudio.PyAudio()
         self._is_speaking = False
 
     async def download(self, voice: VoiceClip):
@@ -51,32 +51,20 @@ class VoicevoxSpeechController(SpeechController):
             await voice.download_task
         
         with wave.open(io.BytesIO(voice.audio_clip), "rb") as f:
-            def stream_callback(in_data, frame_count, time_info, status):
-                data = f.readframes(frame_count)
-                return (data, pyaudio.paContinue)
-
-            stream = self.pa.open(format=self.pa.get_format_from_width(width=f.getsampwidth()),
-                output_device_index=self.device_index,
-                channels=f.getnchannels(),
-                rate=f.getframerate(),
-                frames_per_buffer=1024,
-                output=True,
-                stream_callback=stream_callback,
-            )
-
             try:
                 self._is_speaking = True
-                stream.start_stream()
-                while stream.is_active():
-                    await asyncio.sleep(0.1)
+                data = numpy.frombuffer(
+                    f.readframes(f.getnframes()),
+                    dtype=numpy.int16
+                )
+                sounddevice.play(data, f.getframerate())
+                sounddevice.wait()
 
             except Exception as ex:
                 self.logger.error(f"Error at speaking: {str(ex)}\n{traceback.format_exc()}")
 
             finally:
                 self._is_speaking = False
-                stream.stop_stream()
-                stream.close()
 
     def is_speaking(self) -> bool:
         return self._is_speaking
