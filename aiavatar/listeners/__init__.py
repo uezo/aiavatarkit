@@ -5,14 +5,13 @@ import time
 import traceback
 from typing import Callable
 import aiohttp
-import pyaudio
+import sounddevice
 
 class SpeechListenerBase:
-    def __init__(self, api_key: str, on_speech_recognized: Callable, volume_threshold: int=3000, timeout: float=1.0, detection_timeout: float=0.0, min_duration: float=0.3, max_duration: float=20.0, lang: str="ja-JP", rate: int=44100, device_index: int=-1):
+    def __init__(self, api_key: str, on_speech_recognized: Callable, volume_threshold: int=3000, timeout: float=1.0, detection_timeout: float=0.0, min_duration: float=0.3, max_duration: float=20.0, lang: str="ja-JP", rate: int=44100, channels: int=1, device_index: int=-1):
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
 
-        self.pa = pyaudio.PyAudio()
         self.api_key = api_key
         self.on_speech_recognized = on_speech_recognized
         self.volume_threshold = volume_threshold
@@ -21,6 +20,7 @@ class SpeechListenerBase:
         self.min_duration = min_duration
         self.max_duration = max_duration
         self.lang = lang
+        self.channels = channels
         self.rate = rate
         self.device_index = device_index
         self.is_listening = False
@@ -29,29 +29,26 @@ class SpeechListenerBase:
         audio_data = []
 
         def callback(in_data, frame_count, time_info, status):
-            audio_data.append(in_data)
-            return (None, pyaudio.paContinue)
+            audio_data.append(in_data.copy())
 
         try:
-            stream = self.pa.open(
-                input_device_index=device_index,
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=self.rate,
-                input=True,
-                stream_callback=callback
-            )
+            stream = sounddevice.InputStream(
+                    channels=self.channels,
+                    samplerate=self.rate,
+                    dtype=numpy.int16,
+                    callback=callback
+                )
 
             start_time = time.time()
             is_recording = False
             silence_start_time = time.time()
             is_silent = False
             last_detected_time = time.time()
-            stream.start_stream()
+            stream.start()
 
-            while stream.is_active():
+            while stream.active:
                 current_time = time.time()
-                volume = numpy.frombuffer(b"".join(audio_data[-10:]), dtype=numpy.int16).max() if audio_data else 0
+                volume = numpy.linalg.norm(audio_data[-10:]) / 50 if audio_data else 0
 
                 if not is_recording:
                     if volume > self.volume_threshold:
@@ -100,7 +97,7 @@ class SpeechListenerBase:
             self.logger.error(f"Error at record_audio: {str(ex)}\n{traceback.format_exc()}")
 
         finally:
-            stream.stop_stream()
+            stream.stop()
             stream.close()
 
         # Return empty bytes
