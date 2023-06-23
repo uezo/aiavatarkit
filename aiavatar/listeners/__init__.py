@@ -33,11 +33,11 @@ class SpeechListenerBase:
 
         try:
             stream = sounddevice.InputStream(
-                    channels=self.channels,
-                    samplerate=self.rate,
-                    dtype=numpy.int16,
-                    callback=callback
-                )
+                channels=self.channels,
+                samplerate=self.rate,
+                dtype=numpy.int16,
+                callback=callback
+            )
 
             start_time = time.time()
             is_recording = False
