@@ -23,6 +23,7 @@ class AIAvatar:
         voicevox_speaker_id: int=46,
         volume_threshold: int=3000,
         start_voice: str="どうしたの",
+        functions: dict=None,
         system_message_content: str=None,
         animation_controller: AnimationController=None,
         face_controller: FaceController=None,
@@ -72,7 +73,7 @@ class AIAvatar:
         self.logger.info(f"Output device: [{output_device}] {output_device_info['name']}")
 
         # Processor
-        self.chat_processor = ChatGPTProcessor(self.openai_api_key, system_message_content=system_message_content)
+        self.chat_processor = ChatGPTProcessor(self.openai_api_key, functions=functions, system_message_content=system_message_content)
 
         # Listeners
         self.request_listener = VoiceRequestListener(self.google_api_key, volume_threshold=volume_threshold, device_index=self.input_device)

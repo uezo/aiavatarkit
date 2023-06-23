@@ -158,6 +158,42 @@ Launch VRChat as desktop mode on the machine that runs `run.py` and log in with 
 That's all! Let's chat with the AIAvatar. Log in to VRChat on another machine (or Quest) and go to the world the AIAvatar is in.
 
 
+# ⚡️ Function Calling
+
+Use `chat_processor.add_function` to use ChatGPT function calling. In this example, `get_weather` will be called autonomously.
+
+```python
+# Add function
+async def get_weather(location: str):
+    await asyncio.sleep(1.0)
+    return {"weather": "sunny partly cloudy", "temperature": 23.4}
+
+app.chat_processor.add_function(
+    name="get_weather",
+    description="Get the current weather in a given location",
+    parameters={
+        "type": "object",
+        "properties": {
+            "location": {
+                "type": "string"
+            }
+        }
+    },
+    func=get_weather
+)
+```
+
+And, after `get_weather` called, message to get voice response will be sent to ChatGPT internally.
+
+```json
+{
+    "role": "function",
+    "content": "{\"weather\": \"sunny partly cloudy\", \"temperature\": 23.4}",
+    "name": "get_weather"
+}
+```
+
+
 # 🎤 Testing audio I/O
 
 Using the script below to test the audio I/O before configuring AIAvatar.
