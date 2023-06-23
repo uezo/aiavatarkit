@@ -33,6 +33,7 @@ class SpeechListenerBase:
 
         try:
             stream = sounddevice.InputStream(
+                device=device_index,
                 channels=self.channels,
                 samplerate=self.rate,
                 dtype=numpy.int16,

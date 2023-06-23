@@ -57,7 +57,7 @@ class VoicevoxSpeechController(SpeechController):
                     f.readframes(f.getnframes()),
                     dtype=numpy.int16
                 )
-                sounddevice.play(data, f.getframerate())
+                sounddevice.play(data, f.getframerate(), device=self.device_index)
                 sounddevice.wait()
 
             except Exception as ex:
