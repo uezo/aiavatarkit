@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="aiavatar",
-    version="0.1.5",
+    version="0.2.0",
     url="https://github.com/uezo/aiavatar",
     author="uezo",
     author_email="uezo@uezo.net",
