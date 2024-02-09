@@ -1,8 +1,8 @@
 from logging import getLogger, NullHandler
 import traceback
 import json
-from typing import Iterator, Callable
-from openai import ChatCompletion
+from typing import Iterator, Callable, AsyncGenerator
+from openai import AsyncClient
 from . import ChatProcessor
 
 class ChatGPTFunction:
@@ -31,7 +31,7 @@ class ChatCompletionStreamResponse:
 
 
 class ChatGPTProcessor(ChatProcessor):
-    def __init__(self, api_key: str, model: str="gpt-3.5-turbo-0613", temperature: float=1.0, max_tokens: int=0, functions: dict=None, system_message_content: str=None, history_count: int=10):
+    def __init__(self, api_key: str, model: str="gpt-3.5-turbo", temperature: float=1.0, max_tokens: int=0, functions: dict=None, system_message_content: str=None, history_count: int=10):
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
 
@@ -51,9 +51,8 @@ class ChatGPTProcessor(ChatProcessor):
     def reset_histories(self):
         self.histories.clear()
 
-    async def chat_completion_stream(self, messages, call_functions: bool=True):
+    async def chat_completion_stream(self, async_client: AsyncClient, messages: list, call_functions: bool=True):
         params = {
-            "api_key": self.api_key,
             "messages": messages,
             "model": self.model,
             "temperature": self.temperature,
@@ -65,19 +64,21 @@ class ChatGPTProcessor(ChatProcessor):
         if call_functions and self.functions:
             params["functions"] = [v.get_spec() for _, v in self.functions.items()]
 
-        stream_resp = ChatCompletionStreamResponse(await ChatCompletion.acreate(**params))
+        stream_resp = ChatCompletionStreamResponse(await async_client.chat.completions.create(**params))
 
         async for chunk in stream_resp.stream:
             if chunk:
-                delta = chunk["choices"][0]["delta"]
-                if delta.get("function_call"):
-                    stream_resp.function_name = delta["function_call"]["name"]
+                delta = chunk.choices[0].delta
+                if delta.function_call:
+                    stream_resp.function_name = delta.function_call.name
                 break
         
         return stream_resp
 
-    async def chat(self, text: str) -> Iterator[str]:
+    async def chat(self, text: str) -> AsyncGenerator[str, None]:
         try:
+            async_client = AsyncClient(api_key=self.api_key)
+
             if self.on_start_processing:
                 await self.on_start_processing()
 
@@ -88,20 +89,20 @@ class ChatGPTProcessor(ChatProcessor):
             messages.append({"role": "user", "content": text})
 
             response_text = ""
-            stream_resp = await self.chat_completion_stream(messages)
+            stream_resp = await self.chat_completion_stream(async_client, messages)
 
             async for chunk in stream_resp.stream:
-                delta = chunk["choices"][0]["delta"]
+                delta = chunk.choices[0].delta
                 if stream_resp.response_type == "content":
-                    content = delta.get("content")
+                    content = delta.content
                     if content:
-                        response_text += delta["content"]
+                        response_text += delta.content
                         yield content
 
                 elif stream_resp.response_type == "function_call":
-                    function_call = delta.get("function_call")
+                    function_call = delta.function_call
                     if function_call:
-                        arguments = function_call["arguments"]
+                        arguments = function_call.arguments
                         response_text += arguments
 
             if stream_resp.response_type == "function_call":
@@ -120,11 +121,11 @@ class ChatGPTProcessor(ChatProcessor):
                 messages.append({"role": "function", "content": json.dumps(api_resp), "name": stream_resp.function_name})
 
                 response_text = ""
-                stream_resp = await self.chat_completion_stream(messages, False)
+                stream_resp = await self.chat_completion_stream(async_client, messages, False)
 
                 async for chunk in stream_resp.stream:
-                    delta = chunk["choices"][0]["delta"]
-                    content = delta.get("content")
+                    delta = chunk.choices[0].delta
+                    content = delta.content
                     if content:
                         response_text += content
                         yield content
@@ -136,3 +137,7 @@ class ChatGPTProcessor(ChatProcessor):
         except Exception as ex:
             self.logger.error(f"Error at chat: {str(ex)}\n{traceback.format_exc()}")
             raise ex
+        
+        finally:
+            if not async_client.is_closed():
+                await async_client.close()
