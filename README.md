@@ -96,6 +96,32 @@ $ python run.py
 When you say the wake word "こんにちは" the AIAvatar will respond with "どうしたの？".
 Feel free to enjoy the conversation afterwards!
 
+If you want to set face expression on some action, configure as follows:
+
+```python
+# Add face expresions
+app.avatar_controller.face_controller.faces["on_wake"] = 10
+app.avatar_controller.face_controller.faces["on_listening"] = 11
+app.avatar_controller.face_controller.faces["on_thinking"] = 12
+
+# Set face when the character is listening the users voice
+async def set_listening_face():
+    await app.avatar_controller.face_controller.set_face("on_listening", 3.0)
+app.request_listener.on_start_listening = set_listening_face
+
+# Set face when the character is processing the request
+async def set_thinking_face():
+    await app.avatar_controller.face_controller.set_face("on_thinking", 3.0)
+app.chat_processor.on_start_processing = set_thinking_face
+
+async def on_wakeword(text):
+    logger.info(f"Wakeword: {text}")
+    # Set face when wakeword detected
+    await app.avatar_controller.face_controller.set_face("on_wake", 2.0)
+    await app.start_chat(request_on_start=text, skip_start_voice=True)
+```
+
+
 # 🐈 Use in VRChat
 
 * __2 Virtual audio devices (e.g. VB-CABLE) are required.__
