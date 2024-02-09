@@ -43,6 +43,7 @@ class ChatGPTProcessor(ChatProcessor):
         self.system_message_content = system_message_content
         self.history_count = history_count
         self.histories = []
+        self.on_start_processing = None
 
     def add_function(self, name: str, description: str=None, parameters: dict=None, func: Callable=None):
         self.functions[name] = ChatGPTFunction(name=name, description=description, parameters=parameters, func=func)
@@ -77,6 +78,9 @@ class ChatGPTProcessor(ChatProcessor):
 
     async def chat(self, text: str) -> Iterator[str]:
         try:
+            if self.on_start_processing:
+                await self.on_start_processing()
+
             messages = []
             if self.system_message_content:
                 messages.append({"role": "system", "content": self.system_message_content})
