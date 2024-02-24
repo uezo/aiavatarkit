@@ -119,6 +119,7 @@ class AIAvatar:
                         sentence = sp.pop(0)
                         stream_buffer = "".join(sp)
                         self.avatar_controller.set_text(sentence)
+                    await asyncio.sleep(0.01)   # wait slightly in every loop not to use up CPU
 
                 self.avatar_controller.set_stop()
                 await avatar_task
