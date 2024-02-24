@@ -16,13 +16,14 @@ class VoiceClip:
 
 
 class VoicevoxSpeechController(SpeechController):
-    def __init__(self, base_url: str, speaker_id: int, device_index: int=-1):
+    def __init__(self, base_url: str, speaker_id: int, device_index: int=-1, playback_margin: float=0.1):
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
 
         self.base_url = base_url
         self.speaker_id = speaker_id
         self.device_index = device_index
+        self.playback_margin = playback_margin
         self.voice_clips = {}
         self._is_speaking = False
 
@@ -57,8 +58,9 @@ class VoicevoxSpeechController(SpeechController):
                     f.readframes(f.getnframes()),
                     dtype=numpy.int16
                 )
-                sounddevice.play(data, f.getframerate(), device=self.device_index)
-                sounddevice.wait()
+                framerate = f.getframerate()
+                sounddevice.play(data, framerate, device=self.device_index, blocking=False)
+                await asyncio.sleep(len(data) / framerate + self.playback_margin)
 
             except Exception as ex:
                 self.logger.error(f"Error at speaking: {str(ex)}\n{traceback.format_exc()}")
