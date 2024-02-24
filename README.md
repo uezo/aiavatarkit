@@ -60,6 +60,7 @@ app = AIAvatar(
     voicevox_url=VV_URL,
     voicevox_speaker_id=VV_SPEAKER,
     # volume_threshold=2000,    # <- Set to adjust microphone sensitivity
+    model="gpt-3.5-turbo",
     system_message_content=system_message_content,
 )
 
@@ -159,6 +160,7 @@ app = AIAvatar(
     OPENAI_API_KEY,
     VV_URL,
     VV_SPEAKER,
+    model="gpt-3.5-turbo",
     system_message_content=system_message_content,
     input_device=6      # Listen sound from VRChat
     output_device=13,   # Speak to VRChat microphone
