@@ -7,6 +7,7 @@ from .device import AudioDevice
 # Processor
 from .processors.chatgpt import ChatGPTProcessor
 # Listener
+from .listeners import RequestListenerBase
 from .listeners.voicerequest import VoiceRequestListener
 # Avatar
 from .speech.voicevox import VoicevoxSpeechController
@@ -21,6 +22,7 @@ class AIAvatar:
         openai_api_key: str,
         voicevox_url: str,
         voicevox_speaker_id: int=46,
+        request_listener: RequestListenerBase=None,
         volume_threshold: int=3000,
         start_voice: str="どうしたの",
         model: str="gpt-3.5-turbo",
@@ -77,7 +79,7 @@ class AIAvatar:
         self.chat_processor = ChatGPTProcessor(api_key=self.openai_api_key, model=model, functions=functions, system_message_content=system_message_content)
 
         # Listeners
-        self.request_listener = VoiceRequestListener(self.google_api_key, volume_threshold=volume_threshold, device_index=self.input_device)
+        self.request_listener = request_listener or VoiceRequestListener(self.google_api_key, volume_threshold=volume_threshold, device_index=self.input_device)
 
         # Avatar
         speech_controller = VoicevoxSpeechController(self.voicevox_url, self.voicevox_speaker_id, device_index=self.output_device)
