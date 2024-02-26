@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 import base64
 from logging import getLogger, NullHandler
 import numpy
@@ -6,6 +7,19 @@ import traceback
 from typing import Callable
 import aiohttp
 import sounddevice
+
+
+class RequestListenerBase(ABC):
+    @abstractmethod
+    async def get_request(self):
+        ...
+
+
+class WakewordListenerBase(ABC):
+    @abstractmethod
+    def start(self):
+        ...
+
 
 class SpeechListenerBase:
     def __init__(self, api_key: str, on_speech_recognized: Callable, volume_threshold: int=3000, timeout: float=1.0, detection_timeout: float=0.0, min_duration: float=0.3, max_duration: float=20.0, lang: str="ja-JP", rate: int=44100, channels: int=1, device_index: int=-1):
