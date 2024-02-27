@@ -1,6 +1,6 @@
-from . import SpeechListenerBase
+from . import RequestListenerBase, SpeechListenerBase
 
-class VoiceRequestListener(SpeechListenerBase):
+class VoiceRequestListener(RequestListenerBase, SpeechListenerBase):
     def __init__(self, api_key: str, volume_threshold: int=3000, timeout: float=1.0, detection_timeout: float=10.0, min_duration: float=0.3, max_duration: float=20.0, lang: str="ja-JP", rate: int=44100, channels: int=1, device_index: int=-1):
         super().__init__(api_key, self.on_request, volume_threshold, timeout, detection_timeout, min_duration, max_duration, lang, rate, channels, device_index)
         self.last_recognized_text = None
