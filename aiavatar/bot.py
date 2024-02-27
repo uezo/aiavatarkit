@@ -25,7 +25,7 @@ class AIAvatar:
         functions: dict=None,
         system_message_content: str=None,
         # Speech-to-Text
-        google_api_key: str,
+        google_api_key: str=None,
         volume_threshold: int=3000,
         request_listener: RequestListenerBase=None,
         # Text-to-Speech
