@@ -18,31 +18,32 @@ from .avatar import AvatarController
 class AIAvatar:
     def __init__(
         self,
-        google_api_key: str,
+        *,
+        # AI
         openai_api_key: str,
-        voicevox_url: str,
-        voicevox_speaker_id: int=46,
-        request_listener: RequestListenerBase=None,
-        volume_threshold: int=3000,
-        start_voice: str="どうしたの",
         model: str="gpt-3.5-turbo",
         functions: dict=None,
         system_message_content: str=None,
+        # Speech-to-Text
+        google_api_key: str,
+        volume_threshold: int=3000,
+        request_listener: RequestListenerBase=None,
+        # Text-to-Speech
+        voicevox_url: str,
+        voicevox_speaker_id: int=46,
+        # Audio device
+        input_device: int=-1,
+        output_device: int=-1,
+        # Avatar
         animation_controller: AnimationController=None,
         face_controller: FaceController=None,
         avatar_request_parser: Callable=None,
-        input_device: int=-1,
-        output_device: int=-1
+        # Chat
+        start_voice: str="どうしたの",
     ):
 
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
-
-        self.google_api_key = google_api_key
-        self.openai_api_key = openai_api_key
-        self.voicevox_url = voicevox_url
-        self.voicevox_speaker_id = voicevox_speaker_id
-        self.volume_threshold = volume_threshold
 
         # Audio Devices
         if isinstance(input_device, int):
@@ -76,13 +77,20 @@ class AIAvatar:
         self.logger.info(f"Output device: [{output_device}] {output_device_info['name']}")
 
         # Processor
+        self.openai_api_key = openai_api_key
         self.chat_processor = ChatGPTProcessor(api_key=self.openai_api_key, model=model, functions=functions, system_message_content=system_message_content)
 
         # Listeners
+        self.google_api_key = google_api_key
+        self.volume_threshold = volume_threshold
         self.request_listener = request_listener or VoiceRequestListener(self.google_api_key, volume_threshold=volume_threshold, device_index=self.input_device)
 
-        # Avatar
+        # Speech
+        self.voicevox_url = voicevox_url
+        self.voicevox_speaker_id = voicevox_speaker_id
         speech_controller = VoicevoxSpeechController(self.voicevox_url, self.voicevox_speaker_id, device_index=self.output_device)
+
+        # Avatar
         animation_controller = animation_controller or AnimationControllerDummy()
         face_controller = face_controller or FaceControllerDummy()
         self.avatar_controller = AvatarController(speech_controller, animation_controller, face_controller, avatar_request_parser)
