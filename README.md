@@ -14,7 +14,7 @@
 # 🍩 Requirements
 
 - VOICEVOX API in your computer or network reachable machine (Text-to-Speech)
-- API key for Google Speech Services (Speech-to-Text)
+- API key for Speech Services of Google or Azure (Speech-to-Text)
 - API key for OpenAI API (ChatGPT)
 - Python 3.10 (Runtime)
 
@@ -184,6 +184,84 @@ $ run.py
 Launch VRChat as desktop mode on the machine that runs `run.py` and log in with the account for AIAvatar. Then set `VB-Cable-A` to microphone in VRChat setting window.
 
 That's all! Let's chat with the AIAvatar. Log in to VRChat on another machine (or Quest) and go to the world the AIAvatar is in.
+
+# 🟦 Use Azure Listeners
+
+We strongly recommend using AzureWakewordListener and AzureRequestListner that are more stable than the default listners. Check [examples/run_azure.py](https://github.com/uezo/aiavatarkit/blob/main/examples/run_azure.py) that works out-of-the-box.
+
+Install Azure SpeechSDK.
+
+```sh
+$ pip install azure-cognitiveservices-speech
+```
+
+Change script to use AzureRequestListener and AzureWakewordListener.
+
+```python
+YOUR_SUBSCRIPTION_KEY = "YOUR_SUBSCRIPTION_KEY"
+YOUR_REGION_NAME = "japanwest"
+
+# Create AzureRequestListener
+from aiavatar.listeners.azurevoicerequest import AzureVoiceRequestListener
+request_listener = AzureVoiceRequestListener(
+    YOUR_SUBSCRIPTION_KEY,
+    YOUR_REGION_NAME,
+)
+
+# Create AIAVater with AzureRequestListener
+app = AIAvatar(
+    openai_api_key=OPENAI_API_KEY,
+    system_message_content=system_message_content,
+    request_listener=request_listener,
+    voicevox_url=VV_URL,
+    voicevox_speaker_id=VV_SPEAKER,
+)
+
+# Create AzureWakewordListner
+async def on_wakeword(text):
+    logger.info(f"Wakeword: {text}")
+    await app.start_chat()
+
+from aiavatar.listeners.azurewakeword import AzureWakewordListener
+wakeword_listener = AzureWakewordListener(
+    YOUR_SUBSCRIPTION_KEY,
+    YOUR_REGION_NAME,
+    on_wakeword=on_wakeword,
+    wakewords=["こんにちは"]
+)
+```
+
+To specify the microphone device by setting `device_name` argument.
+See Microsoft Learn to know how to check the device UID on each platform.
+https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-select-audio-input-devices
+
+We provide [a script for MacOS](https://github.com/uezo/aiavatarkit/blob/main/examples/audio_device_checker/main.m). Just run it on Xcode.
+
+```
+Device UID: BuiltInMicrophoneDevice, Name: MacBook Proのマイク
+Device UID: com.vbaudio.vbcableA:XXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX, Name: VB-Cable A
+Device UID: com.vbaudio.vbcableB:XXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX, Name: VB-Cable B
+```
+
+For example, the UID for the built-in microphone on MacOS is `BuiltInMicrophoneDevice`.
+
+Then, set it as the value of `device_name`.
+
+```python
+request_listener = AzureVoiceRequestListener(
+    YOUR_SUBSCRIPTION_KEY,
+    YOUR_REGION_NAME,
+    device_name="BuiltInMicrophoneDevice"
+)
+
+wakeword_listener = AzureWakewordListener(
+    YOUR_SUBSCRIPTION_KEY,
+    YOUR_REGION_NAME,
+    on_wakeword=on_wakeword,
+    wakewords=["こんにちは"],
+    device_name="BuiltInMicrophoneDevice"
+)
+```
 
 
 # ⚡️ Function Calling
