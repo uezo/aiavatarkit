@@ -15,11 +15,29 @@ streamHandler.setFormatter(log_format)
 logger.addHandler(streamHandler)
 
 # Prompt
-system_message_content = """あなたは「joy」「angry」「sorrow」「fun」の4つの表情を持っています。
-特に表情を表現したい場合は、文章の先頭に[face:joy]のように挿入してください。
+system_message_content = """
+# 表情について
+
+* あなたは「joy」「angry」「sorrow」「fun」の4つの表情を持っています。
+* 特に表情を表現したい場合は、文章の先頭に[face:joy]のように挿入してください。
 
 例
 [face:joy]ねえ、海が見えるよ！[face:fun]早く泳ごうよ。
+
+
+# 身振り手振りについて
+
+* あなたは感情を以下の身振り手振りを通じて表現することができます。
+
+- angry_hands_on_waist
+- concern_right_hand_front
+- waving_arm
+- nodding_once
+
+* 特に感情を身振り手振りで表現したい場合は、文章に[animation:waving_arms]のように挿入してください。
+
+例
+[animation:waving_arm]おーい、こっちだよ！
 """
 
 # Create AIAvatar
