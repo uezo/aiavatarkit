@@ -97,7 +97,7 @@ $ python run.py
 When you say the wake word "こんにちは" the AIAvatar will respond with "どうしたの？".
 Feel free to enjoy the conversation afterwards!
 
-If you want to set face expression on some action, configure as follows:
+If you want to set face expression and animation, configure as follows:
 
 ```python
 # Add face expresions
@@ -114,6 +114,9 @@ app.request_listener.on_start_listening = set_listening_face
 async def set_thinking_face():
     await app.avatar_controller.face_controller.set_face("on_thinking", 3.0)
 app.chat_processor.on_start_processing = set_thinking_face
+
+# Add animations (also add "walk" to the prompt)
+app.avatar_controller.animation_controller.animations["walk"] = 9
 
 async def on_wakeword(text):
     logger.info(f"Wakeword: {text}")
