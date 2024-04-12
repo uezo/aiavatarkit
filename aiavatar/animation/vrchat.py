@@ -16,13 +16,17 @@ class VRChatAnimationController(AnimationControllerBase):
     async def animate(self, name: str, duration: float):
         self.subscribe_reset(time() + duration)
 
-        osc_value = self.faces.get(name)
+        osc_value = self.animations.get(name)
         if osc_value is None:
             self.logger.warning(f"Animation '{name}' is not registered")
             return
 
         self.logger.info(f"animation: {name} ({osc_value})")
         self.client.send_message(self.osc_address, osc_value)
+
+    def reset(self):
+        self.logger.info(f"Reset animation: {self.animations[self.idling_key]} ({self.idling_key})")
+        self.client.send_message(self.osc_address, self.animations[self.idling_key])
 
     def test_osc(self):
         while True:
