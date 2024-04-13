@@ -1,4 +1,5 @@
 from logging import getLogger, NullHandler
+from datetime import datetime
 import traceback
 import json
 from typing import Iterator, Callable, AsyncGenerator
@@ -31,7 +32,7 @@ class ChatCompletionStreamResponse:
 
 
 class ChatGPTProcessor(ChatProcessor):
-    def __init__(self, api_key: str, model: str="gpt-3.5-turbo", temperature: float=1.0, max_tokens: int=0, functions: dict=None, system_message_content: str=None, history_count: int=10):
+    def __init__(self, api_key: str, model: str="gpt-3.5-turbo", temperature: float=1.0, max_tokens: int=0, functions: dict=None, system_message_content: str=None, history_count: int=10, history_timeout: float=60.0):
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
 
@@ -42,7 +43,9 @@ class ChatGPTProcessor(ChatProcessor):
         self.functions = functions or {}
         self.system_message_content = system_message_content
         self.history_count = history_count
+        self.history_timeout = history_timeout
         self.histories = []
+        self.last_chat_at = datetime.utcnow()
         self.on_start_processing = None
 
     def add_function(self, name: str, description: str=None, parameters: dict=None, func: Callable=None):
@@ -50,6 +53,24 @@ class ChatGPTProcessor(ChatProcessor):
 
     def reset_histories(self):
         self.histories.clear()
+
+    def build_messages(self, text):
+        messages = []
+        try:
+            # System message
+            if self.system_message_content:
+                messages.append({"role": "system", "content": self.system_message_content})
+
+            # Histories
+            messages.extend(self.histories[-1 * self.history_count:])
+
+            # Current user message
+            messages.append({"role": "user", "content": text})
+        
+        except Exception as ex:
+            self.logger.error(f"Error at build_messages: {ex}\n{traceback.format_exc()}")
+
+        return messages
 
     async def chat_completion_stream(self, async_client: AsyncClient, messages: list, call_functions: bool=True):
         params = {
@@ -79,14 +100,13 @@ class ChatGPTProcessor(ChatProcessor):
         try:
             async_client = AsyncClient(api_key=self.api_key)
 
+            if (datetime.utcnow() - self.last_chat_at).total_seconds() > self.history_timeout:
+                self.reset_histories()
+
             if self.on_start_processing:
                 await self.on_start_processing()
 
-            messages = []
-            if self.system_message_content:
-                messages.append({"role": "system", "content": self.system_message_content})
-            messages.extend(self.histories[-1 * self.history_count:])
-            messages.append({"role": "user", "content": text})
+            messages = self.build_messages(text)
 
             response_text = ""
             stream_resp = await self.chat_completion_stream(async_client, messages)
@@ -139,5 +159,6 @@ class ChatGPTProcessor(ChatProcessor):
             raise ex
         
         finally:
+            self.last_chat_at = datetime.utcnow()
             if not async_client.is_closed():
                 await async_client.close()
