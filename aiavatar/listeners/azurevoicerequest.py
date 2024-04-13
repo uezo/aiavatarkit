@@ -1,5 +1,7 @@
 # pip install azure-cognitiveservices-speech
+import asyncio
 from logging import getLogger, NullHandler
+import time
 import azure.cognitiveservices.speech as speechsdk
 from azure.cognitiveservices.speech import PropertyId
 from . import RequestListenerBase
@@ -9,6 +11,7 @@ class AzureVoiceRequestListener(RequestListenerBase):
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
 
+        self.detection_timeout = detection_timeout
         self.speech_config = speechsdk.SpeechConfig(subscription=api_key, region=region)
         self.speech_config.set_property(PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, str(detection_timeout * 1000))
         self.speech_config.set_property(PropertyId.Speech_SegmentationSilenceTimeoutMs, str(timeout * 1000))
@@ -21,6 +24,7 @@ class AzureVoiceRequestListener(RequestListenerBase):
             self.audio_config = speechsdk.AudioConfig(use_default_microphone=True)
 
         self.speech_recognizer = speechsdk.SpeechRecognizer(speech_config=self.speech_config, audio_config=self.audio_config, language=lang)
+        self.recognizer_wait_time = 0.3
 
         self.on_start_listening = None
 
@@ -29,11 +33,18 @@ class AzureVoiceRequestListener(RequestListenerBase):
             await self.on_start_listening()
 
         self.logger.info(f"Listening... ({self.__class__.__name__})")
-        result = self.speech_recognizer.recognize_once()
 
-        if result.text:
-            self.logger.info(f"AzureVoiceRequestListener: {result.text}")
-        else:
-            self.logger.info(f"AzureVoiceRequestListener: No speech recognized.")
-
-        return result.text
+        start_at = time.time()
+        while True:
+            result = self.speech_recognizer.recognize_once()
+            if result.text:
+                self.logger.info(f"AzureVoiceRequestListener: {result.text}")
+                return result.text
+            else:
+                elapsed = time.time() - start_at
+                if elapsed < self.detection_timeout:
+                    self.logger.info(f"AzureVoiceRequestListener: Noise detected. Retrying... (elapsed: {elapsed})")
+                    await asyncio.sleep(self.recognizer_wait_time)    # Wait a bit before calling recognize_once() again. 0.2 was too short on my environment.
+                else:
+                    self.logger.info(f"AzureVoiceRequestListener: No speech recognized.")
+                    return ""
