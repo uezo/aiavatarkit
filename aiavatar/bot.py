@@ -99,6 +99,11 @@ class AIAvatar:
         self.chat_task = None
         self.start_voice = start_voice
 
+        self.on_turn_end = self.on_turn_end_default
+
+    async def on_turn_end_default(self, request_text: str, response_text: str) -> bool:
+        return False
+
     async def chat(self, request_on_start: str=None, skip_start_voice: bool=False):
         if not skip_start_voice:
             try:
@@ -107,28 +112,31 @@ class AIAvatar:
                 self.logger.error(f"Error at starting chat: {str(ex)}\n{traceback.format_exc()}")
 
         while True:
+            request_text = ""
+            response_text = ""
             try:
                 if request_on_start:
-                    req = request_on_start
+                    request_text = request_on_start
                     request_on_start = None
                 else:
-                    req = await self.request_listener.get_request()
-                    if not req:
+                    request_text = await self.request_listener.get_request()
+                    if not request_text:
                         break
 
-                self.logger.info(f"User: {req}")
+                self.logger.info(f"User: {request_text}")
                 self.logger.info("AI:")
 
                 avatar_task = asyncio.create_task(self.avatar_controller.start())
 
                 stream_buffer = ""
-                async for t in self.chat_processor.chat(req):
+                async for t in self.chat_processor.chat(request_text):
                     stream_buffer += t
                     sp = stream_buffer.replace("。", "。|").replace("、", "、|").replace("！", "！|").replace("？", "？|").split("|")
                     if len(sp) > 1: # >1 means `|` is found (splited at the end of sentence)
                         sentence = sp.pop(0)
                         stream_buffer = "".join(sp)
                         self.avatar_controller.set_text(sentence)
+                        response_text += sentence
                     await asyncio.sleep(0.01)   # wait slightly in every loop not to use up CPU
 
                 self.avatar_controller.set_stop()
@@ -136,6 +144,10 @@ class AIAvatar:
             
             except Exception as ex:
                 self.logger.error(f"Error at chatting loop: {str(ex)}\n{traceback.format_exc()}")
+
+            finally:
+                if await self.on_turn_end(request_text, response_text):
+                    break
 
     async def start_chat(self, request_on_start: str=None, skip_start_voice: bool=False):
         self.stop_chat()
