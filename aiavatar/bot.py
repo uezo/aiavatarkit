@@ -40,6 +40,7 @@ class AIAvatar:
         avatar_request_parser: Callable=None,
         # Chat
         start_voice: str="どうしたの",
+        split_chars: list=None
     ):
 
         self.logger = getLogger(__name__)
@@ -98,6 +99,7 @@ class AIAvatar:
         # Chat
         self.chat_task = None
         self.start_voice = start_voice
+        self.split_chars = split_chars or ["。", "、", "？", "！", ".", ",", "?", "!"]
 
         self.on_turn_end = self.on_turn_end_default
 
@@ -131,13 +133,19 @@ class AIAvatar:
                 stream_buffer = ""
                 async for t in self.chat_processor.chat(request_text):
                     stream_buffer += t
-                    sp = stream_buffer.replace("。", "。|").replace("、", "、|").replace("！", "！|").replace("？", "？|").split("|")
+                    for spc in self.split_chars:
+                        stream_buffer = stream_buffer.replace(spc, spc + "|")
+                    sp = stream_buffer.split("|")
                     if len(sp) > 1: # >1 means `|` is found (splited at the end of sentence)
                         sentence = sp.pop(0)
                         stream_buffer = "".join(sp)
                         self.avatar_controller.set_text(sentence)
                         response_text += sentence
                     await asyncio.sleep(0.01)   # wait slightly in every loop not to use up CPU
+
+                if stream_buffer:
+                    self.avatar_controller.set_text(stream_buffer)
+                    response_text += stream_buffer
 
                 self.avatar_controller.set_stop()
                 await avatar_task
