@@ -266,6 +266,42 @@ wakeword_listener = AzureWakewordListener(
 )
 ```
 
+# 🗣️ Use alternative Text-to-Speech services
+
+Set speech controller after instantiate AIAvatar.
+
+## Azure
+
+```python
+from aiavatar.speech.azurespeech import AzureSpeechController
+
+app.avatar_controller.speech_controller = AzureSpeechController(
+    AZURE_SUBSCRIPTION_KEY, AZURE_REGION,
+    device_index=app.output_device,
+    # # Set params if you want to customize
+    # speaker_name="en-US-AvaNeural",
+    # speaker_gender="Female",
+    # lang="en-US"
+)
+```
+
+The default speaker is `en-US-JennyMultilingualNeural` that support multi languages.
+
+https://learn.microsoft.com/ja-jp/azure/ai-services/speech-service/language-support?tabs=tts
+
+
+## VOICEVOX (subprocess version for noise reduction)
+
+```python
+from aiavatar.speech.voicevox import VoicevoxSpeechControllerSubProcess
+
+app.avatar_controller.speech_controller = VoicevoxSpeechControllerSubProcess(
+    base_url="http://127.0.0.1:50021",
+    speaker_id=46,
+    device_index=app.output_device
+)
+```
+
 
 # ⚡️ Function Calling
 
