@@ -1,5 +1,33 @@
 from aiavatar.device import AudioDevice
 
+def test_init():
+    audio_device = AudioDevice()
+
+    assert audio_device.input_device >= 0
+    assert isinstance(audio_device.input_device_info["name"], str)
+    assert audio_device.input_device_info["max_input_channels"] > 0
+    assert audio_device.output_device >= 0
+    assert isinstance(audio_device.output_device_info["name"], str)
+    assert audio_device.output_device_info["max_output_channels"] > 0
+
+def test_init_index():
+    audio_device = AudioDevice(input_device=0, output_device=1)
+
+    assert audio_device.input_device == 0
+    assert isinstance(audio_device.input_device_info["name"], str)
+    assert audio_device.input_device_info["max_input_channels"] > 0
+    assert audio_device.output_device == 1
+    assert isinstance(audio_device.output_device_info["name"], str)
+    assert audio_device.output_device_info["max_output_channels"] > 0
+
+def test_init_name():
+    audio_device = AudioDevice(input_device="マイク", output_device="スピーカー")
+
+    assert "マイク" in audio_device.input_device_info["name"]
+    assert audio_device.input_device_info["max_input_channels"] > 0
+    assert "スピーカー" in audio_device.output_device_info["name"]
+    assert audio_device.output_device_info["max_output_channels"] > 0
+
 def test_get_default_input_device_info():
     d = AudioDevice.get_default_input_device_info()
     assert d["index"] >= 0
