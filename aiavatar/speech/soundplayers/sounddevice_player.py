@@ -50,7 +50,7 @@ else:
 
         async def play_wave_on_subprocess(self, data):
             proc_task = asyncio.create_subprocess_exec(
-                "python", os.path.abspath(__file__), str(self.device_index),
+                sys.executable, os.path.abspath(__file__), str(self.device_index),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
