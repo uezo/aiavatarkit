@@ -1,107 +1,111 @@
 import asyncio
 from logging import getLogger, NullHandler
 import traceback
-from typing import Callable
 # Device
 from .device import AudioDevice
 # Processor
+from .processors import ChatProcessor
 from .processors.chatgpt import ChatGPTProcessor
 # Listener
-from .listeners import RequestListenerBase
-from .listeners.voicerequest import VoiceRequestListener
+from .listeners.voicerequest import VoiceRequestListener, RequestListenerBase
+from .listeners.wakeword import WakewordListener, WakewordListenerBase
 # Avatar
+from .speech import SpeechController
 from .speech.voicevox import VoicevoxSpeechController
 from .animation import AnimationController, AnimationControllerDummy
 from .face import FaceController, FaceControllerDummy
 from .avatar import AvatarController
 
+logger = getLogger(__name__)
+logger.addHandler(NullHandler())
+
+
 class AIAvatar:
     def __init__(
         self,
         *,
-        # AI
-        openai_api_key: str,
-        model: str="gpt-3.5-turbo",
-        functions: dict=None,
-        system_message_content: str=None,
-        # Speech-to-Text
+        openai_api_key: str=None,
         google_api_key: str=None,
-        volume_threshold: int=3000,
-        request_listener: RequestListenerBase=None,
-        # Text-to-Speech
-        voicevox_url: str,
+        model: str=None,
+        system_message_content: str=None,
         voicevox_speaker_id: int=46,
-        # Audio device
         input_device: int=-1,
         output_device: int=-1,
-        # Avatar
+        audio_devices: AudioDevice=None,
+        chat_processor: ChatProcessor=None,
+        request_listener: RequestListenerBase=None,
+        wakeword_listener: WakewordListenerBase=None,
+        speech_controller: SpeechController=None,
         animation_controller: AnimationController=None,
         face_controller: FaceController=None,
-        avatar_request_parser: Callable=None,
-        # Chat
-        start_voice: str="どうしたの",
-        split_chars: list=None
+        wakewords: list=None,
+        start_voice: str=None,
+        split_chars: list=None,
+        language: str="ja-JP",
+        verbose: bool=False
     ):
-
-        self.logger = getLogger(__name__)
-        self.logger.addHandler(NullHandler())
-
         # Audio Devices
-        if isinstance(input_device, int):
-            if input_device < 0:
-                input_device_info = AudioDevice.get_default_input_device_info()
-                input_device = input_device_info["index"]
-            else:
-                input_device_info = AudioDevice.get_device_info(input_device)
-        elif isinstance(input_device, str):
-            input_device_info = AudioDevice.get_input_device_by_name(input_device)
-            if input_device_info is None:
-                input_device_info = AudioDevice.get_default_input_device_info()
-            input_device = input_device_info["index"]
+        if audio_devices:
+            self.audio_devices = audio_devices
+        else:
+            self.audio_devices = AudioDevice(input_device, output_device)
+        logger.info(f"Input device: [{self.audio_devices.input_device}] {self.audio_devices.input_device_info['name']}")
+        logger.info(f"Output device: [{self.audio_devices.output_device}] {self.audio_devices.output_device_info['name']}")
 
-        self.input_device = input_device
-        self.logger.info(f"Input device: [{input_device}] {input_device_info['name']}")
+        # Chat Processor
+        if chat_processor:
+            self.chat_processor = chat_processor
+        else:
+            self.chat_processor = ChatGPTProcessor(
+                api_key=openai_api_key,
+                model=model or "gpt-3.5-turbo",
+                system_message_content=system_message_content
+            )
 
-        if isinstance(output_device, int):
-            if output_device < 0:
-                output_device_info = AudioDevice.get_default_output_device_info()
-                output_device = output_device_info["index"]
-            else:
-                output_device_info = AudioDevice.get_device_info(output_device)
-        elif isinstance(output_device, str):
-            output_device_info = AudioDevice.get_output_device_by_name(output_device)
-            if output_device_info is None:
-                output_device_info = AudioDevice.get_default_output_device_info()
-            output_device = output_device_info["index"]
+        # Request Listener
+        if request_listener:
+            self.request_listener = request_listener
+        else:
+            self.request_listener = VoiceRequestListener(
+                google_api_key,
+                volume_threshold=2000,
+                device_index=self.audio_devices.input_device,
+                lang=language
+            )
+        
+        # Wakeword Listener
+        if wakeword_listener:
+            self.wakeword_listener = wakeword_listener
+        else:
+            async def _on_wakeword(text):
+                await self.start_chat(request_on_start=text, skip_start_voice=start_voice is None)
 
-        self.output_device = output_device
-        self.logger.info(f"Output device: [{output_device}] {output_device_info['name']}")
-
-        # Processor
-        self.openai_api_key = openai_api_key
-        self.chat_processor = ChatGPTProcessor(api_key=self.openai_api_key, model=model, functions=functions, system_message_content=system_message_content)
-
-        # Listeners
-        self.google_api_key = google_api_key
-        self.volume_threshold = volume_threshold
-        self.request_listener = request_listener or VoiceRequestListener(self.google_api_key, volume_threshold=volume_threshold, device_index=self.input_device)
-
-        # Speech
-        self.voicevox_url = voicevox_url
-        self.voicevox_speaker_id = voicevox_speaker_id
-        speech_controller = VoicevoxSpeechController(self.voicevox_url, self.voicevox_speaker_id, device_index=self.output_device)
-
-        # Avatar
-        animation_controller = animation_controller or AnimationControllerDummy()
-        face_controller = face_controller or FaceControllerDummy()
-        self.avatar_controller = AvatarController(speech_controller, animation_controller, face_controller, avatar_request_parser)
+            self.wakeword_listener = WakewordListener(
+                api_key=google_api_key,
+                wakewords=wakewords or ["こんにちは" if language == "ja-JP" else "Hello"],
+                on_wakeword=_on_wakeword,
+                volume_threshold=2000,
+                device_index=self.audio_devices.input_device,
+                lang=language,
+                verbose=verbose
+            )
+        
+        # Avatar Controller with Speech, Animation and Face
+        self.avatar_controller = AvatarController(
+            speech_controller or VoicevoxSpeechController(
+                base_url="http://127.0.0.1:50021",
+                speaker_id=voicevox_speaker_id,
+                device_index=self.audio_devices.output_device
+            ),
+            animation_controller or AnimationControllerDummy(verbose=verbose),
+            face_controller or FaceControllerDummy(verbose=verbose)
+        )
 
         # Chat
-        self.chat_task = None
         self.start_voice = start_voice
         self.split_chars = split_chars or ["。", "、", "？", "！", ".", ",", "?", "!"]
-
         self.on_turn_end = self.on_turn_end_default
+        self.chat_task = None
 
     async def on_turn_end_default(self, request_text: str, response_text: str) -> bool:
         return False
@@ -111,7 +115,7 @@ class AIAvatar:
             try:
                 await self.avatar_controller.speech_controller.speak(self.start_voice)
             except Exception as ex:
-                self.logger.error(f"Error at starting chat: {str(ex)}\n{traceback.format_exc()}")
+                logger.error(f"Error at starting chat: {str(ex)}\n{traceback.format_exc()}")
 
         while True:
             request_text = ""
@@ -125,8 +129,8 @@ class AIAvatar:
                     if not request_text:
                         break
 
-                self.logger.info(f"User: {request_text}")
-                self.logger.info("AI:")
+                logger.info(f"User: {request_text}")
+                logger.info("AI:")
 
                 avatar_task = asyncio.create_task(self.avatar_controller.start())
 
@@ -151,7 +155,7 @@ class AIAvatar:
                 await avatar_task
             
             except Exception as ex:
-                self.logger.error(f"Error at chatting loop: {str(ex)}\n{traceback.format_exc()}")
+                logger.error(f"Error at chatting loop: {str(ex)}\n{traceback.format_exc()}")
 
             finally:
                 if await self.on_turn_end(request_text, response_text):
@@ -165,3 +169,10 @@ class AIAvatar:
     def stop_chat(self):
         if self.chat_task is not None:
             self.chat_task.cancel()
+
+    def start_listening_wakeword(self, wait: bool=True):
+        ww_thread = self.wakeword_listener.start()
+        if wait:
+            ww_thread.join()
+        else:
+            return ww_thread

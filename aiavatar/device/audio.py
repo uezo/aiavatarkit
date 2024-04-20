@@ -1,6 +1,37 @@
 import sounddevice
 
 class AudioDevice:
+    def __init__(self, input_device: int=-1, output_device: int=-1):
+        if isinstance(input_device, int):
+            if input_device < 0:
+                input_device_info = self.get_default_input_device_info()
+                input_device = input_device_info["index"]
+            else:
+                input_device_info = self.get_device_info(input_device)
+        elif isinstance(input_device, str):
+            input_device_info = self.get_input_device_by_name(input_device)
+            if input_device_info is None:
+                input_device_info = self.get_default_input_device_info()
+            input_device = input_device_info["index"]
+
+        self.input_device = input_device
+        self.input_device_info = input_device_info
+
+        if isinstance(output_device, int):
+            if output_device < 0:
+                output_device_info = self.get_default_output_device_info()
+                output_device = output_device_info["index"]
+            else:
+                output_device_info = self.get_device_info(output_device)
+        elif isinstance(output_device, str):
+            output_device_info = self.get_output_device_by_name(output_device)
+            if output_device_info is None:
+                output_device_info = self.get_default_output_device_info()
+            output_device = output_device_info["index"]
+
+        self.output_device = output_device
+        self.output_device_info = output_device_info
+
     @classmethod
     def get_default_input_device_info(cls):
         device_list = sounddevice.query_devices()
