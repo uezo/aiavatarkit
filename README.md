@@ -136,11 +136,23 @@ from aiavatar.speech.voicevox import VoicevoxSpeechController
 speech_controller = VoicevoxSpeechController(
     base_url="https",
     speaker_id=46,
-    device_index=4
+    device_index=app.audio_devices.output_device
 )
 
 app.avatar_controller.speech_controller = speech_controller
 ```
+
+In some environments, there may be popping noises during speech. This is due to thread blocking caused by the parallel processing of AI response retrieval and speech output. Therefore, setting use_subprocess=True allows the speech to be handled in a separate process, eliminating the noise.
+
+```python
+app.avatar_controller.speech_controller = VoicevoxSpeechController(
+    base_url="http://127.0.0.1:50021",
+    speaker_id=46,
+    device_index=app.audio_devices.output_device,
+    use_subprocess=True,
+)
+```
+
 
 You can also set speech controller that uses alternative Text-to-Speech services. We provide `AzureSpeechController` for now.
 
@@ -149,7 +161,7 @@ from aiavatar.speech.azurespeech import AzureSpeechController
 
 AzureSpeechController(
     AZURE_SUBSCRIPTION_KEY, AZURE_REGION,
-    device_index=app.output_device,
+    device_index=app.audio_devices.output_device,
     # # Set params if you want to customize
     # speaker_name="en-US-AvaNeural",
     # speaker_gender="Female",
@@ -186,7 +198,7 @@ wakeword_listener = WakewordListener(
     api_key=GOOGLE_API_KEY,
     wakewords=["Hello", "こんにちは"],
     volume_threshold=2000,  # Threshold for voice detection; decrease if microphone sensitivity is low
-    device_index=1,
+    device_index=app.audio_devices.input_device,
     timeout=0.2,        # Duration in seconds to wait for silence before ending speech recognition
     max_duration=1.5    # Maximum duration in seconds to recognize speech before stopping
 )
@@ -205,7 +217,7 @@ from aiavatar.listeners.voicerequest import VoiceRequestListener
 request_listener = VoiceRequestListener(
     api_key=GOOGLE_API_KEY,
     volume_threshold=2000,  # Set lower when the microphone gain is not enough
-    device_index=1,
+    device_index=app.audio_devices.input_device,,
     detection_timeout=15.0, # Timeout in seconds to end the process if speech does not start within this duration
     timeout=0.5,            # Duration in seconds to wait for silence before ending speech recognition
     max_duration=20.0,      # Maximum duration in seconds to recognize speech before stopping
