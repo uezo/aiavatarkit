@@ -30,7 +30,7 @@ $ pip install aiavatar
 Make the script as `run.py`.
 
 ```python
-from aiavatar import AIAvatar, logger
+from aiavatar import AIAvatar
 
 app = AIAvatar(
     openai_api_key="YOUR_OPENAI_API_KEY",
