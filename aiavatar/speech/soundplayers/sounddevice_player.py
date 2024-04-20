@@ -1,7 +1,6 @@
 import asyncio
 import io
 import os
-import select
 import sys
 import wave
 import numpy
@@ -9,15 +8,9 @@ import sounddevice
 
 
 if __name__ == "__main__":
-    device_index = int(sys.argv[1]) if len(sys.argv) > 2 else 0
-    timeout = float(sys.argv[2]) if len(sys.argv) > 3 else 5.0
+    device_index = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 
     try:
-        ready, _, _ = select.select([sys.stdin], [], [], timeout)
-
-        if not ready:
-            raise Exception(f"Sound timeout ({timeout}sec)")
-
         data = sys.stdin.buffer.read()
 
         if not data:
@@ -56,12 +49,14 @@ else:
                 await asyncio.sleep(len(data) / framerate + self.playback_margin)
 
         async def play_wave_on_subprocess(self, data):
-            process = await asyncio.create_subprocess_exec(
-                "python", os.path.abspath(__file__), str(self.device_index), str(self.subprocess_timeout),
+            proc_task = asyncio.create_subprocess_exec(
+                "python", os.path.abspath(__file__), str(self.device_index),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
+
+            process = await asyncio.wait_for(proc_task, self.subprocess_timeout)
 
             stdout, stderr = await process.communicate(input=data)
 
