@@ -58,7 +58,11 @@ Feel free to enjoy the conversation afterwards!
 # 🔖 Contents
 
 - [📕 Configuration Guide](#-configuration-guide)
-  - [🎓 AI / ChatGPT](#-ai--chatgpt)
+  - [🎓 Generative AI](#-generative-ai)
+    - [ChatGPT](#chatgpt)
+    - [Claude](#claude)
+    - [Gemini](#gemini)
+    - [Other LLMs](#other-llms)
   - [🗣️ Voice](#️-voice)
   - [🐓 Wakeword Listener](#-wakeword-listener)
   - [🙏 Request Listener](#-request-listener)
@@ -82,7 +86,7 @@ Feel free to enjoy the conversation afterwards!
 Here are the configuration for each component.
 
 
-## 🎓 AI / ChatGPT
+## 🎓 Generative AI
 
 You can set model and system message content when instantiate `AIAvatar`.
 
@@ -94,6 +98,8 @@ app = AIAvatar(
     system_message_content="You are my cat."
 )
 ```
+
+### ChatGPT
 
 If you want to configure in detail, create instance of `ChatGPTProcessor` with custom parameters and set it to `AIAvatar`.
 
@@ -113,7 +119,49 @@ chat_processor = ChatGPTProcessor(
 app.chat_processor = chat_processor
 ```
 
-And also, you can make your custom processor that uses other generative AIs such as Claude 3 by implementing `ChatProcessor` interface. We provide the example later.🙏
+### Claude
+
+Create instance of `ClaudeProcessor` with custom parameters and set it to `AIAvatar`. The default model is `claude-3-sonnet-20240229`.
+
+```python
+from aiavatar.processors.claude import ClaudeProcessor
+
+claude_processor = ClaudeProcessor(
+    api_key="ANTHROPIC_API_KEY"
+)
+
+app = AIAvatar(
+    google_api_key=GOOGLE_API_KEY,
+    chat_processor=claude_processor
+)
+```
+
+NOTE: We support Claude 3 on Anthropic API, not Amazon Bedrock for now.
+
+
+### Gemini
+
+Create instance of `GeminiProcessor` with custom parameters and set it to `AIAvatar`. The default model is `gemini-pro`.
+
+```python
+from aiavatar.processors.gemini import GeminiProcessor
+
+gemini_processor = GeminiProcessor(
+    api_key="YOUR_GOOGLE_API_KEY"
+)
+
+app = AIAvatar(
+    google_api_key=GOOGLE_API_KEY,
+    chat_processor=gemini_processor
+)
+```
+
+NOTE: We support Gemini on Google AI Studio, not Vertex AI for now.
+
+
+### Other LLMs
+
+You can make your custom processor that uses other generative AIs such as Llama3 by implementing `ChatProcessor` interface. We provide the example later.🙏
 
 
 ## 🗣️　Voice
