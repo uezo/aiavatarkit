@@ -191,14 +191,15 @@ speech_controller = VoicevoxSpeechController(
 app.avatar_controller.speech_controller = speech_controller
 ```
 
-In some environments, there may be popping noises during speech. This is due to thread blocking caused by the parallel processing of AI response retrieval and speech output. Therefore, setting use_subprocess=True allows the speech to be handled in a separate process, eliminating the noise.
+
+Speech is handled in a separate subprocess to improve audio quality and reduce noises such as popping, caused by thread blocking during parallel processing of AI responses and speech output. For systems with limited resources, setting use_subprocess=False allows speech processing within the main process, potentially reintroducing some noise.
 
 ```python
 app.avatar_controller.speech_controller = VoicevoxSpeechController(
     base_url="http://127.0.0.1:50021",
     speaker_id=46,
     device_index=app.audio_devices.output_device,
-    use_subprocess=True,
+    use_subprocess=False  # Set to False to handle speech in the main process
 )
 ```
 
