@@ -192,7 +192,7 @@ app.avatar_controller.speech_controller = speech_controller
 ```
 
 
-Speech is handled in a separate subprocess to improve audio quality and reduce noises such as popping, caused by thread blocking during parallel processing of AI responses and speech output. For systems with limited resources, setting use_subprocess=False allows speech processing within the main process, potentially reintroducing some noise.
+Speech is handled in a separate subprocess to improve audio quality and reduce noises such as popping, caused by thread blocking during parallel processing of AI responses and speech output. For systems with limited resources, setting `use_subprocess=False` allows speech processing within the main process, potentially reintroducing some noise.
 
 ```python
 app.avatar_controller.speech_controller = VoicevoxSpeechController(
