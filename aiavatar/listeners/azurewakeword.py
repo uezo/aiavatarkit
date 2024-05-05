@@ -6,12 +6,14 @@ from threading import Thread
 import traceback
 from typing import Callable
 import azure.cognitiveservices.speech as speechsdk
+from . import WakewordListenerBase
 
-class AzureWakewordListener:
+class AzureWakewordListener(WakewordListenerBase):
     def __init__(self, api_key: str, region: str, wakewords: list, on_wakeword: Callable, lang: str="ja-JP", device_name: str=None, verbose: bool=False):
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
 
+        self.lang = lang
         self.speech_config = speechsdk.SpeechConfig(subscription=api_key, region=region)
 
         if device_name:
@@ -21,7 +23,7 @@ class AzureWakewordListener:
         else:
             self.audio_config = speechsdk.AudioConfig(use_default_microphone=True)
 
-        self.speech_recognizer = speechsdk.SpeechRecognizer(speech_config=self.speech_config, audio_config=self.audio_config, language=lang)
+        self.speech_recognizer: speechsdk.SpeechRecognizer = None
 
         self.wakewords = wakewords
         self.on_wakeword = on_wakeword
@@ -48,21 +50,45 @@ class AzureWakewordListener:
         self.speech_recognizer.recognized.disconnect_all()
 
     async def start_listening(self):
-        self.speech_recognizer.start_continuous_recognition()
-        self.enable_recognition()
-        while True:
-            # Wait for queue
-            recognized_text = self.recognized_queue.get()
-            # Process recognized text
-            self.disable_recognition()
-            try:
-                await self.on_wakeword(recognized_text)
-            except Exception as ex:
-                self.logger.error(f"Error at on_wake: {ex}\n{traceback.format_exc()}")
-            self.recognized_queue.task_done()
+        try:
+            # Setup recognizer before start
+            if self.speech_recognizer is None:
+                self.speech_recognizer = speechsdk.SpeechRecognizer(speech_config=self.speech_config, audio_config=self.audio_config, language=self.lang)
+
+            self.speech_recognizer.start_continuous_recognition()
             self.enable_recognition()
+            while True:
+                self.is_listening = True
+                # Wait for queue
+                recognized_text = self.recognized_queue.get()
+                if recognized_text is None:
+                    break
+
+                # Process recognized text
+                self.disable_recognition()
+                try:
+                    await self.on_wakeword(recognized_text)
+                except Exception as ex:
+                    self.logger.error(f"Error at on_wake: {ex}\n{traceback.format_exc()}")
+                self.recognized_queue.task_done()
+                self.enable_recognition()
+        
+        except Exception as ex:
+            self.logger.error(f"Error at start_listening: {ex}\n{traceback.format_exc()}")
+
+        finally:
+            self.logger.info("Wakeword Listener stopped.")
+            if self.speech_recognizer is not None:
+                self.speech_recognizer.stop_continuous_recognition()
+                self.speech_recognizer = None
+            self.recognized_queue.task_done()
+            self.is_listening = False
 
     def start(self):
         th = Thread(target=asyncio.run, args=(self.start_listening(),), daemon=True)
         th.start()
         return th
+
+    def stop(self):
+        self.recognized_queue.put(None)
+        self.is_listening = False
