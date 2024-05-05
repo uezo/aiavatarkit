@@ -28,7 +28,7 @@ class VoiceClip:
 
 
 class SpeechControllerBase(SpeechController):
-    def __init__(self, *, base_url: str, device_index: int=-1, playback_margin: float=0.1, use_subprocess=False, subprocess_timeout: float=0.5, sound_player: SoundPlayerBase=None):
+    def __init__(self, *, base_url: str, device_index: int=-1, playback_margin: float=0.1, use_subprocess=True, subprocess_timeout: float=0.5, sound_player: SoundPlayerBase=None):
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
 
