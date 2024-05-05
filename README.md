@@ -69,6 +69,7 @@ Feel free to enjoy the conversation afterwards!
 - [🌎 Platform Guide](#-platform-guide)
   - [🐈 VRChat](#-vrchat)
   - [🍓 Raspberry Pi](#-raspberry-pi)
+- [🧩 RESTful APIs](#-restful-apis)
 - [🤿 Deep Dive](#-deep-dive)
   - [⚡️ Function Calling](#️-function-calling)
 - [🔍 Other Tips](#-other-tips)
@@ -459,6 +460,66 @@ That's all! Let's chat with the AIAvatar. Log in to VRChat on another machine (o
 ## 🍓 Raspberry Pi
 
 Now writing... ✍️
+
+
+# 🧩 RESTful APIs
+
+You can control AIAvatar via RESTful APIs. The provided functions are:
+
+- WakewordLister
+    - start: Start WakewordListener
+    - stop: Stop WakewordListener
+    - status: Show status of WakewordListener
+
+- Avatar
+    - speech: Speak text with face expression and animation
+    - face: Set face expression
+    - animation: Set animation
+
+- System
+    - log: Show recent logs
+
+To use REST APIs, create API app and set router instead of calling `app.start_listening_wakeword()`.
+
+```python
+from fastapi import FastAPI
+from aiavatar import AIAvatar
+from aiavatar.api.router import get_router
+
+app = AIAvatar(
+    openai_api_key=OPENAI_API_KEY,
+    google_api_key=GOOGLE_API_KEY
+)
+
+# app.start_listening_wakeword()
+
+# Create API app and set router
+api = FastAPI()
+api_router = get_router(app, "aiavatar.log")
+api.include_router(api_router)
+```
+
+Start API with uvicorn.
+
+```bash
+$ uvicorn run:api
+```
+
+Call `/wakeword/start` to start wakeword listener.
+
+```bash
+$ curl -X 'POST' \
+  'http://127.0.0.1:8000/wakeword/start' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "wakewords": []
+}'
+```
+
+See API spec and try it on http://127.0.0.1:8000/docs .
+
+**NOTE**: AzureWakewordListeners stops immediately but the default WakewordListener stops after it recognizes wakeword.
 
 
 # 🤿 Deep dive
