@@ -21,3 +21,6 @@ class WakewordListener(WakewordListenerBase, SpeechListenerBase):
         th = Thread(target=asyncio.run, args=(self.start_listening(),), daemon=True)
         th.start()
         return th
+
+    def stop(self):
+        self.is_listening = False

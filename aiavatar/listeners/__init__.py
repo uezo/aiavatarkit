@@ -20,6 +20,10 @@ class WakewordListenerBase(ABC):
     def start(self):
         ...
 
+    @abstractmethod
+    def stop(self):
+        ...
+
 
 class SpeechListenerBase:
     def __init__(self, api_key: str, on_speech_recognized: Callable, volume_threshold: int=3000, timeout: float=1.0, detection_timeout: float=0.0, min_duration: float=0.3, max_duration: float=20.0, lang: str="ja-JP", rate: int=44100, channels: int=1, device_index: int=-1):
@@ -178,4 +182,5 @@ class SpeechListenerBase:
             self.is_listening = False
 
     def stop_listening(self):
+        # ToDo: make stream inactive in `record_audio()` to stop listening immediately
         self.is_listening = False

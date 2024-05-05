@@ -90,6 +90,8 @@ class AIAvatar:
                 verbose=verbose
             )
         
+        self.wakeword_listener_thread = None
+
         # Avatar Controller with Speech, Animation and Face
         self.avatar_controller = AvatarController(
             speech_controller or VoicevoxSpeechController(
@@ -171,8 +173,14 @@ class AIAvatar:
             self.chat_task.cancel()
 
     def start_listening_wakeword(self, wait: bool=True):
-        ww_thread = self.wakeword_listener.start()
+        self.wakeword_listener_thread = self.wakeword_listener.start()
         if wait:
-            ww_thread.join()
+            self.wakeword_listener_thread.join()
         else:
-            return ww_thread
+            return self.wakeword_listener_thread
+
+    def stop_listening_wakeword(self, wait: bool=True):
+        self.wakeword_listener.stop()
+
+    def is_wakeword_listener_listening(self):
+        return self.wakeword_listener_thread is not None and self.wakeword_listener_thread.is_alive()
