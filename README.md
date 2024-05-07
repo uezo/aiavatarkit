@@ -70,6 +70,7 @@ Feel free to enjoy the conversation afterwards!
   - [🔈 Audio Device](#-audio-device)
   - [🥰 Face Expression](#-face-expression)
   - [💃 Animation](#-animation)
+  - [🎭 Custom Behavior](#-custom-behavior)
 - [🌎 Platform Guide](#-platform-guide)
   - [🐈 VRChat](#-vrchat)
   - [🍓 Raspberry Pi](#-raspberry-pi)
@@ -401,38 +402,64 @@ app = AIAvatar(
 
 ## 🥰 Face expression
 
-If you want to set face expression and animation, configure as follows:
+To control facial expressions within conversations, set the facial expression names and values in `FaceController.faces` as shown below, and then include these expression keys in the response message by adding instructions to the prompt.
 
 ```python
-# Add face expresions
-app.avatar_controller.face_controller.faces["on_wake"] = 10
-app.avatar_controller.face_controller.faces["on_listening"] = 11
-app.avatar_controller.face_controller.faces["on_thinking"] = 12
+app.avatar_controller.face_controller.faces = {
+    "neutral": "🙂",
+    "joy": "😀",
+    "angry": "😠",
+    "sorrow": "😞",
+    "fun": "🥳"
+}
 
-# Set face when the character is listening the users voice
-async def set_listening_face():
-    await app.avatar_controller.face_controller.set_face("on_listening", 3.0)
-app.request_listener.on_start_listening = set_listening_face
+app.chat_processor.system_message_content = """# Face Expression
 
-# Set face when the character is processing the request
-async def set_thinking_face():
-    await app.avatar_controller.face_controller.set_face("on_thinking", 3.0)
-app.chat_processor.on_start_processing = set_thinking_face
+* You have the following expressions:
 
-# Add animations (also add "walk" to the prompt)
-app.avatar_controller.animation_controller.animations["walk"] = 9
+- joy
+- angry
+- sorrow
+- fun
 
-async def on_wakeword(text):
-    logger.info(f"Wakeword: {text}")
-    # Set face when wakeword detected
-    await app.avatar_controller.face_controller.set_face("on_wake", 2.0)
-    await app.start_chat(request_on_start=text, skip_start_voice=True)
+* If you want to express a particular emotion, please insert it at the beginning of the sentence like [face:joy].
+
+Example
+[face:joy]Hey, you can see the ocean! [face:fun]Let's go swimming.
+"""
 ```
+
+This allows emojis like 🥳 to be autonomously displayed in the terminal during conversations. To actually control the avatar's facial expressions in a metaverse platform, instead of displaying emojis like 🥳, you will need to use custom implementations tailored to the integration mechanisms of each platform. Please refer to our `VRChatFaceController` as an example.
 
 
 ## 💃 Animation
 
 Now writing... ✍️
+
+
+##　🎭 Custom Behavior
+
+You can invoke custom implementations when listening to requests from user, processing those requests, or when recognized a wake word to start conversation.
+
+In the following example, changing face expressions at each timing aims to enhance the interaction experience with the AI avatar.
+
+```python
+# Set face when the character is listening the users voice
+async def set_listening_face():
+    await app.avatar_controller.face_controller.set_face("listening", 3.0)
+app.request_listener.on_start_listening = set_listening_face
+
+# Set face when the character is processing the request
+async def set_thinking_face():
+    await app.avatar_controller.face_controller.set_face("thinking", 3.0)
+app.chat_processor.on_start_processing = set_thinking_face
+
+async def on_wakeword(text):
+    logger.info(f"Wakeword: {text}")
+    # Set face when wakeword detected
+    await app.avatar_controller.face_controller.set_face("smile", 2.0)
+    await app.start_chat(request_on_start=text, skip_start_voice=True)
+```
 
 
 # 🌎 Platform Guide
@@ -449,6 +476,9 @@ In addition to running on PCs to operate AI avatars on these platforms, you can 
 
 * __2 Virtual audio devices (e.g. VB-CABLE) are required.__
 * __Multiple VRChat accounts are required to chat with your AIAvatar.__
+
+
+### Get started
 
 First, run the commands below in python interpreter to check the audio devices.
 
@@ -504,6 +534,78 @@ $ run.py
 Launch VRChat as desktop mode on the machine that runs `run.py` and log in with the account for AIAvatar. Then set `VB-Cable-A` to microphone in VRChat setting window.
 
 That's all! Let's chat with the AIAvatar. Log in to VRChat on another machine (or Quest) and go to the world the AIAvatar is in.
+
+
+### Face Expression
+
+AIAvatarKit controls the face expression by [Avatar OSC](https://docs.vrchat.com/docs/osc-avatar-parameters).
+
+LLM(ChatGPT/Claude/Gemini)  
+↓ *response with face tag* `[face:joy]Hello!`  
+AIAvatarKit(VRCFaceExpressionController)  
+↓ *osc* `FaceOSC=1`  
+VRChat(FX AnimatorController)  
+↓  
+😆
+
+So at first, setup your avatar the following steps:
+
+1. Add avatar parameter `FaceOSC` (type: int, default value: 0, saved: false, synced: true).
+1. Add `FaceOSC` parameter to the FX animator controller.
+1. Add layer and put states and transitions for face expression to the FX animator controller.
+1. (option) If you use the avatar that is already used in VRChat, add input parameter configuration to avatar json.
+
+
+Next, use `VRChatFaceController`.
+
+```python
+from aiavatar.face.vrchat import VRChatFaceController
+
+# Setup VRChatFaceContorller
+vrc_face_controller = VRChatFaceController(
+    faces={
+        "neutral": 0,   # always set `neutral: 0`
+
+        # key = the name that LLM can understand the expression
+        # value = FaceOSC value that is set to the transition on the FX animator controller
+        "joy": 1,
+        "angry": 2,
+        "sorrow": 3,
+        "fun": 4
+    }
+)
+```
+
+Lastly, add face expression section to the system prompt.
+
+```python
+# Make system prompt
+system_message_content = """
+# Face Expression
+
+* You have following expressions:
+
+- joy
+- angry
+- sorrow
+- fun
+
+* If you want to express a particular emotion, please insert it at the beginning of the sentence like [face:joy].
+
+Example
+[face:joy]Hey, you can see the ocean! [face:fun]Let's go swimming.
+"""
+
+# Set them to AIAvatar
+app = AIAvatar(
+    openai_api_key=OPENAI_API_KEY,
+    google_api_key=GOOGLE_API_KEY,
+    face_controller=vrc_face_controller,
+    system_message_content=system_message_content
+)
+```
+
+You can test it not only through the voice conversation but also via the [REST API](#-restful-apis).
 
 
 ## 🍓 Raspberry Pi
