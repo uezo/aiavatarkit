@@ -22,14 +22,16 @@ def test_init():
     
     # Request Listener
     assert app.request_listener.api_key == "GOOGLE_API_KEY"
-    assert app.request_listener.volume_threshold == 2000
+    assert app.request_listener.volume_threshold > -80
+    assert app.request_listener.volume_threshold < -30
     assert app.request_listener.device_index == app.audio_devices.input_device
     assert app.request_listener.lang == "ja-JP"
 
     # Wakeword Listener
     assert app.wakeword_listener.api_key == "GOOGLE_API_KEY"
     assert app.wakeword_listener.wakewords == ["こんにちは"]
-    assert app.wakeword_listener.volume_threshold == 2000
+    assert app.wakeword_listener.volume_threshold > -80
+    assert app.wakeword_listener.volume_threshold < -30
     assert app.wakeword_listener.device_index == app.audio_devices.input_device
     assert app.wakeword_listener.lang == "ja-JP"
     assert app.wakeword_listener.on_wakeword is not None
@@ -83,6 +85,7 @@ def test_init_with_components():
 
     class MyWakewordListener(WakewordListenerBase):
         async def start(self): ...
+        async def stop(self): ...
 
     class MySpeechController(SpeechController):
         def prefetch(self, text: str): ...

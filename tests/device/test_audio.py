@@ -11,12 +11,12 @@ def test_init():
     assert audio_device.output_device_info["max_output_channels"] > 0
 
 def test_init_index():
-    audio_device = AudioDevice(input_device=0, output_device=1)
+    audio_device = AudioDevice(input_device=1, output_device=2)
 
-    assert audio_device.input_device == 0
+    assert audio_device.input_device == 1
     assert isinstance(audio_device.input_device_info["name"], str)
     assert audio_device.input_device_info["max_input_channels"] > 0
-    assert audio_device.output_device == 1
+    assert audio_device.output_device == 2
     assert isinstance(audio_device.output_device_info["name"], str)
     assert audio_device.output_device_info["max_output_channels"] > 0
 

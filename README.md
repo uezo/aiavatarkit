@@ -79,6 +79,7 @@ Feel free to enjoy the conversation afterwards!
   - [⚡️ Function Calling](#️-function-calling)
 - [🔍 Other Tips](#-other-tips)
   - [🎤 Testing Audio I/O](#-testing-audio-io)
+  - [🎚️ Noise Filter](#-noise-filter)
   - [⚡️ Use Custom Listener](#️-use-custom-listener)
 
 
@@ -248,7 +249,6 @@ from aiavatar.listeners.wakeword import WakewordListener
 wakeword_listener = WakewordListener(
     api_key=GOOGLE_API_KEY,
     wakewords=["Hello", "こんにちは"],
-    volume_threshold=2000,  # Threshold for voice detection; decrease if microphone sensitivity is low
     device_index=app.audio_devices.input_device,
     timeout=0.2,        # Duration in seconds to wait for silence before ending speech recognition
     max_duration=1.5    # Maximum duration in seconds to recognize speech before stopping
@@ -267,7 +267,6 @@ from aiavatar.listeners.voicerequest import VoiceRequestListener
 
 request_listener = VoiceRequestListener(
     api_key=GOOGLE_API_KEY,
-    volume_threshold=2000,  # Set lower when the microphone gain is not enough
     device_index=app.audio_devices.input_device,,
     detection_timeout=15.0, # Timeout in seconds to end the process if speech does not start within this duration
     timeout=0.5,            # Duration in seconds to wait for silence before ending speech recognition
@@ -738,7 +737,6 @@ from aiavatar import (
 GOOGLE_API_KEY = "YOUR_API_KEY"
 VV_URL = "http://127.0.0.1:50021"
 VV_SPEAKER = 46
-VOLUME_THRESHOLD = 3000
 INPUT_DEVICE = -1
 OUTPUT_DEVICE = -1
 
@@ -784,7 +782,6 @@ async def on_wakeword(text):
 
 wakeword_listener = WakewordListener(
     api_key=GOOGLE_API_KEY,
-    volume_threshold=VOLUME_THRESHOLD,
     wakewords=["こんにちは"],
     on_wakeword=on_wakeword,
     verbose=True,
@@ -795,6 +792,20 @@ wakeword_listener = WakewordListener(
 ww_thread = wakeword_listener.start()
 ww_thread.join()
 ```
+
+## 🎚️ Noise Filter
+
+AIAvatarKit automatically adjusts the noise filter for listeners when you instantiate an AIAvatar object. To manually set the noise filter level for voice detection, set `auto_noise_filter_threshold` to `False` and specify the `volume_threshold_db` in decibels (dB).
+
+```python
+app = AIAvatar(
+    openai_api_key=OPENAI_API_KEY,
+    google_api_key=GOOGLE_API_KEY,
+    auto_noise_filter_threshold=False,
+    volume_threshold_db=-40   # Set the voice detection threshold to -40 dB
+)
+```
+
 
 ## ⚡️ Use custom listener
 
