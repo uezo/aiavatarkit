@@ -17,13 +17,15 @@ class VRChatFaceController(FaceControllerBase):
             "surprise": 5,
         }
         self.neutral_key = neutral_key
+        self._current_face = self.neutral_key
         self.host = host
         self.port = port
 
         self.client = udp_client.SimpleUDPClient(self.host, self.port)
 
     async def set_face(self, name: str, duration: float):
-        self.subscribe_reset(time() + duration)
+        if duration > 0:
+            self.subscribe_reset(time() + duration)
 
         osc_value = self.faces.get(name)
         if osc_value is None:
@@ -32,10 +34,12 @@ class VRChatFaceController(FaceControllerBase):
 
         self.logger.info(f"face: {name} ({osc_value})")
         self.client.send_message(self.osc_address, osc_value)
+        self.current_face = name
 
     def reset(self):
         self.logger.info(f"Reset face: {self.neutral_key} ({self.faces[self.neutral_key]})")
         self.client.send_message(self.osc_address, self.faces[self.neutral_key])
+        self.current_face = self.neutral_key
 
     def test_osc(self):
         while True:

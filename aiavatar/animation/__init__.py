@@ -4,6 +4,11 @@ from threading import Thread
 from time import time, sleep
 
 class AnimationController(ABC):
+    @property
+    @abstractmethod
+    def current_animation(self):
+        pass
+
     @abstractmethod
     async def animate(self, name: str, duration: float):
         pass
@@ -23,10 +28,19 @@ class AnimationControllerBase(AnimationController):
             "nodding_once": 4
         }
         self.idling_key = idling_key
+        self._current_animation = idling_key
 
         self.reset_at = None
         self.reset_thread = Thread(target=self.reset_worker, daemon=True)
         self.reset_thread.start()
+
+    @property
+    def current_animation(self) -> str:
+        return self._current_animation
+    
+    @current_animation.setter
+    def current_animation(self, name: str):
+        self._current_animation = name
 
     def reset_worker(self):
         while True:
@@ -46,9 +60,11 @@ class AnimationControllerBase(AnimationController):
     async def animate(self, name: str, duration: float):
         self.subscribe_reset(time() + duration)
         self.logger.info(f"animation: {self.animations[name]} ({name})")
+        self.current_animation = name
 
     def reset(self):
         self.logger.info(f"Reset animation: {self.animations[self.idling_key]} ({self.idling_key})")
+        self.current_animation = self.idling_key
 
 
 class AnimationControllerDummy(AnimationControllerBase):
