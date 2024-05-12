@@ -32,15 +32,17 @@ class ChatCompletionStreamResponse:
 
 
 class ChatGPTProcessor(ChatProcessor):
-    def __init__(self, api_key: str, model: str="gpt-3.5-turbo", temperature: float=1.0, max_tokens: int=0, functions: dict=None, system_message_content: str=None, history_count: int=10, history_timeout: float=60.0):
+    def __init__(self, *, api_key: str, base_url: str=None, model: str="gpt-3.5-turbo", temperature: float=1.0, max_tokens: int=0, functions: dict=None, parse_function_call_in_response: bool=True, system_message_content: str=None, history_count: int=10, history_timeout: float=60.0):
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
 
         self.api_key = api_key
+        self.base_url = base_url
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.functions = functions or {}
+        self.parse_function_call_in_response = parse_function_call_in_response
         self.system_message_content = system_message_content
         self.history_count = history_count
         self.history_timeout = history_timeout
@@ -87,18 +89,21 @@ class ChatGPTProcessor(ChatProcessor):
 
         stream_resp = ChatCompletionStreamResponse(await async_client.chat.completions.create(**params))
 
-        async for chunk in stream_resp.stream:
-            if chunk:
-                delta = chunk.choices[0].delta
-                if delta.function_call:
-                    stream_resp.function_name = delta.function_call.name
-                break
-        
+        if self.parse_function_call_in_response:
+            async for chunk in stream_resp.stream:
+                if chunk:
+                    delta = chunk.choices[0].delta
+                    if delta.function_call:
+                        stream_resp.function_name = delta.function_call.name
+                    break
+
         return stream_resp
 
     async def chat(self, text: str) -> AsyncGenerator[str, None]:
         try:
             async_client = AsyncClient(api_key=self.api_key)
+            if self.base_url:
+                async_client.base_url = self.base_url
 
             if (datetime.utcnow() - self.last_chat_at).total_seconds() > self.history_timeout:
                 self.reset_histories()
