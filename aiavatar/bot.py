@@ -7,6 +7,7 @@ from .device import AudioDevice
 from .processors import ChatProcessor
 from .processors.chatgpt import ChatGPTProcessor
 # Listener
+from .listeners import NoiseLevelDetector
 from .listeners.voicerequest import VoiceRequestListener, RequestListenerBase
 from .listeners.wakeword import WakewordListener, WakewordListenerBase
 # Avatar
@@ -35,6 +36,7 @@ class AIAvatar:
         chat_processor: ChatProcessor=None,
         request_listener: RequestListenerBase=None,
         wakeword_listener: WakewordListenerBase=None,
+        auto_noise_filter_threshold: bool=True,
         speech_controller: SpeechController=None,
         animation_controller: AnimationController=None,
         face_controller: FaceController=None,
@@ -62,13 +64,25 @@ class AIAvatar:
                 system_message_content=system_message_content
             )
 
+        volume_threshold = -50
+        if auto_noise_filter_threshold:
+            noise_level_detector = NoiseLevelDetector(
+                rate=44100,
+                channels=1,
+                device_index=self.audio_devices.input_device
+            )
+            noise_level = noise_level_detector.get_noise_level()
+            volume_threshold = int(noise_level) + 20.0
+
+        logger.info(f"Set volume threshold: {volume_threshold}dB")
+
         # Request Listener
         if request_listener:
             self.request_listener = request_listener
         else:
             self.request_listener = VoiceRequestListener(
                 google_api_key,
-                volume_threshold=2000,
+                volume_threshold=volume_threshold,
                 device_index=self.audio_devices.input_device,
                 lang=language
             )
@@ -84,7 +98,7 @@ class AIAvatar:
                 api_key=google_api_key,
                 wakewords=wakewords or ["こんにちは" if language == "ja-JP" else "Hello"],
                 on_wakeword=_on_wakeword,
-                volume_threshold=2000,
+                volume_threshold=volume_threshold,
                 device_index=self.audio_devices.input_device,
                 lang=language,
                 verbose=verbose

@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 import base64
+import collections
 from logging import getLogger, NullHandler
 import numpy
 import time
@@ -25,8 +26,50 @@ class WakewordListenerBase(ABC):
         ...
 
 
+class NoiseLevelDetector:
+    def __init__(self, rate: int=16000, channels: int=1, device_index: int=-1):
+        self.logger = getLogger(__name__)
+        self.logger.addHandler(NullHandler())
+
+        self.channels = channels
+        self.rate = rate
+        self.device_index = device_index
+
+    def get_volume_db(self, data: numpy.ndarray[numpy.int16], ref: int=32768) -> float:
+        amplitude = numpy.max(numpy.abs(data))
+        if amplitude == 0:
+            return -numpy.inf
+        return float(20 * numpy.log10(amplitude / ref))
+
+    def get_noise_level(self) -> float:
+        with sounddevice.InputStream(
+                device=self.device_index,
+                channels=self.channels,
+                samplerate=self.rate,
+                dtype=numpy.int16
+            ) as stream:
+
+            audio_data = collections.deque(maxlen=60)
+
+            self.logger.info("Measuring noise levels...")
+
+            while stream.active:
+                data, overflowed = stream.read(int(self.rate * 0.05))
+                if overflowed:
+                    self.logger.warning("Audio buffer has overflowed")
+
+                volume_db = self.get_volume_db(data)
+                print(f"Current: {volume_db:.2f}dB", end="\r")
+                audio_data.append(volume_db)
+            
+                if len(audio_data) == audio_data.maxlen:
+                    median_db = numpy.median(audio_data)
+                    print(f"Noise level: {median_db:.2f}dB")
+                    return median_db
+
+
 class SpeechListenerBase:
-    def __init__(self, api_key: str, on_speech_recognized: Callable, volume_threshold: int=3000, timeout: float=1.0, detection_timeout: float=0.0, min_duration: float=0.3, max_duration: float=20.0, lang: str="ja-JP", rate: int=44100, channels: int=1, device_index: int=-1):
+    def __init__(self, api_key: str, on_speech_recognized: Callable, volume_threshold: int=-50, timeout: float=1.0, detection_timeout: float=0.0, min_duration: float=0.3, max_duration: float=20.0, lang: str="ja-JP", rate: int=16000, channels: int=1, device_index: int=-1):
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
 
@@ -43,19 +86,21 @@ class SpeechListenerBase:
         self.device_index = device_index
         self.is_listening = False
 
+    def get_volume_db(self, data: numpy.ndarray[numpy.int16], ref: int=32768) -> float:
+        amplitude = numpy.max(numpy.abs(data))
+        if amplitude == 0:
+            return -numpy.inf
+        return float(20 * numpy.log10(amplitude / ref))
+
     def record_audio(self, device_index) -> bytes:
         audio_data = []
-
-        def callback(in_data, frame_count, time_info, status):
-            audio_data.append(in_data.copy())
 
         try:
             stream = sounddevice.InputStream(
                 device=device_index,
                 channels=self.channels,
                 samplerate=self.rate,
-                dtype=numpy.int16,
-                callback=callback
+                dtype=numpy.int16
             )
 
             start_time = time.time()
@@ -66,8 +111,14 @@ class SpeechListenerBase:
             stream.start()
 
             while stream.active:
+                data, overflowed = stream.read(int(self.rate * 0.05))   # Process frames in 0.05 sec
+                if overflowed:
+                    self.logger.warning("Audio buffer has overflowed")
+
+                audio_data.append(data)
+
                 current_time = time.time()
-                volume = numpy.linalg.norm(audio_data[-10:]) / 50 if audio_data else 0
+                volume = self.get_volume_db(data)
 
                 if not is_recording:
                     if volume > self.volume_threshold:
