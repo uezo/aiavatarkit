@@ -80,6 +80,7 @@ Feel free to enjoy the conversation afterwards!
 - [🔍 Other Tips](#-other-tips)
   - [🎤 Testing Audio I/O](#-testing-audio-io)
   - [🎚️ Noise Filter](#-noise-filter)
+  - [🧪 LM Studio API](#-lm-studio-api)
   - [⚡️ Use Custom Listener](#️-use-custom-listener)
 
 
@@ -804,6 +805,33 @@ app = AIAvatar(
     auto_noise_filter_threshold=False,
     volume_threshold_db=-40   # Set the voice detection threshold to -40 dB
 )
+```
+
+
+## 🧪 LM Studio API
+
+Use ChatGPTProcessor with some arguments.
+
+- base_url: URL for LM Studio local server
+- model: Name of model
+- parse_function_call_in_response: Always set `False`
+
+```python
+from aiavatar import AIAvatar
+from aiavatar.processors.chatgpt import ChatGPTProcessor
+
+chat_processor = ChatGPTProcessor(
+    api_key=OPENAI_API_KEY,
+    base_url="http://127.0.0.1:1234/v1",
+    model="mmnga/DataPilot-ArrowPro-7B-KUJIRA-gguf",
+    parse_function_call_in_response=False
+)
+
+app = AIAvatar(
+    google_api_key=GOOGLE_API_KEY,
+    chat_processor=chat_processor
+)
+app.start_listening_wakeword()
 ```
 
 
