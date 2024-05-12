@@ -49,12 +49,36 @@ def get_router(aiavatr_app: AIAvatar, logfile_path: str) -> APIRouter:
         )
 
 
+    @api_router.get("/avatar/status", tags=["Avatar"], name="Get avatar status")
+    async def get_avatar_status(response: Response) -> GetAvatarStatusResponse:
+        try:
+            return GetAvatarStatusResponse(
+                is_speaking=aiavatr_app.avatar_controller.speech_controller.is_speaking(),
+                current_face=aiavatr_app.avatar_controller.face_controller.current_face,
+                current_animation=aiavatr_app.avatar_controller.animation_controller.current_animation
+            )
+
+        except Exception as ex:
+            response.status_code = 500
+            return ErrorResponse(error=f"error: {ex}\n{traceback.format_exc()}")
+
+
     @api_router.post("/avatar/speech", tags=["Avatar"], name="Speak text with face expression and animation")
     async def avatar_speech(request: SpeechRequest, response: Response) -> APIResponse:
         try:
             avreq = aiavatr_app.avatar_controller.parse(request.text)
             await aiavatr_app.avatar_controller.perform(avreq)
             return APIResponse(message="success")
+
+        except Exception as ex:
+            response.status_code = 500
+            return ErrorResponse(error=f"error: {ex}\n{traceback.format_exc()}")
+
+
+    @api_router.get("/avatar/speech/is_speaking", tags=["Avatar"], name="Check whether the avatar is speaking")
+    async def get_avatar_is_speaking(response: Response) -> GetIsSpeakingResponse:
+        try:
+            return GetIsSpeakingResponse(is_speaking=aiavatr_app.avatar_controller.speech_controller.is_speaking())
 
         except Exception as ex:
             response.status_code = 500
@@ -72,11 +96,33 @@ def get_router(aiavatr_app: AIAvatar, logfile_path: str) -> APIRouter:
             return ErrorResponse(error=f"error: {ex}\n{traceback.format_exc()}")
 
 
+    @api_router.get("/avatar/face", tags=["Avatar"], name="Get current face expression")
+    async def get_avatar_face(response: Response) -> GetFaceResponse:
+        try:
+            current_face = aiavatr_app.avatar_controller.face_controller.current_face
+            return GetFaceResponse(current_face=current_face)
+
+        except Exception as ex:
+            response.status_code = 500
+            return ErrorResponse(error=f"error: {ex}\n{traceback.format_exc()}")
+
+
     @api_router.post("/avatar/animation", tags=["Avatar"], name="Set animation")
     async def avatar_animation(request: AnimationRequest, response: Response) -> APIResponse:
         try:
             await aiavatr_app.avatar_controller.animation_controller.animate(request.name, request.duration)
             return APIResponse(message="success")
+
+        except Exception as ex:
+            response.status_code = 500
+            return ErrorResponse(error=f"error: {ex}\n{traceback.format_exc()}")
+
+
+    @api_router.get("/avatar/animation", tags=["Avatar"], name="Get current animation")
+    async def get_avatar_animation(response: Response) -> GetAnimationResponse:
+        try:
+            current_animation = aiavatr_app.avatar_controller.animation_controller.current_animation
+            return GetAnimationResponse(current_animation=current_animation)
 
         except Exception as ex:
             response.status_code = 500

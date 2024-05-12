@@ -23,10 +23,12 @@ class VRChatAnimationController(AnimationControllerBase):
 
         self.logger.info(f"animation: {name} ({osc_value})")
         self.client.send_message(self.osc_address, osc_value)
+        self.current_animation = name
 
     def reset(self):
         self.logger.info(f"Reset animation: {self.animations[self.idling_key]} ({self.idling_key})")
         self.client.send_message(self.osc_address, self.animations[self.idling_key])
+        self.current_animation = self.idling_key
 
     def test_osc(self):
         while True:

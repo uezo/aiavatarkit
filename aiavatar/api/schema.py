@@ -19,8 +19,18 @@ class WakewordStatusResponse(BaseModel):
     thread_name: str|None = Field(None, example="Thread-2", description="The id of the thread wakeword listener is running in")
 
 
+class GetAvatarStatusResponse(BaseModel):
+    is_speaking: bool = Field(..., description="Whether the avatar is speaking")
+    current_face: str = Field(..., example="fun", description="Name of current face expression")
+    current_animation: str = Field(..., example="wave_hands", description="Name of current animation")
+
+
 class SpeechRequest(BaseModel):
     text: str = Field(..., example="[face:joy]Hi, let's talk with me!", description="Text to speech with face and animation tag")
+
+
+class GetIsSpeakingResponse(BaseModel):
+    is_speaking: bool = Field(..., description="Whether the avatar is speaking")
 
 
 class FaceRequest(BaseModel):
@@ -28,9 +38,17 @@ class FaceRequest(BaseModel):
     duration: float = Field(4.0, example=4.0, description="Duration in seconds for how long the face expression should last")
 
 
+class GetFaceResponse(BaseModel):
+    current_face: str = Field(..., example="fun", description="Name of current face expression")
+
+
 class AnimationRequest(BaseModel):
     name: str = Field(..., example="wave_hands", description="Name of animation to set")
     duration: float = Field(4.0, example=4.0, description="Duration in seconds for how long the animation should last")
+
+
+class GetAnimationResponse(BaseModel):
+    current_animation: str = Field(..., example="wave_hands", description="Name of current animation")
 
 
 class LogRequest(BaseModel):
