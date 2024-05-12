@@ -31,7 +31,9 @@ class AIAvatar:
         system_message_content: str=None,
         voicevox_speaker_id: int=46,
         input_device: int=-1,
+        input_sample_rate: int=None,
         output_device: int=-1,
+        output_sample_rate: int=None,
         audio_devices: AudioDevice=None,
         chat_processor: ChatProcessor=None,
         request_listener: RequestListenerBase=None,
@@ -68,7 +70,7 @@ class AIAvatar:
 
         if auto_noise_filter_threshold:
             noise_level_detector = NoiseLevelDetector(
-                rate=16000,
+                rate=input_sample_rate or 16000,
                 channels=1,
                 device_index=self.audio_devices.input_device
             )
@@ -87,6 +89,8 @@ class AIAvatar:
                 device_index=self.audio_devices.input_device,
                 lang=language
             )
+            if input_sample_rate is not None:
+                self.request_listener.rate = input_sample_rate
         
         # Wakeword Listener
         if wakeword_listener:
@@ -104,13 +108,16 @@ class AIAvatar:
                 lang=language,
                 verbose=verbose
             )
-        
+            if input_sample_rate is not None:
+                self.wakeword_listener.rate = input_sample_rate
+
         self.wakeword_listener_thread = None
 
         # Avatar Controller with Speech, Animation and Face
         self.avatar_controller = AvatarController(
             speech_controller or VoicevoxSpeechController(
                 base_url="http://127.0.0.1:50021",
+                rate=output_sample_rate,
                 speaker_id=voicevox_speaker_id,
                 device_index=self.audio_devices.output_device
             ),

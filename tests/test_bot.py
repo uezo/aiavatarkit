@@ -26,6 +26,7 @@ def test_init():
     assert app.request_listener.volume_threshold < -30
     assert app.request_listener.device_index == app.audio_devices.input_device
     assert app.request_listener.lang == "ja-JP"
+    assert app.request_listener.rate == 16000
 
     # Wakeword Listener
     assert app.wakeword_listener.api_key == "GOOGLE_API_KEY"
@@ -35,6 +36,7 @@ def test_init():
     assert app.wakeword_listener.device_index == app.audio_devices.input_device
     assert app.wakeword_listener.lang == "ja-JP"
     assert app.wakeword_listener.on_wakeword is not None
+    assert app.wakeword_listener.rate == 16000
 
     # Avatar Controller with Speech, Animation and Face
     assert app.avatar_controller is not None
@@ -56,6 +58,8 @@ def test_init_with_args():
         google_api_key="GOOGLE_API_KEY",
         model="gpt-4-turbo",
         system_message_content="You are a cat.",
+        input_sample_rate=48000,
+        output_sample_rate=44100,
         voicevox_speaker_id=2,
         wakewords=["もしもし", "はろー"],
         start_voice="どうしたの",
@@ -66,10 +70,13 @@ def test_init_with_args():
 
     assert app.chat_processor.model == "gpt-4-turbo"
     assert app.chat_processor.system_message_content == "You are a cat."
+    assert app.request_listener.rate == 48000
     assert app.request_listener.lang == "en-US"
     assert app.wakeword_listener.wakewords == ["もしもし", "はろー"]
+    assert app.wakeword_listener.rate == 48000
     assert app.wakeword_listener.lang == "en-US"
     assert app.wakeword_listener.verbose is True
+    assert app.avatar_controller.speech_controller.rate == 44100
     assert app.avatar_controller.speech_controller.speaker_id == 2
     assert app.avatar_controller.animation_controller.verbose is True
     assert app.avatar_controller.face_controller.verbose is True
@@ -94,10 +101,12 @@ def test_init_with_components():
 
     class MyAnimationController(AnimationController):
         async def animate(self, name: str, duration: float): ...
+        def current_animation(self): ...
 
     class MyFaceController(FaceController):
         async def set_face(self, name: str, duration: float): ...
         def reset(self): ...
+        def current_face(self): ...
 
     app = AIAvatar(
         chat_processor=MyChatProcessor(),
