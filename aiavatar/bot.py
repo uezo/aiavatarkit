@@ -37,6 +37,7 @@ class AIAvatar:
         request_listener: RequestListenerBase=None,
         wakeword_listener: WakewordListenerBase=None,
         auto_noise_filter_threshold: bool=True,
+        noise_margin: float=20.0,
         speech_controller: SpeechController=None,
         animation_controller: AnimationController=None,
         face_controller: FaceController=None,
@@ -67,12 +68,12 @@ class AIAvatar:
         volume_threshold = -50
         if auto_noise_filter_threshold:
             noise_level_detector = NoiseLevelDetector(
-                rate=44100,
+                rate=16000,
                 channels=1,
                 device_index=self.audio_devices.input_device
             )
             noise_level = noise_level_detector.get_noise_level()
-            volume_threshold = int(noise_level) + 20.0
+            volume_threshold = int(noise_level) + noise_margin
 
         logger.info(f"Set volume threshold: {volume_threshold}dB")
 
