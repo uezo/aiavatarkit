@@ -356,6 +356,59 @@ azure_wakeword_listener = AzureWakewordListener(
 )
 ```
 
+
+## 🍥 Using OpenAI's audio APIs
+
+OpenAI's Speech-to-Text and Text-to-Speech capabilities provide dynamic speech recognition and voice output across multiple languages, without the need for fixed language settings.
+
+```python
+from aiavatar import AIAvatar
+from aiavatar.device import AudioDevice
+from aiavatar.listeners.openailisteners import (
+    OpenAIWakewordListener,
+    OpenAIVoiceRequestListener
+)
+from aiavatar.speech.openaispeech import OpenAISpeechController
+
+# Get default audio devices
+devices = AudioDevice()
+
+# Speech
+speech_controller = OpenAISpeechController(
+    api_key=OPENAI_API_KEY,
+    device_index=devices.output_device
+)
+
+# Wakeword
+async def on_wakeword(text):
+    await app.start_chat(request_on_start=text, skip_start_voice=True)
+
+wakeword_listener = OpenAIWakewordListener(
+    api_key=OPENAI_API_KEY,
+    device_index=devices.input_device,
+    wakewords=["こんにちは"],
+    on_wakeword=on_wakeword
+)
+
+# Request
+request_listener = OpenAIVoiceRequestListener(
+    api_key=OPENAI_API_KEY,
+    device_index=devices.input_device
+)
+
+# Create AIAvatar with OpenAI Components
+app = AIAvatar(
+    openai_api_key=OPENAI_API_KEY,
+    wakeword_listener=wakeword_listener,
+    request_listener=request_listener,
+    speech_controller=speech_controller,
+    noise_margin=10.0,
+    verbose=True
+)
+app.start_listening_wakeword()
+```
+
+
 ## 🔈 Audio device
 
 You can specify the audio devices to be used in components by name or index.
