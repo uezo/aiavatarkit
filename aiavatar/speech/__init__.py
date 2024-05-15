@@ -16,6 +16,10 @@ class SpeechController(ABC):
         pass
 
     @abstractmethod
+    def clear_cache(self):
+        pass
+
+    @abstractmethod
     def is_speaking(self) -> bool:
         pass
 
@@ -83,6 +87,9 @@ class SpeechControllerBase(SpeechController):
 
         finally:
             self._is_speaking = False
+
+    def clear_cache(self):
+        self.voice_clips.clear()
 
     def is_speaking(self) -> bool:
         return self._is_speaking
