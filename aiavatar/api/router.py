@@ -1,3 +1,4 @@
+import asyncio
 import collections
 import logging
 import traceback
@@ -85,6 +86,33 @@ def get_router(aiavatr_app: AIAvatar, logfile_path: str) -> APIRouter:
             return ErrorResponse(error=f"error: {ex}\n{traceback.format_exc()}")
 
 
+    @api_router.post("/avatar/speech/configuration", tags=["Avatar"], name="Update SpeechController configurations")
+    async def avatar_speech_config(request: SpeechConfigRequest, response: Response) -> SpeechConfigResponse:
+        sc = aiavatr_app.avatar_controller.speech_controller
+
+        # Update configuration if specified
+        for field, value in request.model_dump(exclude_unset=True).items():
+            if value is not None and hasattr(sc, field):
+                setattr(sc, field, value)
+
+        # Clear cache after updating configuration
+        sc.clear_cache()
+
+        # Return updated configuration
+        resp = SpeechConfigResponse.from_speech_controller_base(sc)
+        resp.api_key = "************"
+        return resp
+
+
+    @api_router.get("/avatar/speech/configuration", tags=["Avatar"], name="Get current SpeechController configurations")
+    async def get_avatar_speech_config(response: Response) -> SpeechConfigResponse:
+        resp = SpeechConfigResponse.from_speech_controller_base(
+            aiavatr_app.avatar_controller.speech_controller
+        )
+        resp.api_key = "************"
+        return resp
+
+
     @api_router.post("/avatar/face", tags=["Avatar"], name="Set face expression")
     async def avatar_face(request: FaceRequest, response: Response) -> APIResponse:
         try:
@@ -127,6 +155,76 @@ def get_router(aiavatr_app: AIAvatar, logfile_path: str) -> APIRouter:
         except Exception as ex:
             response.status_code = 500
             return ErrorResponse(error=f"error: {ex}\n{traceback.format_exc()}")
+
+
+    @api_router.post("/processor/chat", tags=["Chat Processor"], name="Send message to ChatProcessor")
+    async def processor_chat(request: ChatRequest, response: Response) -> APIResponse:
+        try:
+            response_text = ""
+            avatar_task = asyncio.create_task(aiavatr_app.avatar_controller.start())
+            stream_buffer = ""
+            async for t in aiavatr_app.chat_processor.chat(request.text):
+                stream_buffer += t
+                for spc in aiavatr_app.split_chars:
+                    stream_buffer = stream_buffer.replace(spc, spc + "|")
+                sp = stream_buffer.split("|")
+                if len(sp) > 1: # >1 means `|` is found (splited at the end of sentence)
+                    sentence = sp.pop(0)
+                    stream_buffer = "".join(sp)
+                    aiavatr_app.avatar_controller.set_text(sentence)
+                    response_text += sentence
+                await asyncio.sleep(0.01)   # wait slightly in every loop not to use up CPU
+
+            if stream_buffer:
+                aiavatr_app.avatar_controller.set_text(stream_buffer)
+                response_text += stream_buffer
+
+            aiavatr_app.avatar_controller.set_stop()
+            await avatar_task
+
+            return APIResponse(message=response_text)
+
+        except Exception as ex:
+            response.status_code = 500
+            return ErrorResponse(error=f"error: {ex}\n{traceback.format_exc()}")
+
+
+    @api_router.get("/processor/histories", tags=["Chat Processor"], name="Get current histories")
+    async def get_processor_histories(response: Response) -> GetHistoriesResponse:
+        return GetHistoriesResponse(
+            histories=aiavatr_app.chat_processor.histories
+        )
+
+
+    @api_router.delete("/processor/histories", tags=["Chat Processor"], name="Delete histories")
+    async def delete_processor_histories(response: Response) -> APIResponse:
+        aiavatr_app.chat_processor.reset_histories()
+        return APIResponse(message="deleted")
+
+
+    @api_router.post("/processor/configuration", tags=["Chat Processor"], name="Update ChatProcessor configurations")
+    async def processor_config(request: ChatProcessorConfigRequest, response: Response) -> ChatProcessorConfigResponse:
+        proc = aiavatr_app.chat_processor
+
+        # Update configuration if specified
+        for field, value in request.model_dump(exclude_unset=True).items():
+            if value is not None and hasattr(proc, field):
+                setattr(proc, field, value)
+
+        # Clear histories after updating configuration
+        proc.histories.clear()
+
+        # Return updated configuration
+        resp = ChatProcessorConfigResponse.from_chat_processor(proc)
+        resp.api_key = "************"
+        return resp
+
+
+    @api_router.get("/processor/configuration", tags=["Chat Processor"], name="Get current ChatProcessor configurations")
+    async def get_processor_config(response: Response) -> ChatProcessorConfigResponse:
+        resp = ChatProcessorConfigResponse.from_chat_processor(aiavatr_app.chat_processor)
+        resp.api_key = "************"
+        return resp
 
 
     @api_router.post("/system/log", tags=["System"], name="See the recent log")
