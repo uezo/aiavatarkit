@@ -38,7 +38,7 @@ class NoiseLevelDetector:
     def get_volume_db(self, data: numpy.ndarray[numpy.int16], ref: int=32768) -> float:
         amplitude = numpy.max(numpy.abs(data))
         if amplitude == 0:
-            return -numpy.inf
+            amplitude = 1   # Return 1 to calculate dB
         return float(20 * numpy.log10(amplitude / ref))
 
     def get_noise_level(self) -> float:
@@ -89,7 +89,7 @@ class SpeechListenerBase:
     def get_volume_db(self, data: numpy.ndarray[numpy.int16], ref: int=32768) -> float:
         amplitude = numpy.max(numpy.abs(data))
         if amplitude == 0:
-            return -numpy.inf
+            amplitude = 1   # Return 1 to calculate dB
         return float(20 * numpy.log10(amplitude / ref))
 
     def record_audio(self, device_index) -> bytes:
