@@ -4,7 +4,7 @@ from aiavatar.processors.chatgpt import ChatGPTProcessor
 
 @pytest.fixture
 def chatgpt_processor():
-    return ChatGPTProcessor("YOUR_API_KEY", temperature=0.0, history_timeout=5.0)
+    return ChatGPTProcessor(api_key="YOUR_API_KEY", temperature=0.0, history_timeout=5.0)
 
 @pytest.mark.asyncio
 async def test_chat(chatgpt_processor: ChatGPTProcessor):
@@ -37,16 +37,17 @@ async def test_reset_histories(chatgpt_processor: ChatGPTProcessor):
 
     assert len(chatgpt_processor.histories) == 0
 
-def test_build_messages(chatgpt_processor: ChatGPTProcessor):
+@pytest.mark.asyncio
+async def test_build_messages(chatgpt_processor: ChatGPTProcessor):
     # Just current user message
     current_user_message = "current user message"
-    messages = chatgpt_processor.build_messages(current_user_message)
+    messages = await chatgpt_processor.build_messages(current_user_message)
     assert len(messages) == 1
     assert messages[-1]["content"] == current_user_message
 
     # With system message
     chatgpt_processor.system_message_content = "system message content"
-    messages = chatgpt_processor.build_messages(current_user_message)
+    messages = await chatgpt_processor.build_messages(current_user_message)
     assert len(messages) == 2
     assert messages[0]["content"] == chatgpt_processor.system_message_content
     assert messages[-1]["content"] == current_user_message
@@ -59,14 +60,14 @@ def test_build_messages(chatgpt_processor: ChatGPTProcessor):
 
     # With histories
     chatgpt_processor.system_message_content = None
-    messages = chatgpt_processor.build_messages(current_user_message)
+    messages = await chatgpt_processor.build_messages(current_user_message)
     assert len(messages) == 5
     assert messages[0]["content"] == "user message 1"
     assert messages[-1]["content"] == current_user_message
 
     # With system message + histories
     chatgpt_processor.system_message_content = "system message content"
-    messages = chatgpt_processor.build_messages(current_user_message)
+    messages = await chatgpt_processor.build_messages(current_user_message)
     assert len(messages) == 6
     assert messages[0]["content"] == chatgpt_processor.system_message_content
     assert messages[1]["content"] == "user message 1"
@@ -74,7 +75,7 @@ def test_build_messages(chatgpt_processor: ChatGPTProcessor):
 
     # After reset histories
     chatgpt_processor.reset_histories()
-    messages = chatgpt_processor.build_messages(current_user_message)
+    messages = await chatgpt_processor.build_messages(current_user_message)
     assert len(messages) == 2
     assert messages[0]["content"] == chatgpt_processor.system_message_content
     assert messages[-1]["content"] == current_user_message

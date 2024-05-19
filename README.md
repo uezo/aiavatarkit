@@ -77,6 +77,7 @@ Feel free to enjoy the conversation afterwards!
 - [🧩 RESTful APIs](#-restful-apis)
 - [🤿 Deep Dive](#-deep-dive)
   - [⚡️ Function Calling](#️-function-calling)
+  - [👀 Vision](#️-vision)
 - [🔍 Other Tips](#-other-tips)
   - [🎤 Testing Audio I/O](#-testing-audio-io)
   - [🎚️ Noise Filter](#-noise-filter)
@@ -764,6 +765,45 @@ And, after `get_weather` called, message to get voice response will be sent to C
     "name": "get_weather"
 }
 ```
+
+
+## 👀 Vision
+
+We provide the experimental support for vision input to ChatGPT. A new class, ChatGPTProcessorWithVisionBase, has been added to handle image inputs, inheriting from ChatGPTProcessor.
+
+An example implementation, ChatGPTProcessorWithVisionScreenShot, demonstrates how to capture screenshots using pyautogui. This gives "eyes" to your AIAvatar in metaverse platforms like VRChat.
+
+```python
+import io
+import pyautogui
+
+class ChatGPTProcessorWithVisionScreenShot(ChatGPTProcessorWithVisionBase):
+    async def get_image(self) -> bytes:
+        buffered = io.BytesIO()
+        image = pyautogui.screenshot(region=(0, 0, 1280, 720))
+        image.save(buffered, format="PNG")
+        image.save("image_to_chatgpt.png")
+        return buffered.getvalue()
+```
+
+To use this new feature, you can instantiate ChatGPTProcessorWithVisionScreenShot instead of ChatGPTProcessor and set it in the AIAvatar.
+
+```python
+chat_processor = ChatGPTProcessorWithVisionScreenShot(
+    api_key=OPENAI_API_KEY,
+    system_message_content=PROMPT
+)
+
+app = AIAvatar(
+    google_api_key=GOOGLE_API_KEY,
+    chat_processor=chat_processor
+)
+```
+
+**NOTE**
+
+* Only the latest image will be sent to ChatGPT to avoid performance issues.
+* The system uses function calling to determine if image retrieval is necessary, which adds approximately 500 milliseconds to 1 second to the processing time.
 
 
 # 🔍 Other Tips
