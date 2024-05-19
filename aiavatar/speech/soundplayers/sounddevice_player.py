@@ -26,7 +26,7 @@ if __name__ == "__main__":
             sounddevice.wait()
     
     except Exception as ex:
-        sys.stderr.write(f"{ex}\n")
+        sys.stderr.write(f"{ex}\ndevice_index: {device_index}")
         sys.exit(1)
 
 else:
