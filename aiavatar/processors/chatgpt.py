@@ -1,3 +1,5 @@
+from abc import abstractmethod
+import base64
 from logging import getLogger, NullHandler
 from datetime import datetime
 import traceback
@@ -56,7 +58,7 @@ class ChatGPTProcessor(ChatProcessor):
     def reset_histories(self):
         self.histories.clear()
 
-    def build_messages(self, text):
+    async def build_messages(self, text):
         messages = []
         try:
             # System message
@@ -111,7 +113,7 @@ class ChatGPTProcessor(ChatProcessor):
             if self.on_start_processing:
                 await self.on_start_processing()
 
-            messages = self.build_messages(text)
+            messages = await self.build_messages(text)
 
             response_text = ""
             stream_resp = await self.chat_completion_stream(async_client, messages)
@@ -167,3 +169,69 @@ class ChatGPTProcessor(ChatProcessor):
             self.last_chat_at = datetime.utcnow()
             if not async_client.is_closed():
                 await async_client.close()
+
+
+class ChatGPTProcessorWithVisionBase(ChatGPTProcessor):
+    def __init__(self, *, api_key: str, base_url: str = None, model: str = "gpt-3.5-turbo", temperature: float = 1, max_tokens: int = 0, functions: dict = None, parse_function_call_in_response: bool = True, system_message_content: str = None, history_count: int = 10, history_timeout: float = 60, use_vision: bool = True):
+        super().__init__(api_key=api_key, base_url=base_url, model=model, temperature=temperature, max_tokens=max_tokens, functions=functions, parse_function_call_in_response=parse_function_call_in_response, system_message_content=system_message_content, history_count=history_count, history_timeout=history_timeout)
+        self.use_vision = use_vision
+
+    @abstractmethod
+    async def get_image(self) -> bytes:
+        pass
+
+    async def build_messages(self, text):
+        messages = await super().build_messages(text)
+        if not self.use_vision:
+            return messages
+
+        if len(self.histories) > 1:
+            last_user_message = self.histories[-2:-1][0]
+            if isinstance(last_user_message["content"], list):
+                for i in range(len(last_user_message["content"]) - 1, -1, -1):
+                    # Remove image from last request
+                    if last_user_message["content"][i].get("type") != "text":
+                        del last_user_message["content"][i]
+
+        async_client = AsyncClient(api_key=self.api_key)
+        try:
+            # Determine whether the vision input is required to process the user input
+            resp = await async_client.chat.completions.create(
+                model=self.model,
+                messages=messages[:-1] + [{"role": "user", "content": f"以下はユーザーからの入力内容です。このメッセージを処理するのに新たな画像の入力が必要か判断してください。\n\n入力: {text}"}],
+                functions=[{
+                    "name": "is_vision_required",
+                    "description": "Determine whether the vision input is required to process the user input.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "is_required": {"type": "boolean"}
+                        },
+                        "required": ["is_required"]
+                    }
+                }],
+                function_call={"name": "is_vision_required"},
+                stream=False
+            )
+
+            if "true" in resp.choices[0].message.function_call.arguments:
+                self.logger.info("Vision input is required")
+
+                # Convert image to data url
+                image_bytes = await self.get_image()
+                image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                image_data_url = f"data:image/png;base64,{image_b64}"
+                # Overwrite content
+                messages[-1]["content"] = [
+                    {"type": "text", "text": text},
+                    {"type": "image_url", "image_url": {"url": image_data_url}}
+                ]
+
+        except Exception as ex:
+            self.logger.error(f"Error at build_messages: {str(ex)}\n{traceback.format_exc()}")
+
+        finally:
+            if not async_client.is_closed():
+                await async_client.close()
+
+        return messages
