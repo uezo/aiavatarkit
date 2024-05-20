@@ -6,7 +6,7 @@ import google.generativeai as genai
 from . import ChatProcessor
 
 class GeminiProcessor(ChatProcessor):
-    def __init__(self, *, api_key: str, model: str="gemini-pro", temperature: float=1.0, max_tokens: int=200, functions: dict=None, system_message_content: str=None, system_message_content_acknowledgement_content: str="了解しました。", history_count: int=10, history_timeout: float=60.0):
+    def __init__(self, *, api_key: str, model: str="gemini-1.5-flash-latest", temperature: float=1.0, max_tokens: int=200, functions: dict=None, system_message_content: str=None, history_count: int=10, history_timeout: float=60.0):
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
 
@@ -14,8 +14,7 @@ class GeminiProcessor(ChatProcessor):
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.system_message_content = system_message_content
-        self.system_message_content_acknowledgement_content = system_message_content_acknowledgement_content
+        self.functions = functions
         self.history_count = history_count
         self.history_timeout = history_timeout
         self.histories = []
@@ -24,6 +23,19 @@ class GeminiProcessor(ChatProcessor):
 
         genai.configure(api_key=self.api_key)
         self.client = genai.GenerativeModel(self.model)
+        # Set system_message_content after creating client
+        if system_message_content:
+            self.system_message_content = system_message_content
+
+    @property
+    def system_message_content(self):
+        if not self.client._system_instruction:
+            return None
+        return self.client._system_instruction["parts"][0]["text"]
+    
+    @system_message_content.setter
+    def system_message_content(self, value):
+        self.client._system_instruction = {"role": "user", "parts": [{"text": value}]}
 
     def reset_histories(self):
         self.histories.clear()
@@ -31,11 +43,6 @@ class GeminiProcessor(ChatProcessor):
     def build_messages(self, text):
         messages = []
         try:
-            # System message
-            if self.system_message_content:
-                messages.append({"role": "user", "parts": [{"text": self.system_message_content}]})
-                messages.append({"role": "model", "parts": [{"text": self.system_message_content_acknowledgement_content}]})
-
             # Histories
             messages.extend(self.histories[-1 * self.history_count:])
 
@@ -69,9 +76,10 @@ class GeminiProcessor(ChatProcessor):
             response_text = ""
             stream_resp = await self.client.generate_content_async(messages, generation_config=generation_config)
             async for chunk in stream_resp:
-                content = chunk.candidates[0].content.parts[0].text
-                response_text += content
-                yield content
+                if chunk.candidates and chunk.candidates[0].content.parts:
+                    content = chunk.candidates[0].content.parts[0].text
+                    response_text += content
+                    yield content
 
             # Save context
             if response_text:
