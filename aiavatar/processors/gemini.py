@@ -1,3 +1,5 @@
+from abc import abstractmethod
+import base64
 from datetime import datetime
 from logging import getLogger, NullHandler
 import traceback
@@ -174,3 +176,65 @@ class GeminiProcessor(ChatProcessor):
         
         finally:
             self.last_chat_at = datetime.utcnow()
+
+
+class GeminiProcessorWithVisionBase(GeminiProcessor):
+    def __init__(self, *, api_key: str, model: str = "gemini-1.5-flash-latest", temperature: float = 1, max_tokens: int = 200, functions: dict = None, system_message_content: str = None, history_count: int = 10, history_timeout: float = 60, use_vision: bool = True):
+        super().__init__(api_key=api_key, model=model, temperature=temperature, max_tokens=max_tokens, functions=functions, system_message_content=system_message_content, history_count=history_count, history_timeout=history_timeout)
+        self.use_vision = use_vision
+        self.is_vision_required_func = genai.types.FunctionDeclaration(
+            name="is_vision_required",
+            description="Determine whether the vision input is required to process the user input.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "is_required": {"type": "boolean"}
+                },
+                "required": ["is_required"]
+            }
+        )
+
+    @abstractmethod
+    async def get_image(self) -> bytes:
+        pass
+
+    async def build_messages(self, text):
+        messages = await super().build_messages(text)
+        if not self.use_vision:
+            return messages
+
+        if len(self.histories) > 1:
+            last_user_message = self.histories[-2:-1][0]
+            for i in range(len(last_user_message["parts"]) - 1, -1, -1):
+                # Remove image from last request
+                part = last_user_message["parts"][i]
+                if isinstance(part, dict) and part.get("mime_type"):
+                    del last_user_message["parts"][i]
+
+        try:
+            # Determine whether the vision input is required to process the user input
+            resp = await self.client.generate_content_async(
+                messages[:-1] + [{
+                    "role": "user",
+                    "parts": [{
+                        "text": f"以下はユーザーからの入力内容です。このメッセージを処理するために新たな画像の入力が必要か判断してください。\n\n入力: {text}"
+                    }]
+                }],
+                generation_config={"temperature": 0.0},
+                tools=[self.is_vision_required_func],
+                tool_config=glm.ToolConfig(function_calling_config=glm.FunctionCallingConfig(mode=glm.FunctionCallingConfig.Mode.ANY)),
+                stream=False
+            )
+
+            for part in resp.candidates[0].content.parts:
+                if part.function_call:
+                    if dict(part.function_call.args)["is_required"] is True:
+                        self.logger.info("Vision input is required")
+                        image_bytes = await self.get_image()
+                        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                        messages[-1]["parts"].append({"mime_type": "image/png", "data": image_b64})
+
+        except Exception as ex:
+            self.logger.error(f"Error at build_messages: {str(ex)}\n{traceback.format_exc()}")
+
+        return messages
