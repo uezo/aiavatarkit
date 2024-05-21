@@ -1,9 +1,27 @@
 from datetime import datetime
 from logging import getLogger, NullHandler
 import traceback
-from typing import AsyncGenerator
+from typing import Callable, AsyncGenerator
 import google.generativeai as genai
+import google.ai.generativelanguage as glm
+from google.protobuf.struct_pb2 import Struct
 from . import ChatProcessor
+
+
+class GeminiFunction:
+    def __init__(self, name: str, description: str=None, parameters: dict=None, func: Callable=None):
+        self.name = name
+        self.description = description
+        self.parameters = parameters
+        self.func = func
+    
+    def get_spec(self):
+        return genai.types.FunctionDeclaration(
+            name=self.name,
+            description=self.description,
+            parameters=self.parameters
+        )
+
 
 class GeminiProcessor(ChatProcessor):
     def __init__(self, *, api_key: str, model: str="gemini-1.5-flash-latest", temperature: float=1.0, max_tokens: int=200, functions: dict=None, system_message_content: str=None, history_count: int=10, history_timeout: float=60.0):
@@ -20,6 +38,7 @@ class GeminiProcessor(ChatProcessor):
         self.histories = []
         self.last_chat_at = datetime.utcnow()
         self.on_start_processing = None
+        self.dump_messages = False
 
         genai.configure(api_key=self.api_key)
         self.client = genai.GenerativeModel(self.model)
@@ -37,14 +56,23 @@ class GeminiProcessor(ChatProcessor):
     def system_message_content(self, value):
         self.client._system_instruction = {"role": "user", "parts": [{"text": value}]}
 
+    def add_function(self, name: str, description: str=None, parameters: dict=None, func: Callable=None):
+        self.functions[name] = GeminiFunction(name=name, description=description, parameters=parameters, func=func)
+
     def reset_histories(self):
         self.histories.clear()
 
-    def build_messages(self, text):
+    async def build_messages(self, text):
         messages = []
         try:
             # Histories
             messages.extend(self.histories[-1 * self.history_count:])
+
+            if len(messages) > 0:
+                part = messages[0]["parts"][0]
+                if isinstance(part, glm.Part) and part.function_response:
+                    # Invalid context if it starts with function_response
+                    del messages[0]
 
             # Current user message
             messages.append({"role": "user", "parts": [{"text": text}]})
@@ -53,6 +81,27 @@ class GeminiProcessor(ChatProcessor):
             self.logger.error(f"Error at build_messages: {ex}\n{traceback.format_exc()}")
 
         return messages
+
+    async def generate_content_stream(self, messages: list, call_functions: bool=True):
+        # Params
+        generation_config = {
+            "temperature": self.temperature
+        }
+        if self.max_tokens:
+            generation_config["max_output_tokens"] = self.max_tokens
+
+        tools = [v.get_spec() for _, v in self.functions.items()] \
+            if call_functions and self.functions else None
+
+        if self.dump_messages:
+            self.logger.info(f"messages to generate_content:\n{messages}")
+
+        return await self.client.generate_content_async(
+            messages,
+            generation_config=generation_config,
+            tools=tools,
+            stream=True
+        )
 
     async def chat(self, text: str) -> AsyncGenerator[str, None]:
         try:
@@ -63,25 +112,58 @@ class GeminiProcessor(ChatProcessor):
                 await self.on_start_processing()
 
             # Get context
-            messages = self.build_messages(text)
+            messages = await self.build_messages(text)
 
-            # Params
-            generation_config = {
-                "temperature": self.temperature
-            }
-            if self.max_tokens:
-                generation_config["max_output_tokens"] = self.max_tokens
-
-            # Stream
+            # Process stream response
             response_text = ""
-            stream_resp = await self.client.generate_content_async(messages, generation_config=generation_config)
+            stream_resp = await self.generate_content_stream(messages)
+
             async for chunk in stream_resp:
                 if chunk.candidates and chunk.candidates[0].content.parts:
-                    content = chunk.candidates[0].content.parts[0].text
-                    response_text += content
-                    yield content
+                    for part in chunk.candidates and chunk.candidates[0].content.parts:
+                        if function_call := part.function_call:
+                            # Make context
+                            parts = []
+                            if response_text:
+                                # Add text content response includes text message before function
+                                parts.append({"text": response_text})                            
+                            parts.append(part)
+                            messages.append({"role": "model", "parts": parts})
 
-            # Save context
+                            # Add messages to history
+                            self.histories.append(messages[-2])
+                            self.histories.append(messages[-1])
+
+                            # Call function
+                            called_func = self.functions[function_call.name]
+                            api_resp = await called_func.func(**dict(function_call.args))
+
+                            # Build function response
+                            # See also: https://github.com/google-gemini/generative-ai-python/issues/243
+                            s = Struct()
+                            s.update({"result": api_resp})
+                            function_response = glm.Part(
+                                function_response=glm.FunctionResponse(name=function_call.name, response=s)
+                            )
+
+                            # Convert API response to human friendly response
+                            messages.append({"role": "user", "parts": [function_response]})
+
+                            response_text = ""
+                            stream_resp = await self.generate_content_stream(messages, False)
+
+                            async for chunk in stream_resp:
+                                if chunk.candidates and chunk.candidates[0].content.parts:
+                                    content = chunk.candidates[0].content.parts[0].text
+                                    response_text += content
+                                    yield content
+
+                        else:
+                            content = chunk.candidates[0].content.parts[0].text
+                            response_text += content
+                            yield content
+
+            # Save context after receiving stream
             if response_text:
                 self.histories.append(messages[-1])
                 self.histories.append({"role": "model", "parts": [{"text": response_text}]})
