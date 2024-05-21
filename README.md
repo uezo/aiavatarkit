@@ -77,7 +77,7 @@ Feel free to enjoy the conversation afterwards!
 - [🧩 RESTful APIs](#-restful-apis)
 - [🤿 Deep Dive](#-deep-dive)
   - [⚡️ Function Calling](#️-function-calling)
-  - [👀 Vision](#️-vision)
+  - [👀 Vision](#-vision)
 - [🔍 Other Tips](#-other-tips)
   - [🎤 Testing Audio I/O](#-testing-audio-io)
   - [🎚️ Noise Filter](#-noise-filter)
@@ -769,7 +769,7 @@ And, after `get_weather` called, message to get voice response will be sent to C
 
 ## 👀 Vision
 
-We provide the experimental support for vision input to ChatGPT. A new class, ChatGPTProcessorWithVisionBase, has been added to handle image inputs, inheriting from ChatGPTProcessor.
+We provide the experimental support for vision input to ChatGPT, Claude and Gemini. Add `ChatGPTProcessorWithVisionBase`, `ClaudeProcessorWithVisionBase` and `GeminiProcessorWithVisionBase` to handle image inputs, inheriting from processors.
 
 An example implementation, ChatGPTProcessorWithVisionScreenShot, demonstrates how to capture screenshots using pyautogui. This gives "eyes" to your AIAvatar in metaverse platforms like VRChat.
 
@@ -799,6 +799,8 @@ app = AIAvatar(
     chat_processor=chat_processor
 )
 ```
+
+You can also adapt the same method for handling vision input with Claude and Gemini.
 
 **NOTE**
 
