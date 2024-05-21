@@ -1,3 +1,5 @@
+from abc import abstractmethod
+import base64
 from datetime import datetime
 import json
 from logging import getLogger, NullHandler
@@ -177,3 +179,79 @@ class ClaudeProcessor(ChatProcessor):
             self.last_chat_at = datetime.utcnow()
             if not async_client.is_closed():
                 await async_client.close()
+
+
+class ClaudeProcessorWithVisionBase(ClaudeProcessor):
+    def __init__(self, *, api_key: str, model: str = "claude-3-sonnet-20240229", temperature: float = 1, max_tokens: int = 200, functions: dict = None, system_message_content: str = None, history_count: int = 10, history_timeout: float = 60, use_vision: bool = True):
+        super().__init__(api_key=api_key, model=model, temperature=temperature, max_tokens=max_tokens, functions=functions, system_message_content=system_message_content, history_count=history_count, history_timeout=history_timeout)
+        self.use_vision = use_vision
+        self.is_vision_required_func = {
+            "name": "is_vision_required",
+            "description": "Determine whether the vision input is required to process the user input.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "is_required": {"type": "boolean"}
+                },
+                "required": ["is_required"]
+            }
+        }
+
+    @abstractmethod
+    async def get_image(self) -> bytes:
+        pass
+
+    async def build_messages(self, text):
+        messages = await super().build_messages(text)
+        if not self.use_vision:
+            return messages
+
+        if len(self.histories) > 1:
+            last_user_message = self.histories[-2:-1][0]
+            if isinstance(last_user_message["content"], list):
+                for i in range(len(last_user_message["content"]) - 1, -1, -1):
+                    # Remove image from last request
+                    if last_user_message["content"][i]["type"] == "image":
+                        del last_user_message["content"][i]
+
+        async_client = AsyncAnthropic(api_key=self.api_key)
+        try:
+            # Determine whether the vision input is required to process the user input
+            params = {
+                "messages": messages[:-1] + [{
+                    "role": "user",
+                    "content": f"以下はユーザーからの入力内容です。このメッセージを処理するために新たな画像の入力が必要か判断してください。\n\n入力: {text}"
+                }],
+                "model": self.model,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+                "system": self.system_message_content,
+                "tools": [self.is_vision_required_func],
+                "tool_choice": {"type": "tool", "name": "is_vision_required"},
+                "stream": False,
+            }
+
+            resp = await async_client.beta.tools.messages.create(**params)
+
+            if resp.content[0].input["is_required"] is True:
+                self.logger.info("Vision input is required")
+                image_bytes = await self.get_image()
+                image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                messages[-1]["content"].append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": image_b64,
+                    }
+                })
+
+        except Exception as ex:
+            self.logger.error(f"Error at build_messages: {str(ex)}\n{traceback.format_exc()}")
+
+        finally:
+            self.last_chat_at = datetime.utcnow()
+            if not async_client.is_closed():
+                await async_client.close()
+
+        return messages
