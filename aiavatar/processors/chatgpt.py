@@ -24,9 +24,10 @@ class ChatGPTFunction:
 
 
 class ChatCompletionStreamResponse:
-    def __init__(self, stream: Iterator[str], function_name: str=None):
+    def __init__(self, stream: Iterator[str], function_name: str=None, tool_call_id: str=None):
         self.stream = stream
         self.function_name = function_name
+        self.tool_call_id = tool_call_id
 
     @property
     def response_type(self):
@@ -87,7 +88,7 @@ class ChatGPTProcessor(ChatProcessor):
             params["max_tokens"] = self.max_tokens
 
         if call_functions and self.functions:
-            params["functions"] = [v.get_spec() for _, v in self.functions.items()]
+            params["tools"] = [{"type": "function", "function": v.get_spec()} for _, v in self.functions.items()]
 
         stream_resp = ChatCompletionStreamResponse(await async_client.chat.completions.create(**params))
 
@@ -95,8 +96,9 @@ class ChatGPTProcessor(ChatProcessor):
             async for chunk in stream_resp.stream:
                 if chunk:
                     delta = chunk.choices[0].delta
-                    if delta.function_call:
-                        stream_resp.function_name = delta.function_call.name
+                    if delta.tool_calls:
+                        stream_resp.function_name = delta.tool_calls[0].function.name
+                        stream_resp.tool_call_id = delta.tool_calls[0].id
                     break
 
         return stream_resp
@@ -127,25 +129,28 @@ class ChatGPTProcessor(ChatProcessor):
                         yield content
 
                 elif stream_resp.response_type == "function_call":
-                    function_call = delta.function_call
-                    if function_call:
-                        arguments = function_call.arguments
-                        response_text += arguments
+                    if delta.tool_calls:
+                        response_text += delta.tool_calls[0].function.arguments
 
             if stream_resp.response_type == "function_call":
-                self.histories.append(messages[-1])
-                self.histories.append({
+                messages.append({
                     "role": "assistant",
-                    "function_call": {
-                        "name": stream_resp.function_name,
-                        "arguments": response_text
-                    },
-                    "content": None
+                    "tool_calls": [{
+                        "id": stream_resp.tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": stream_resp.function_name,
+                            "arguments": response_text
+                        }
+                    }]
                 })
+
+                self.histories.append(messages[-2])
+                self.histories.append(messages[-1])
 
                 api_resp = await self.functions[stream_resp.function_name].func(**json.loads(response_text))
 
-                messages.append({"role": "function", "content": json.dumps(api_resp), "name": stream_resp.function_name})
+                messages.append({"role": "tool", "content": json.dumps(api_resp), "tool_call_id": stream_resp.tool_call_id})
 
                 response_text = ""
                 stream_resp = await self.chat_completion_stream(async_client, messages, False)
