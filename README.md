@@ -70,6 +70,7 @@ Feel free to enjoy the conversation afterwards!
   - [🔈 Audio Device](#-audio-device)
   - [🥰 Face Expression](#-face-expression)
   - [💃 Animation](#-animation)
+  - [👀 Vision](#-vision)
   - [🎭 Custom Behavior](#-custom-behavior)
 - [🌎 Platform Guide](#-platform-guide)
   - [🐈 VRChat](#-vrchat)
@@ -77,7 +78,7 @@ Feel free to enjoy the conversation afterwards!
 - [🧩 RESTful APIs](#-restful-apis)
 - [🤿 Deep Dive](#-deep-dive)
   - [⚡️ Function Calling](#️-function-calling)
-  - [👀 Vision](#-vision)
+  - [👀 Vision (Claude and Gemini)](#-vision-claude-gemini)
 - [🔍 Other Tips](#-other-tips)
   - [🎤 Testing Audio I/O](#-testing-audio-io)
   - [🎚️ Noise Filter](#-noise-filter)
@@ -491,7 +492,42 @@ This allows emojis like 🥳 to be autonomously displayed in the terminal during
 Now writing... ✍️
 
 
-##　🎭 Custom Behavior
+## 👀 Vision
+
+AIAvatarKit captures and sends image to AI dynamically when the AI determine that vision is required to process the request from the user. This gives "eyes" to your AIAvatar in metaverse platforms like VRChat.
+
+To use vision, implement `get_image()` and configure ChatGPTProcessor.
+
+```python
+import io
+import pyautogui
+from aiavatar.processors.chatgpt import ChatGPTProcessor
+
+# Implement get_image
+async def get_image(source: str=None) -> bytes:
+    buffered = io.BytesIO()
+    image = pyautogui.screenshot(region=(0, 0, 1280, 720))
+    image.save(buffered, format="PNG")
+    image.save("image_to_gemini.png")   # Save current image for debug
+    return buffered.getvalue()
+
+# Configure ChatGPTProcessor
+chat_processor_gpt = ChatGPTProcessor(
+    api_key=OPENAI_API_KEY,
+    model="gpt-4o",
+    system_message_content="ユーザーからの要求を処理するために画像データが必要な場合、[vision:screenshot]を応答メッセージに含めてください。\n\n例\n[vision:screenshot]承知しました。画像を確認しています。"
+)
+chat_processor_gpt.use_vision = True
+chat_processor_gpt.get_image = get_image
+```
+
+**NOTE**
+
+* Only the latest image will be sent to ChatGPT to avoid performance issues.
+* See [👀 Vision (Claude and Gemini)](#-vision-claude-gemini) to use vision with Claude and Gemini.
+
+
+##　 🎭 Custom Behavior
 
 You can invoke custom implementations when listening to requests from user, processing those requests, or when recognized a wake word to start conversation.
 
@@ -767,17 +803,17 @@ And, after `get_weather` called, message to get voice response will be sent to C
 ```
 
 
-## 👀 Vision
+## 👀 Vision (Claude and Gemini)
 
-We provide the experimental support for vision input to ChatGPT, Claude and Gemini. Add `ChatGPTProcessorWithVisionBase`, `ClaudeProcessorWithVisionBase` and `GeminiProcessorWithVisionBase` to handle image inputs, inheriting from processors.
+We provide the experimental support for vision input to Claude and Gemini.
 
-An example implementation, ChatGPTProcessorWithVisionScreenShot, demonstrates how to capture screenshots using pyautogui. This gives "eyes" to your AIAvatar in metaverse platforms like VRChat.
+An example implementation, ClaudeProcessorWithVisionScreenShot, demonstrates how to capture screenshots using pyautogui.
 
 ```python
 import io
 import pyautogui
 
-class ChatGPTProcessorWithVisionScreenShot(ChatGPTProcessorWithVisionBase):
+class ClaudeProcessorWithVisionScreenShot(ClaudeProcessorWithVisionBase):
     async def get_image(self) -> bytes:
         buffered = io.BytesIO()
         image = pyautogui.screenshot(region=(0, 0, 1280, 720))
@@ -786,10 +822,10 @@ class ChatGPTProcessorWithVisionScreenShot(ChatGPTProcessorWithVisionBase):
         return buffered.getvalue()
 ```
 
-To use this new feature, you can instantiate ChatGPTProcessorWithVisionScreenShot instead of ChatGPTProcessor and set it in the AIAvatar.
+To use this new feature, you can instantiate ClaudeProcessorWithVisionScreenShot instead of ClaudeProcessor and set it in the AIAvatar.
 
 ```python
-chat_processor = ChatGPTProcessorWithVisionScreenShot(
+chat_processor = ClaudeProcessorWithVisionScreenShot(
     api_key=OPENAI_API_KEY,
     system_message_content=PROMPT
 )
@@ -800,11 +836,11 @@ app = AIAvatar(
 )
 ```
 
-You can also adapt the same method for handling vision input with Claude and Gemini.
+You can also adapt the same method for handling vision input with Gemini.
 
 **NOTE**
 
-* Only the latest image will be sent to ChatGPT to avoid performance issues.
+* Only the latest image will be sent to Claude/Gemini to avoid performance issues.
 * The system uses function calling to determine if image retrieval is necessary, which adds approximately 500 milliseconds to 1 second to the processing time.
 
 

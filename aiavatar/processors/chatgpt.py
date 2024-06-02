@@ -1,18 +1,20 @@
-from abc import abstractmethod
 import base64
 from logging import getLogger, NullHandler
 from datetime import datetime
 import traceback
 import json
+import re
 from typing import Iterator, Callable, AsyncGenerator
 from openai import AsyncClient
 from . import ChatProcessor
 
+
 class ChatGPTFunction:
-    def __init__(self, name: str, description: str=None, parameters: dict=None, func: Callable=None):
+    def __init__(self, *, name: str, description: str=None, parameters: dict=None, acknowledgement_message_key: str="acknowledgement_message", func: Callable=None):
         self.name = name
         self.description = description
         self.parameters = parameters
+        self.acknowledgement_message_key = acknowledgement_message_key
         self.func = func
     
     def get_spec(self):
@@ -35,7 +37,7 @@ class ChatCompletionStreamResponse:
 
 
 class ChatGPTProcessor(ChatProcessor):
-    def __init__(self, *, api_key: str, base_url: str=None, model: str="gpt-3.5-turbo", temperature: float=1.0, max_tokens: int=0, functions: dict=None, parse_function_call_in_response: bool=True, system_message_content: str=None, history_count: int=10, history_timeout: float=60.0):
+    def __init__(self, *, api_key: str, base_url: str=None, model: str="gpt-3.5-turbo", temperature: float=1.0, max_tokens: int=0, functions: dict=None, parse_function_call_in_response: bool=True, system_message_content: str=None, history_count: int=10, history_timeout: float=60.0, use_vision: bool=False):
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
 
@@ -53,11 +55,20 @@ class ChatGPTProcessor(ChatProcessor):
         self.last_chat_at = datetime.utcnow()
         self.on_start_processing = None
 
-    def add_function(self, name: str, description: str=None, parameters: dict=None, func: Callable=None):
-        self.functions[name] = ChatGPTFunction(name=name, description=description, parameters=parameters, func=func)
+        # Vision
+        self.use_vision = use_vision
+        self.get_image = None
+
+    def add_function(self, *, name: str, description: str=None, parameters: dict=None, acknowledgement_message_key: str="acknowledgement_message", func: Callable=None):
+        self.functions[name] = ChatGPTFunction(name=name, description=description, parameters=parameters, acknowledgement_message_key=acknowledgement_message_key, func=func)
 
     def reset_histories(self):
         self.histories.clear()
+
+    def extract_tags(self, text) -> dict:
+        tag_pattern = r"\[(\w+):([^\]]+)\]"
+        matches = re.findall(tag_pattern, text)
+        return {key: value for key, value in matches}
 
     async def build_messages(self, text):
         messages = []
@@ -132,7 +143,10 @@ class ChatGPTProcessor(ChatProcessor):
                     if delta.tool_calls:
                         response_text += delta.tool_calls[0].function.arguments
 
+            response_tags = self.extract_tags(response_text)
+
             if stream_resp.response_type == "function_call":
+                # Context
                 messages.append({
                     "role": "assistant",
                     "tool_calls": [{
@@ -148,10 +162,19 @@ class ChatGPTProcessor(ChatProcessor):
                 self.histories.append(messages[-2])
                 self.histories.append(messages[-1])
 
-                api_resp = await self.functions[stream_resp.function_name].func(**json.loads(response_text))
+                # Execute function
+                func = self.functions[stream_resp.function_name]
+                arguments = json.loads(response_text)
+
+                if func.acknowledgement_message_key and func.acknowledgement_message_key in arguments:
+                    yield arguments[func.acknowledgement_message_key]
+                    del arguments[func.acknowledgement_message_key]
+
+                api_resp = await func.func(**arguments)
 
                 messages.append({"role": "tool", "content": json.dumps(api_resp), "tool_call_id": stream_resp.tool_call_id})
 
+                # Make human-friendly response message
                 response_text = ""
                 stream_resp = await self.chat_completion_stream(async_client, messages, False)
 
@@ -161,10 +184,43 @@ class ChatGPTProcessor(ChatProcessor):
                     if content:
                         response_text += content
                         yield content
-                
+
             if response_text:
                 self.histories.append(messages[-1])
                 self.histories.append({"role": "assistant", "content": response_text})
+
+            if vision_source := response_tags.get("vision"):
+                self.logger.info(f"Use vision: {vision_source}")
+
+                # Convert image to data url
+                image_bytes = await self.get_image(vision_source)
+                image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                image_data_url = f"data:image/png;base64,{image_b64}"
+
+                # Build message with image and former request text
+                messages.append({
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": text},
+                        {"type": "image_url", "image_url": {"url": image_data_url}}
+                    ]
+                })
+
+                # Send image and yield response chunks
+                response_text = ""
+                stream_resp = await self.chat_completion_stream(async_client, messages)
+                async for chunk in stream_resp.stream:
+                    delta = chunk.choices[0].delta
+                    if stream_resp.response_type == "content":
+                        content = delta.content
+                        if content:
+                            response_text += delta.content
+                            yield content
+
+                if response_text:
+                    # Save context without image to keep context light
+                    self.histories.append({"role": "user", "content": text})
+                    self.histories.append({"role": "assistant", "content": response_text})
 
         except Exception as ex:
             self.logger.error(f"Error at chat: {str(ex)}\n{traceback.format_exc()}")
@@ -174,69 +230,3 @@ class ChatGPTProcessor(ChatProcessor):
             self.last_chat_at = datetime.utcnow()
             if not async_client.is_closed():
                 await async_client.close()
-
-
-class ChatGPTProcessorWithVisionBase(ChatGPTProcessor):
-    def __init__(self, *, api_key: str, base_url: str = None, model: str = "gpt-3.5-turbo", temperature: float = 1, max_tokens: int = 0, functions: dict = None, parse_function_call_in_response: bool = True, system_message_content: str = None, history_count: int = 10, history_timeout: float = 60, use_vision: bool = True):
-        super().__init__(api_key=api_key, base_url=base_url, model=model, temperature=temperature, max_tokens=max_tokens, functions=functions, parse_function_call_in_response=parse_function_call_in_response, system_message_content=system_message_content, history_count=history_count, history_timeout=history_timeout)
-        self.use_vision = use_vision
-
-    @abstractmethod
-    async def get_image(self) -> bytes:
-        pass
-
-    async def build_messages(self, text):
-        messages = await super().build_messages(text)
-        if not self.use_vision:
-            return messages
-
-        if len(self.histories) > 1:
-            last_user_message = self.histories[-2:-1][0]
-            if isinstance(last_user_message["content"], list):
-                for i in range(len(last_user_message["content"]) - 1, -1, -1):
-                    # Remove image from last request
-                    if last_user_message["content"][i].get("type") != "text":
-                        del last_user_message["content"][i]
-
-        async_client = AsyncClient(api_key=self.api_key)
-        try:
-            # Determine whether the vision input is required to process the user input
-            resp = await async_client.chat.completions.create(
-                model=self.model,
-                messages=messages[:-1] + [{"role": "user", "content": f"以下はユーザーからの入力内容です。このメッセージを処理するのに新たな画像の入力が必要か判断してください。\n\n入力: {text}"}],
-                functions=[{
-                    "name": "is_vision_required",
-                    "description": "Determine whether the vision input is required to process the user input.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "is_required": {"type": "boolean"}
-                        },
-                        "required": ["is_required"]
-                    }
-                }],
-                function_call={"name": "is_vision_required"},
-                stream=False
-            )
-
-            if "true" in resp.choices[0].message.function_call.arguments:
-                self.logger.info("Vision input is required")
-
-                # Convert image to data url
-                image_bytes = await self.get_image()
-                image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-                image_data_url = f"data:image/png;base64,{image_b64}"
-                # Overwrite content
-                messages[-1]["content"] = [
-                    {"type": "text", "text": text},
-                    {"type": "image_url", "image_url": {"url": image_data_url}}
-                ]
-
-        except Exception as ex:
-            self.logger.error(f"Error at build_messages: {str(ex)}\n{traceback.format_exc()}")
-
-        finally:
-            if not async_client.is_closed():
-                await async_client.close()
-
-        return messages

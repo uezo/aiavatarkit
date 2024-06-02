@@ -59,6 +59,9 @@ class AvatarController:
             avreq.animation_duration = 4.0
             text = re.sub(animation_pattarn, "", text)
 
+        # Remove all tags
+        text = re.sub(r"\[.*?\]", "", text)
+
         # Speech
         avreq.text_to_speech = text
 
