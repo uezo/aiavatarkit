@@ -62,6 +62,7 @@ Feel free to enjoy the conversation afterwards!
     - [ChatGPT](#chatgpt)
     - [Claude](#claude)
     - [Gemini](#gemini)
+    - [Dify](#dify)
     - [Other LLMs](#other-llms)
   - [🗣️ Voice](#️-voice)
   - [🐓 Wakeword Listener](#-wakeword-listener)
@@ -162,6 +163,28 @@ app = AIAvatar(
 ```
 
 NOTE: We support Gemini on Google AI Studio, not Vertex AI for now.
+
+
+### Dify
+
+You can use the Dify API instead of a specific LLM's API. This eliminates the need to manage code for tools or RAG locally.
+
+```python
+from aiavatar import AIAvatar
+from aiavatar.processors.dify import DifyProcessor
+
+chat_processor_dify = DifyProcessor(
+    api_key=DIFY_API_KEY,
+    user=DIFY_USER
+)
+
+app = AIAvatar(
+    google_api_key=GOOGLE_API_KEY,
+    chat_processor=chat_processor_dify
+)
+
+app.start_listening_wakeword()
+```
 
 
 ### Other LLMs
