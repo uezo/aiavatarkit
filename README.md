@@ -524,8 +524,9 @@ To use vision, instruct vision tag in the system message and `ChatGPTProcessor.g
 
 ```python
 import io
-import pyautogui
+import pyautogui    # pip install pyautogui
 from aiavatar.processors.chatgpt import ChatGPTProcessor
+from aiavatar.device.video import VideoDevice   # pip install opencv-python
 
 # Instruct vision tag in the system message
 system_message_content = """
@@ -547,12 +548,17 @@ assistant: [vision:screenshot] Let me take a look.
 """
 
 # Implement get_image
+default_camera = VideoDevice(device_index=0, width=960, height=540)
+
 async def get_image(source: str=None) -> bytes:
-    buffered = io.BytesIO()
-    image = pyautogui.screenshot(region=(0, 0, 1280, 720))
-    image.save(buffered, format="PNG")
-    image.save("image_to_gemini.png")   # Save current image for debug
-    return buffered.getvalue()
+    if source == "camera":
+        return await default_camera.capture_image("camera.jpg")   # Save current image for debug
+    else:
+        buffered = io.BytesIO()
+        image = pyautogui.screenshot(region=(0, 0, 1280, 720))
+        image.save(buffered, format="PNG")
+        image.save("screenshot.png")   # Save current image for debug
+        return buffered.getvalue()
 
 # Configure ChatGPTProcessor
 chat_processor = ChatGPTProcessor(
