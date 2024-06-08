@@ -192,6 +192,9 @@ class ChatGPTProcessor(ChatProcessor):
             if vision_source := response_tags.get("vision"):
                 self.logger.info(f"Use vision: {vision_source}")
 
+                # Context
+                messages.append({"role": "assistant", "content": response_text})
+
                 # Convert image to data url
                 image_bytes = await self.get_image(vision_source)
                 image_b64 = base64.b64encode(image_bytes).decode("utf-8")
