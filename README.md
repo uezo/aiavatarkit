@@ -519,12 +519,32 @@ Now writing... ✍️
 
 AIAvatarKit captures and sends image to AI dynamically when the AI determine that vision is required to process the request from the user. This gives "eyes" to your AIAvatar in metaverse platforms like VRChat.
 
-To use vision, implement `get_image()` and configure ChatGPTProcessor.
+To use vision, instruct vision tag in the system message and `ChatGPTProcessor.get_image`.
+
 
 ```python
 import io
 import pyautogui
 from aiavatar.processors.chatgpt import ChatGPTProcessor
+
+# Instruct vision tag in the system message
+system_message_content = """
+### Using Vision
+
+If you need an image to process a user's request, you can obtain it using the following methods:
+
+- screenshot
+- camera
+
+If an image is needed to process the request, add an instruction like [vision:screenshot] to your response to request an image from the user.
+
+By adding this instruction, the user will provide an image in their next utterance. No comments about the image itself are necessary.
+
+Example:
+
+user: Look! This is the sushi I had today.
+assistant: [vision:screenshot] Let me take a look.
+"""
 
 # Implement get_image
 async def get_image(source: str=None) -> bytes:
@@ -535,19 +555,19 @@ async def get_image(source: str=None) -> bytes:
     return buffered.getvalue()
 
 # Configure ChatGPTProcessor
-chat_processor_gpt = ChatGPTProcessor(
+chat_processor = ChatGPTProcessor(
     api_key=OPENAI_API_KEY,
     model="gpt-4o",
-    system_message_content="ユーザーからの要求を処理するために画像データが必要な場合、[vision:screenshot]を応答メッセージに含めてください。\n\n例\n[vision:screenshot]承知しました。画像を確認しています。"
+    system_message_content=system_message_content,
+    use_vision = True
 )
-chat_processor_gpt.use_vision = True
-chat_processor_gpt.get_image = get_image
+chat_processor.get_image = get_image
 ```
 
 **NOTE**
 
 * Only the latest image will be sent to ChatGPT to avoid performance issues.
-* See [👀 Vision (Claude and Gemini)](#-vision-claude-gemini) to use vision with Claude and Gemini.
+* Gemini and Claude can also use vision in the same way. Simply replace `ChatGPTProcessor` with `ClaudeProcessor` or `GeminiProcessor`.
 
 
 ##　 🎭 Custom Behavior
@@ -824,47 +844,6 @@ And, after `get_weather` called, message to get voice response will be sent to C
     "name": "get_weather"
 }
 ```
-
-
-## 👀 Vision (Claude and Gemini)
-
-We provide the experimental support for vision input to Claude and Gemini.
-
-An example implementation, ClaudeProcessorWithVisionScreenShot, demonstrates how to capture screenshots using pyautogui.
-
-```python
-import io
-import pyautogui
-
-class ClaudeProcessorWithVisionScreenShot(ClaudeProcessorWithVisionBase):
-    async def get_image(self) -> bytes:
-        buffered = io.BytesIO()
-        image = pyautogui.screenshot(region=(0, 0, 1280, 720))
-        image.save(buffered, format="PNG")
-        image.save("image_to_chatgpt.png")
-        return buffered.getvalue()
-```
-
-To use this new feature, you can instantiate ClaudeProcessorWithVisionScreenShot instead of ClaudeProcessor and set it in the AIAvatar.
-
-```python
-chat_processor = ClaudeProcessorWithVisionScreenShot(
-    api_key=OPENAI_API_KEY,
-    system_message_content=PROMPT
-)
-
-app = AIAvatar(
-    google_api_key=GOOGLE_API_KEY,
-    chat_processor=chat_processor
-)
-```
-
-You can also adapt the same method for handling vision input with Gemini.
-
-**NOTE**
-
-* Only the latest image will be sent to Claude/Gemini to avoid performance issues.
-* The system uses function calling to determine if image retrieval is necessary, which adds approximately 500 milliseconds to 1 second to the processing time.
 
 
 # 🔍 Other Tips
