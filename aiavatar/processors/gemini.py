@@ -1,7 +1,7 @@
-from abc import abstractmethod
 import base64
 from datetime import datetime
 from logging import getLogger, NullHandler
+import re
 import traceback
 from typing import Callable, AsyncGenerator
 import google.generativeai as genai
@@ -11,10 +11,11 @@ from . import ChatProcessor
 
 
 class GeminiFunction:
-    def __init__(self, name: str, description: str=None, parameters: dict=None, func: Callable=None):
+    def __init__(self, name: str, description: str=None, parameters: dict=None, acknowledgement_message_key: str="acknowledgement_message", func: Callable=None):
         self.name = name
         self.description = description
         self.parameters = parameters
+        self.acknowledgement_message_key = acknowledgement_message_key
         self.func = func
     
     def get_spec(self):
@@ -26,7 +27,7 @@ class GeminiFunction:
 
 
 class GeminiProcessor(ChatProcessor):
-    def __init__(self, *, api_key: str, model: str="gemini-1.5-flash-latest", temperature: float=1.0, max_tokens: int=200, functions: dict=None, system_message_content: str=None, history_count: int=10, history_timeout: float=60.0):
+    def __init__(self, *, api_key: str, model: str="gemini-1.5-flash-latest", temperature: float=1.0, max_tokens: int=200, functions: dict=None, system_message_content: str=None, history_count: int=10, history_timeout: float=60.0, use_vision: bool=False):
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
 
@@ -34,7 +35,7 @@ class GeminiProcessor(ChatProcessor):
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.functions = functions
+        self.functions = functions or {}
         self.history_count = history_count
         self.history_timeout = history_timeout
         self.histories = []
@@ -48,6 +49,10 @@ class GeminiProcessor(ChatProcessor):
         if system_message_content:
             self.system_message_content = system_message_content
 
+        # Vision
+        self.use_vision = use_vision
+        self.get_image = None
+
     @property
     def system_message_content(self):
         if not self.client._system_instruction:
@@ -58,11 +63,16 @@ class GeminiProcessor(ChatProcessor):
     def system_message_content(self, value):
         self.client._system_instruction = {"role": "user", "parts": [{"text": value}]}
 
-    def add_function(self, name: str, description: str=None, parameters: dict=None, func: Callable=None):
-        self.functions[name] = GeminiFunction(name=name, description=description, parameters=parameters, func=func)
+    def add_function(self, name: str, description: str=None, parameters: dict=None, acknowledgement_message_key: str="acknowledgement_message", func: Callable=None):
+        self.functions[name] = GeminiFunction(name=name, description=description, parameters=parameters, acknowledgement_message_key=acknowledgement_message_key, func=func)
 
     def reset_histories(self):
         self.histories.clear()
+
+    def extract_tags(self, text) -> dict:
+        tag_pattern = r"\[(\w+):([^\]]+)\]"
+        matches = re.findall(tag_pattern, text)
+        return {key: value for key, value in matches}
 
     async def build_messages(self, text):
         messages = []
@@ -138,7 +148,13 @@ class GeminiProcessor(ChatProcessor):
 
                             # Call function
                             called_func = self.functions[function_call.name]
-                            api_resp = await called_func.func(**dict(function_call.args))
+                            arguments = dict(function_call.args)
+
+                            if called_func.acknowledgement_message_key and called_func.acknowledgement_message_key in arguments:
+                                yield arguments[called_func.acknowledgement_message_key]
+                                del arguments[called_func.acknowledgement_message_key]
+
+                            api_resp = await called_func.func(**arguments)
 
                             # Build function response
                             # See also: https://github.com/google-gemini/generative-ai-python/issues/243
@@ -170,71 +186,45 @@ class GeminiProcessor(ChatProcessor):
                 self.histories.append(messages[-1])
                 self.histories.append({"role": "model", "parts": [{"text": response_text}]})
 
+            response_tags = self.extract_tags(response_text)
+
+            if vision_source := response_tags.get("vision"):
+                self.logger.info(f"Use vision: {vision_source}")
+
+                # Context
+                messages.append({"role": "model", "parts": [{"text": response_text}]})
+
+                # Convert image to data url
+                image_bytes = await self.get_image(vision_source)
+                image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+                # Build message with image and former request text
+                messages.append({
+                    "role": "user", "parts": [
+                        {"text": text},
+                        {"mime_type": "image/png", "data": image_b64}
+                    ]
+                })
+
+                # Send image and yield response chunks
+                response_text = ""
+                stream_resp = await self.generate_content_stream(messages)
+
+                async for chunk in stream_resp:
+                    if chunk.candidates and chunk.candidates[0].content.parts:
+                        for part in chunk.candidates and chunk.candidates[0].content.parts:
+                            content = chunk.candidates[0].content.parts[0].text
+                            response_text += content
+                            yield content
+
+                if response_text:
+                    # Save context without image to keep context light
+                    self.histories.append({"role": "user", "parts": [{"text": text}]})
+                    self.histories.append({"role": "model", "parts": [{"text": response_text}]})
+
         except Exception as ex:
             self.logger.error(f"Error at chat: {str(ex)}\n{traceback.format_exc()}")
             raise ex
         
         finally:
             self.last_chat_at = datetime.utcnow()
-
-
-class GeminiProcessorWithVisionBase(GeminiProcessor):
-    def __init__(self, *, api_key: str, model: str = "gemini-1.5-flash-latest", temperature: float = 1, max_tokens: int = 200, functions: dict = None, system_message_content: str = None, history_count: int = 10, history_timeout: float = 60, use_vision: bool = True):
-        super().__init__(api_key=api_key, model=model, temperature=temperature, max_tokens=max_tokens, functions=functions, system_message_content=system_message_content, history_count=history_count, history_timeout=history_timeout)
-        self.use_vision = use_vision
-        self.is_vision_required_func = genai.types.FunctionDeclaration(
-            name="is_vision_required",
-            description="Determine whether the vision input is required to process the user input.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "is_required": {"type": "boolean"}
-                },
-                "required": ["is_required"]
-            }
-        )
-
-    @abstractmethod
-    async def get_image(self) -> bytes:
-        pass
-
-    async def build_messages(self, text):
-        messages = await super().build_messages(text)
-        if not self.use_vision:
-            return messages
-
-        if len(self.histories) > 1:
-            last_user_message = self.histories[-2:-1][0]
-            for i in range(len(last_user_message["parts"]) - 1, -1, -1):
-                # Remove image from last request
-                part = last_user_message["parts"][i]
-                if isinstance(part, dict) and part.get("mime_type"):
-                    del last_user_message["parts"][i]
-
-        try:
-            # Determine whether the vision input is required to process the user input
-            resp = await self.client.generate_content_async(
-                messages[:-1] + [{
-                    "role": "user",
-                    "parts": [{
-                        "text": f"以下はユーザーからの入力内容です。このメッセージを処理するために新たな画像の入力が必要か判断してください。\n\n入力: {text}"
-                    }]
-                }],
-                generation_config={"temperature": 0.0},
-                tools=[self.is_vision_required_func],
-                tool_config=glm.ToolConfig(function_calling_config=glm.FunctionCallingConfig(mode=glm.FunctionCallingConfig.Mode.ANY)),
-                stream=False
-            )
-
-            for part in resp.candidates[0].content.parts:
-                if part.function_call:
-                    if dict(part.function_call.args)["is_required"] is True:
-                        self.logger.info("Vision input is required")
-                        image_bytes = await self.get_image()
-                        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-                        messages[-1]["parts"].append({"mime_type": "image/png", "data": image_b64})
-
-        except Exception as ex:
-            self.logger.error(f"Error at build_messages: {str(ex)}\n{traceback.format_exc()}")
-
-        return messages
