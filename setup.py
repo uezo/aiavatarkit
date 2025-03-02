@@ -12,7 +12,7 @@ setup(
     # long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     packages=find_packages(exclude=["examples*", "tests*"]),
-    install_requires=["litests>=0.3.1", "numpy>=2.2.3", "oPyAudio>=0.2.14"],
+    install_requires=["litests>=0.3.1", "numpy>=2.2.3", "PyAudio>=0.2.14"],
     license="Apache v2",
     classifiers=[
         "Programming Language :: Python :: 3"
