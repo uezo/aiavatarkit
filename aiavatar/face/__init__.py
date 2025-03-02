@@ -19,10 +19,10 @@ class FaceController(ABC):
 
 
 class FaceControllerBase(FaceController):
-    def __init__(self, verbose: bool=False):
+    def __init__(self, debug: bool=False):
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
-        self.verbose = verbose
+        self.debug = debug
 
         self.faces = {
             "neutral": "('_')",
@@ -48,7 +48,7 @@ class FaceControllerBase(FaceController):
     def reset_worker(self):
         while True:
             if self.reset_at and time() >= self.reset_at:
-                if self.verbose:
+                if self.debug:
                     self.logger.info(f"Time to reset: {self.reset_at}")
                 self.reset()
                 self.reset_at = None
@@ -57,7 +57,7 @@ class FaceControllerBase(FaceController):
 
     def subscribe_reset(self, reset_at: float):
         self.reset_at = reset_at
-        if self.verbose:
+        if self.debug:
             self.logger.info(f"Reset subscribed at {self.reset_at}")
 
     async def set_face(self, name: str, duration: float):

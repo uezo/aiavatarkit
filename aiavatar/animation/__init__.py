@@ -15,10 +15,10 @@ class AnimationController(ABC):
 
 
 class AnimationControllerBase(AnimationController):
-    def __init__(self, animations: dict=None, idling_key: str="idling", verbose: bool=False):
+    def __init__(self, animations: dict=None, idling_key: str="idling", debug: bool=False):
         self.logger = getLogger(__name__)
         self.logger.addHandler(NullHandler())
-        self.verbose = verbose
+        self.debug = debug
 
         self.animations = animations or {
             idling_key: 0,
@@ -45,7 +45,7 @@ class AnimationControllerBase(AnimationController):
     def reset_worker(self):
         while True:
             if self.reset_at and time() >= self.reset_at:
-                if self.verbose:
+                if self.debug:
                     self.logger.info(f"Time to reset: {self.reset_at}")
                 self.reset()
                 self.reset_at = None
@@ -54,7 +54,7 @@ class AnimationControllerBase(AnimationController):
 
     def subscribe_reset(self, reset_at: float):
         self.reset_at = reset_at
-        if self.verbose:
+        if self.debug:
             self.logger.info(f"Reset subscribed at {self.reset_at}")
 
     async def animate(self, name: str, duration: float):

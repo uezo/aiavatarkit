@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="aiavatar",
-    version="0.5.8",
+    version="0.6.0",
     url="https://github.com/uezo/aiavatar",
     author="uezo",
     author_email="uezo@uezo.net",
@@ -12,7 +12,7 @@ setup(
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     packages=find_packages(exclude=["examples*", "tests*"]),
-    install_requires=["aiohttp==3.9.3", "numpy==1.24.3", "openai==1.12.0", "sounddevice==0.4.6"],
+    install_requires=["litests>=0.3.1", "numpy>=2.2.3", "oPyAudio>=0.2.14"],
     license="Apache v2",
     classifiers=[
         "Programming Language :: Python :: 3"
