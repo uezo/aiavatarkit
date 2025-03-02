@@ -1,1 +1,1 @@
-from .audio import AudioDevice
+from .audio import AudioDevice, NoiseLevelDetector

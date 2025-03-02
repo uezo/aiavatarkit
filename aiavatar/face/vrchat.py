@@ -4,8 +4,8 @@ from pythonosc import udp_client
 from . import FaceControllerBase
 
 class VRChatFaceController(FaceControllerBase):
-    def __init__(self, osc_address: str="/avatar/parameters/FaceOSC", faces: dict=None, neutral_key: str="neutral", host: str="127.0.0.1", port: int=9000, verbose: bool=False):
-        super().__init__(verbose)
+    def __init__(self, osc_address: str="/avatar/parameters/FaceOSC", faces: dict=None, neutral_key: str="neutral", host: str="127.0.0.1", port: int=9000, debug: bool=False):
+        super().__init__(debug)
 
         self.osc_address = osc_address
         self.faces = faces or {

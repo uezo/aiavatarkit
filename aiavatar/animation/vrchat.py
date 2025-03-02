@@ -5,8 +5,8 @@ from . import AnimationControllerBase
 
 
 class VRChatAnimationController(AnimationControllerBase):
-    def __init__(self, osc_address: str="/avatar/parameters/VRCEmote", animations: dict=None, idling_key: str="idling", host: str="127.0.0.1", port: int=9000, verbose: bool=False):
-        super().__init__(animations=animations, idling_key=idling_key, verbose=verbose)
+    def __init__(self, osc_address: str="/avatar/parameters/VRCEmote", animations: dict=None, idling_key: str="idling", host: str="127.0.0.1", port: int=9000, debug: bool=False):
+        super().__init__(animations=animations, idling_key=idling_key, debug=debug)
 
         self.osc_address = osc_address
         self.host = host
