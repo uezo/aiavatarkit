@@ -9,7 +9,7 @@ setup(
     maintainer="uezo",
     maintainer_email="uezo@uezo.net",
     description="🥰 Building AI-based conversational avatars lightning fast ⚡️💬",
-    long_description=open("README.md").read(),
+    # long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     packages=find_packages(exclude=["examples*", "tests*"]),
     install_requires=["litests>=0.3.1", "numpy>=2.2.3", "oPyAudio>=0.2.14"],
