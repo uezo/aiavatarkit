@@ -7,6 +7,7 @@ from litests import LiteSTS
 from litests.models import STSRequest, STSResponse
 from litests.vad import SpeechDetector
 from litests.stt import SpeechRecognizer
+from litests.stt.openai import OpenAISpeechRecognizer
 from litests.llm import LLMService
 from litests.tts import SpeechSynthesizer
 from litests.performance_recorder import PerformanceRecorder
@@ -30,22 +31,21 @@ class AIAvatar:
         animation_controller: AnimationController = None,
         face_controller: FaceController = None,
         context_timeout: int = 3600,
-        # STS Pipeline parameters
+        # STS Pipeline components
         vad: SpeechDetector = None,
-        vad_volume_db_threshold: float = -50.0,
-        vad_silence_duration_threshold: float = 0.5,
-        vad_sample_rate: int = 16000,
         stt: SpeechRecognizer = None,
-        stt_google_api_key: str = None,
-        stt_sample_rate: int = 16000,
         llm: LLMService = None,
-        llm_openai_api_key: str = None,
-        llm_base_url: str = None,
-        llm_model: str = "gpt-4o-mini",
-        llm_system_prompt: str = None,
         tts: SpeechSynthesizer = None,
-        tts_voicevox_url: str = "http://127.0.0.1:50021",
-        tts_voicevox_speaker: int = 46,
+        # STS Pipeline params for default components
+        volume_db_threshold: float = -50.0,
+        silence_duration_threshold: float = 0.5,
+        input_sample_rate: int = 16000,
+        openai_api_key: str = None,
+        openai_base_url: str = None,
+        openai_model: str = "gpt-4o-mini",
+        system_prompt: str = None,
+        voicevox_url: str = "http://127.0.0.1:50021",
+        voicevox_speaker: int = 46,
         performance_recorder: PerformanceRecorder = None,
         # Noise filter
         auto_noise_filter_threshold: bool = True,
@@ -62,20 +62,21 @@ class AIAvatar:
         # Speech-to-Speech pipeline
         self.sts = sts_pipeline or LiteSTS(
             vad=vad,
-            vad_volume_db_threshold=vad_volume_db_threshold,
-            vad_silence_duration_threshold=vad_silence_duration_threshold,
-            vad_sample_rate=vad_sample_rate,
-            stt=stt,
-            stt_google_api_key=stt_google_api_key,
-            stt_sample_rate=stt_sample_rate,
+            vad_volume_db_threshold=volume_db_threshold,
+            vad_silence_duration_threshold=silence_duration_threshold,
+            vad_sample_rate=input_sample_rate,
+            stt=stt or OpenAISpeechRecognizer(
+                openai_api_key=openai_api_key,
+                sample_rate=input_sample_rate
+            ),
             llm=llm,
-            llm_openai_api_key=llm_openai_api_key,
-            llm_base_url=llm_base_url,
-            llm_model=llm_model,
-            llm_system_prompt=llm_system_prompt,
+            llm_openai_api_key=openai_api_key,
+            llm_base_url=openai_base_url,
+            llm_model=openai_model,
+            llm_system_prompt=system_prompt,
             tts=tts,
-            tts_voicevox_url=tts_voicevox_url,
-            tts_voicevox_speaker=tts_voicevox_speaker,
+            tts_voicevox_url=voicevox_url,
+            tts_voicevox_speaker=voicevox_speaker,
             performance_recorder=performance_recorder,
             debug=debug
         )
@@ -126,7 +127,7 @@ class AIAvatar:
             return text
 
         for ww in self.wakewords:
-            if text in ww:
+            if ww in text:
                 logger.info(f"Wake by '{ww}': {text}")
                 self.last_request_at = now
                 return text
