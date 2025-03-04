@@ -7,7 +7,7 @@ import threading
 from typing import AsyncGenerator, Dict
 import wave
 import pyaudio
-from litests.models import STSResponse
+from litests.models import STSRequest, STSResponse
 from litests.pipeline import LiteSTS
 from litests.adapter import Adapter
 from .face import FaceController
@@ -71,6 +71,13 @@ class AIAvatarAdapter(Adapter):
         self.response_handler_thread = threading.Thread(target=self.avatar_control_worker, daemon=True)
         self.response_handler_thread.start()
 
+        # Image processing
+        self._get_image_url = self.get_image_url_default
+
+    def get_image_url(self, func):
+        self._get_image_url = func
+        return func
+
     # Request
     async def start_listening(self, session_id: str):
         async def start_microphone_stream() -> AsyncGenerator[bytes, None]:
@@ -85,7 +92,7 @@ class AIAvatarAdapter(Adapter):
             )
             self.is_listening = True
             while self.is_listening:
-                yield pyaudio_stream.read(self.input_chunk_size)
+                yield pyaudio_stream.read(self.input_chunk_size, exception_on_overflow=False)
                 await asyncio.sleep(0.0001)
 
         try:
@@ -169,9 +176,20 @@ class AIAvatarAdapter(Adapter):
                 self.is_playing_locally = False
                 self.response_queue.task_done()
 
+    async def get_image_url_default(self, image_source: str) -> str:
+        return None
+
     async def handle_response(self, response: STSResponse):
         if response.type == "chunk":
             self.response_queue.put(response)
+        elif response.type == "final":
+            if image_source_match := re.search(r"\[vision:(\w+)\]", response.text):
+                image_url = await self._get_image_url(image_source_match.group(1))
+                if image_url:
+                    async for image_response in self.sts.invoke(STSRequest(
+                        context_id=response.context_id, files=[{"type": "image", "url": image_url}]
+                    )):
+                        await self.sts.handle_response(image_response)
 
     async def stop_response(self, context_id: str):
         while not self.response_queue.empty():
