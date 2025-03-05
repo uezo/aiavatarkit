@@ -112,7 +112,8 @@ class AIAvatar:
             animation_controller=animation_controller or AnimationControllerDummy(),
             input_device_index=self.audio_devices.input_device,
             output_device_index=self.audio_devices.output_device,
-            cancel_echo=cancel_echo
+            cancel_echo=cancel_echo,
+            debug=debug
         )
 
     def wakeword_request_filter(self, text: str):
@@ -138,18 +139,29 @@ class AIAvatar:
         return False
 
     def get_context_id(self):
-        if not self.current_context_id or self.context_timeout > time() - self.last_request_at:
+        if not self.current_context_id or time() - self.last_request_at > self.context_timeout:
             self.current_context_id = str(uuid4())
             logger.info(f"New context: {self.current_context_id}")
         return self.current_context_id
 
-    async def chat(self, text: str):
+    async def chat(self, text: str = None, audio_data: bytes = None, files: dict = None, wait_performance: bool = False) -> STSResponse:
         try:
-            request = STSRequest(context_id=self.get_context_id(), text=text)
+            request = STSRequest(context_id=self.get_context_id(), text=text, audio_data=audio_data, files=files)
+            audio_data = b""
             async for response in self.sts.invoke(request):
+                if response.audio_data:
+                    audio_data += response.audio_data
                 await self.sts.handle_response(response)
                 if response.type == "final":
-                    await self.on_turn_end(request, response)
+                    response.audio_data = audio_data
+                    if wait_performance:
+                        wait_start = time()
+                        while not self.adapter.response_queue.empty():
+                            if time() - wait_start >= 60:  # break in one minute
+                                logger.warning(f"Response performance timeout: {response.context_id}")
+                                break
+                            await asyncio.sleep(0.05)
+                    return response
 
         except Exception as ex:
             logger.error(f"Error at chatting loop: {str(ex)}\n{traceback.format_exc()}")

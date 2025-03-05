@@ -37,7 +37,8 @@ class AIAvatarAdapter(Adapter):
         input_chunk_size: int = 512,
         output_device_index: int = None,
         output_chunk_size: int = 1024,
-        cancel_echo: bool = True
+        cancel_echo: bool = True,
+        debug: bool = False
     ):
         super().__init__(sts)
 
@@ -73,6 +74,10 @@ class AIAvatarAdapter(Adapter):
 
         # Image processing
         self._get_image_url = self.get_image_url_default
+
+        # Debug
+        self.debug = debug
+        self.last_response = None
 
     def get_image_url(self, func):
         self._get_image_url = func
@@ -186,10 +191,14 @@ class AIAvatarAdapter(Adapter):
             if image_source_match := re.search(r"\[vision:(\w+)\]", response.text):
                 image_url = await self._get_image_url(image_source_match.group(1))
                 if image_url:
+                    response.type = "vision"    # Overwrite response type
                     async for image_response in self.sts.invoke(STSRequest(
                         context_id=response.context_id, files=[{"type": "image", "url": image_url}]
                     )):
                         await self.sts.handle_response(image_response)
+
+        if self.debug and response.type == "final":
+            self.last_response = response
 
     async def stop_response(self, context_id: str):
         while not self.response_queue.empty():
