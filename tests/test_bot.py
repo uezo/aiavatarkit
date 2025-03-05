@@ -1,126 +1,224 @@
+import pytest
+import asyncio
+import base64
+import io
+import os
+import httpx
+import pyautogui
 from aiavatar import AIAvatar
-from aiavatar.animation import AnimationController, AnimationControllerDummy
-from aiavatar.face import FaceController, FaceControllerDummy
-from aiavatar.listeners import RequestListenerBase, WakewordListenerBase
-from aiavatar.processors import ChatProcessor
-from aiavatar.speech import SpeechController
-from aiavatar.speech.voicevox import VoicevoxSpeechController
+from aiavatar.animation import AnimationControllerDummy
+from aiavatar.face import FaceControllerDummy
 
-def test_init():
-    app = AIAvatar(
-        openai_api_key="OPENAI_API_KEY",
-        google_api_key="GOOGLE_API_KEY"
-    )
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-    # Audio device
-    assert app.audio_devices.input_device_info["max_input_channels"] > 0
-    assert app.audio_devices.output_device_info["max_output_channels"] > 0
+SYSTEM_PROMPT = """## 表情
 
-    # Chat processor
-    assert app.chat_processor.api_key == "OPENAI_API_KEY"
-    assert app.chat_processor.model == "gpt-3.5-turbo"
+あなたは以下の表情を持っています。
+
+- neutral
+- joy
+- angry
+- sorrow
+- fun
+
+特に表情を表現したい場合は、文章の先頭に[face:joy]のように挿入してください。
+一覧以外の表情は絶対に表現してはいけません。
+
+例
+```
+[face:fun]ねえ、海が見えるよ！[face:joy]早く泳ごうよ。
+```
+
+
+## 身振り手振り
+
+あなたは以下の身振り手振りをすることができます。
+
+- joy_hands_up
+- angry_hands_on_waist
+- sorrow_heads_down
+- fun_waving_arm
+
+特に感情を身振り手振りで表現したい場合は、文章に[animation:joy_hands_up]のように挿入してください。
+一覧以外の身振り手振りは絶対に表現してはいけません。
+
+例
+[animation:joy_hands_up]おーい、こっちだよ！
+
+
+## 視覚情報
+
+ユーザーとの会話に応答するために視覚情報（画像）が必要な場合は、[vision:camera]のようなタグを応答に含めてください。
+画像取得のソースは以下のとおりです。
+
+- screenshot: ユーザーのPC画面を見ることができます
+- camera: カメラを通じて現実世界を見ることができます
+
+
+## 話し方
+
+応答内容は読み上げられます。可能な限り1文で、40文字以内を目処に簡潔に応答してください。
+"""
+
+
+class FaceControllerForTest(FaceControllerDummy):
+    def __init__(self, debug = False):
+        super().__init__(debug)
+        self.histories = []
     
-    # Request Listener
-    assert app.request_listener.api_key == "GOOGLE_API_KEY"
-    assert app.request_listener.volume_threshold > -80
-    assert app.request_listener.volume_threshold < -30
-    assert app.request_listener.device_index == app.audio_devices.input_device
-    assert app.request_listener.lang == "ja-JP"
-    assert app.request_listener.rate == 16000
+    async def set_face(self, name, duration):
+        await super().set_face(name, duration)
+        self.histories.append(name)
 
-    # Wakeword Listener
-    assert app.wakeword_listener.api_key == "GOOGLE_API_KEY"
-    assert app.wakeword_listener.wakewords == ["こんにちは"]
-    assert app.wakeword_listener.volume_threshold > -80
-    assert app.wakeword_listener.volume_threshold < -30
-    assert app.wakeword_listener.device_index == app.audio_devices.input_device
-    assert app.wakeword_listener.lang == "ja-JP"
-    assert app.wakeword_listener.on_wakeword is not None
-    assert app.wakeword_listener.rate == 16000
 
-    # Avatar Controller with Speech, Animation and Face
-    assert app.avatar_controller is not None
-    speech_controller: VoicevoxSpeechController = app.avatar_controller.speech_controller
-    assert speech_controller.base_url == "http://127.0.0.1:50021"
-    assert speech_controller.speaker_id == 46
-    assert speech_controller.device_index == app.audio_devices.output_device
-    assert isinstance(app.avatar_controller.animation_controller, AnimationControllerDummy) is True
-    assert isinstance(app.avatar_controller.face_controller, FaceControllerDummy) is True
+class AnimationControllerTest(AnimationControllerDummy):
+    def __init__(self, animations = None, idling_key = "idling", debug = False):
+        super().__init__(animations, idling_key, debug)
+        self.animations["joy_hands_up"] = 1
+        self.animations["angry_hands_on_waist"] = 2
+        self.animations["sorrow_heads_down"] = 3
+        self.animations["fun_waving_arm"] = 4
+        self.histories = []
 
-    # Chat
-    assert app.start_voice is None
-    assert app.split_chars == ["。", "、", "？", "！", ".", ",", "?", "!"]
-    assert app.on_turn_end == app.on_turn_end_default
+    async def animate(self, name, duration):
+        await super().animate(name, duration)
+        self.histories.append(name)
 
-def test_init_with_args():
+
+@pytest.fixture
+def aiavatar_app():
     app = AIAvatar(
-        openai_api_key="OPENAI_API_KEY",
-        google_api_key="GOOGLE_API_KEY",
-        model="gpt-4-turbo",
-        system_message_content="You are a cat.",
-        input_sample_rate=48000,
-        output_sample_rate=44100,
-        voicevox_speaker_id=2,
-        wakewords=["もしもし", "はろー"],
-        start_voice="どうしたの",
-        split_chars=["-", "_"],
-        language="en-US",
-        verbose=True
+        openai_api_key=OPENAI_API_KEY,
+        openai_model="gpt-4o",
+        system_prompt=SYSTEM_PROMPT,
+        debug=True
     )
+    app.adapter.face_controller = FaceControllerForTest()
+    app.adapter.animation_controller = AnimationControllerTest()
+    return app
 
-    assert app.chat_processor.model == "gpt-4-turbo"
-    assert app.chat_processor.system_message_content == "You are a cat."
-    assert app.request_listener.rate == 48000
-    assert app.request_listener.lang == "en-US"
-    assert app.wakeword_listener.wakewords == ["もしもし", "はろー"]
-    assert app.wakeword_listener.rate == 48000
-    assert app.wakeword_listener.lang == "en-US"
-    assert app.wakeword_listener.verbose is True
-    assert app.avatar_controller.speech_controller.rate == 44100
-    assert app.avatar_controller.speech_controller.speaker_id == 2
-    assert app.avatar_controller.animation_controller.verbose is True
-    assert app.avatar_controller.face_controller.verbose is True
-    assert app.start_voice == "どうしたの"
-    assert app.split_chars == ["-", "_"]
 
-def test_init_with_components():
-    class MyChatProcessor(ChatProcessor):
-        async def chat(self, text: str): ...
-
-    class MyRequestListener(RequestListenerBase):
-        async def get_request(self): ...
-
-    class MyWakewordListener(WakewordListenerBase):
-        async def start(self): ...
-        async def stop(self): ...
-
-    class MySpeechController(SpeechController):
-        def prefetch(self, text: str): ...
-        async def speak(self, text: str): ...
-        def is_speaking(self) -> bool: ...
-        def clear_cache(self): ...
-
-    class MyAnimationController(AnimationController):
-        async def animate(self, name: str, duration: float): ...
-        def current_animation(self): ...
-
-    class MyFaceController(FaceController):
-        async def set_face(self, name: str, duration: float): ...
-        def reset(self): ...
-        def current_face(self): ...
-
-    app = AIAvatar(
-        chat_processor=MyChatProcessor(),
-        request_listener=MyRequestListener(),
-        wakeword_listener=MyWakewordListener(),
-        speech_controller=MySpeechController(),
-        animation_controller=MyAnimationController(),
-        face_controller=MyFaceController()
+def transcribe(data: bytes, audio_format: str = "wav") -> str:
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+    form_data = {"model": "whisper-1"}
+    files = {"file": (f"voice.{audio_format}", data, f"audio/{audio_format}")}
+    resp = httpx.post(
+        "https://api.openai.com/v1/audio/transcriptions",
+        headers=headers,
+        data=form_data,
+        files=files
     )
+    return resp.json().get("text")
 
-    assert isinstance(app.chat_processor, MyChatProcessor) is True
-    assert isinstance(app.request_listener, MyRequestListener) is True
-    assert isinstance(app.wakeword_listener, MyWakewordListener) is True
-    assert isinstance(app.avatar_controller.speech_controller, MySpeechController) is True
-    assert isinstance(app.avatar_controller.animation_controller, MyAnimationController) is True
-    assert isinstance(app.avatar_controller.face_controller, MyFaceController) is True
+
+@pytest.mark.asyncio
+async def test_chat(aiavatar_app: AIAvatar):
+    await aiavatar_app.chat("こんにちは。", wait_performance=True)
+    assert "こんにちは" in aiavatar_app.adapter.last_response.text
+    trans_text = transcribe(aiavatar_app.adapter.last_response.audio_data)
+    assert "こんにちは" in trans_text or "こんにちわ" in trans_text
+
+    # Context
+    await aiavatar_app.chat("旅行で悩んでいます。東京、京都、福岡のいずれかに。", wait_performance=True)
+    context_id = aiavatar_app.adapter.last_response.context_id
+    await aiavatar_app.chat("おすすめは？", wait_performance=True)
+    assert aiavatar_app.adapter.last_response.context_id == context_id
+    response_text = aiavatar_app.adapter.last_response.text
+    assert "東京" in response_text or "京都" in response_text or "福岡" in response_text
+    trans_text = transcribe(aiavatar_app.adapter.last_response.audio_data)
+    assert "東京" in trans_text or "京都" in trans_text or "福岡" in trans_text
+
+
+@pytest.mark.asyncio
+async def test_chat_face_animation(aiavatar_app: AIAvatar):
+    await aiavatar_app.chat("表情と身振り手振りで喜怒哀楽を表現してください", wait_performance=True)
+
+    face_histories = aiavatar_app.adapter.face_controller.histories
+    assert face_histories[0] == "joy"
+    assert face_histories[1] == "angry"
+    assert face_histories[2] == "sorrow"
+    assert face_histories[3] == "fun"
+
+    animation_histories = aiavatar_app.adapter.animation_controller.histories
+    assert animation_histories[0] == "joy_hands_up"
+    assert animation_histories[1] == "angry_hands_on_waist"
+    assert animation_histories[2] == "sorrow_heads_down"
+    assert animation_histories[3] == "fun_waving_arm"
+
+
+@pytest.mark.asyncio
+async def test_chat_wakeword(aiavatar_app: AIAvatar):
+    aiavatar_app.wakewords = ["こんにちは"]
+    aiavatar_app.wakeword_timeout = 10
+
+    # Not triggered chat
+    await aiavatar_app.chat("やあ", wait_performance=True)
+    assert aiavatar_app.adapter.last_response.type == "final"
+    assert aiavatar_app.adapter.last_response.text == ""
+    assert aiavatar_app.adapter.last_response.voice_text == ""
+    assert aiavatar_app.adapter.last_response.audio_data == b""
+
+    # Start chat
+    await aiavatar_app.chat("こんにちは、元気？", wait_performance=True)
+    assert "こんにちは" in aiavatar_app.adapter.last_response.text
+    # Continue chat not by wakeword
+    await aiavatar_app.chat("寿司とラーメンどっちが好き？", wait_performance=True)
+    response_text = aiavatar_app.adapter.last_response.text
+    assert "寿司" in response_text or "ラーメン" in response_text
+
+    # Wait for wakeword timeout
+    await asyncio.sleep(10)
+
+    # Not triggered chat
+    await aiavatar_app.chat("そうなんだ", wait_performance=True)
+    assert aiavatar_app.adapter.last_response.type == "final"
+    assert aiavatar_app.adapter.last_response.text == ""
+    assert aiavatar_app.adapter.last_response.voice_text == ""
+    assert aiavatar_app.adapter.last_response.audio_data == b""
+
+
+@pytest.mark.asyncio
+async def test_chat_vision(aiavatar_app: AIAvatar):
+    @aiavatar_app.adapter.get_image_url
+    async def get_image_url(source: str) -> str:
+        image_bytes = None
+
+        if source == "screenshot":
+            # Capture screenshot
+            buffered = io.BytesIO()
+            image = pyautogui.screenshot(region=(0, 0, 1280, 720))
+            image.save(buffered, format="PNG")
+            image_bytes = buffered.getvalue()
+
+        if image_bytes:
+            # Upload and get url, or, make base64 encoded url
+            b64_encoded = base64.b64encode(image_bytes).decode('utf-8')
+            b64_url = f"data:image/jpeg;base64,{b64_encoded}"
+            return b64_url
+
+    await aiavatar_app.chat("画面を見て。今見えているアプリケーションは何かな？", wait_performance=True)
+    assert "visual" in aiavatar_app.adapter.last_response.text.lower()  # Run test on Visual Studio Code
+
+
+@pytest.mark.asyncio
+async def test_chat_function(aiavatar_app: AIAvatar):
+    # Register tool
+    weather_tool_spec = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+            },
+        }
+    }
+    @aiavatar_app.sts.llm.tool(weather_tool_spec)
+    async def get_weather(location: str = None):
+        return {"weather": "clear", "temperature": 23.4}
+
+    await aiavatar_app.chat("東京の天気を教えて。", wait_performance=True)
+    assert "晴" in aiavatar_app.adapter.last_response.text
+    assert "23.4" in aiavatar_app.adapter.last_response.text
