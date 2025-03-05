@@ -1,21 +1,20 @@
 import asyncio
 from logging import getLogger, NullHandler
+from time import time
 import traceback
-# Device
-from .device import AudioDevice
-# Processor
-from .processors import ChatProcessor
-from .processors.chatgpt import ChatGPTProcessor
-# Listener
-from .listeners import NoiseLevelDetector
-from .listeners.voicerequest import VoiceRequestListener, RequestListenerBase
-from .listeners.wakeword import WakewordListener, WakewordListenerBase
-# Avatar
-from .speech import SpeechController
-from .speech.voicevox import VoicevoxSpeechController
-from .animation import AnimationController, AnimationControllerDummy
+from uuid import uuid4
+from litests import LiteSTS
+from litests.models import STSRequest, STSResponse
+from litests.vad import SpeechDetector
+from litests.stt import SpeechRecognizer
+from litests.stt.openai import OpenAISpeechRecognizer
+from litests.llm import LLMService
+from litests.tts import SpeechSynthesizer
+from litests.performance_recorder import PerformanceRecorder
+from .adapter import AIAvatarAdapter
+from .device import AudioDevice, NoiseLevelDetector
 from .face import FaceController, FaceControllerDummy
-from .avatar import AvatarController
+from .animation import AnimationController, AnimationControllerDummy
 
 logger = getLogger(__name__)
 logger.addHandler(NullHandler())
@@ -25,31 +24,76 @@ class AIAvatar:
     def __init__(
         self,
         *,
-        openai_api_key: str=None,
-        google_api_key: str=None,
-        model: str=None,
-        system_message_content: str=None,
-        voicevox_speaker_id: int=46,
-        input_device: int=-1,
-        input_sample_rate: int=None,
-        output_device: int=-1,
-        output_sample_rate: int=None,
-        audio_devices: AudioDevice=None,
-        chat_processor: ChatProcessor=None,
-        request_listener: RequestListenerBase=None,
-        wakeword_listener: WakewordListenerBase=None,
-        auto_noise_filter_threshold: bool=True,
-        noise_margin: float=20.0,
-        volume_threshold_db: float=-50,
-        speech_controller: SpeechController=None,
-        animation_controller: AnimationController=None,
-        face_controller: FaceController=None,
-        wakewords: list=None,
-        start_voice: str=None,
-        split_chars: list=None,
-        language: str="ja-JP",
-        verbose: bool=False
+        sts_pipeline: LiteSTS = None,
+        input_device: int = -1,
+        output_device: int = -1,
+        audio_devices: AudioDevice = None,
+        animation_controller: AnimationController = None,
+        face_controller: FaceController = None,
+        context_timeout: int = 3600,
+        # STS Pipeline components
+        vad: SpeechDetector = None,
+        stt: SpeechRecognizer = None,
+        llm: LLMService = None,
+        tts: SpeechSynthesizer = None,
+        # STS Pipeline params for default components
+        volume_db_threshold: float = -50.0,
+        silence_duration_threshold: float = 0.5,
+        input_sample_rate: int = 16000,
+        openai_api_key: str = None,
+        openai_base_url: str = None,
+        openai_model: str = "gpt-4o-mini",
+        system_prompt: str = None,
+        voicevox_url: str = "http://127.0.0.1:50021",
+        voicevox_speaker: int = 46,
+        performance_recorder: PerformanceRecorder = None,
+        # Noise filter
+        auto_noise_filter_threshold: bool = True,
+        noise_margin: float = 20.0,
+        # Adapter
+        adapter: AIAvatarAdapter = None,
+        cancel_echo: bool = True,
+        # Wakeword listener
+        wakewords: list = None,
+        wakeword_timeout: float = 60.0,
+        # Debug
+        debug: bool = False
     ):
+        # Speech-to-Speech pipeline
+        self.sts = sts_pipeline or LiteSTS(
+            vad=vad,
+            vad_volume_db_threshold=volume_db_threshold,
+            vad_silence_duration_threshold=silence_duration_threshold,
+            vad_sample_rate=input_sample_rate,
+            stt=stt or OpenAISpeechRecognizer(
+                openai_api_key=openai_api_key,
+                sample_rate=input_sample_rate
+            ),
+            llm=llm,
+            llm_openai_api_key=openai_api_key,
+            llm_base_url=openai_base_url,
+            llm_model=openai_model,
+            llm_system_prompt=system_prompt,
+            tts=tts,
+            tts_voicevox_url=voicevox_url,
+            tts_voicevox_speaker=voicevox_speaker,
+            performance_recorder=performance_recorder,
+            debug=debug
+        )
+
+        # Chat
+        self.on_turn_end = self.on_turn_end_default
+        self.context_timeout = context_timeout
+        self.last_request_at = 0
+        self.current_context_id = None
+
+        # Wakewords
+        self.wakewords = wakewords
+        self.wakeword_timeout = wakeword_timeout
+        @self.sts.llm.request_filter
+        def filter_request(text: str):
+            return self.wakeword_request_filter(text)
+
         # Audio Devices
         if audio_devices:
             self.audio_devices = audio_devices
@@ -58,151 +102,89 @@ class AIAvatar:
         logger.info(f"Input device: [{self.audio_devices.input_device}] {self.audio_devices.input_device_info['name']}")
         logger.info(f"Output device: [{self.audio_devices.output_device}] {self.audio_devices.output_device_info['name']}")
 
-        # Chat Processor
-        if chat_processor:
-            self.chat_processor = chat_processor
-        else:
-            self.chat_processor = ChatGPTProcessor(
-                api_key=openai_api_key,
-                model=model or "gpt-3.5-turbo",
-                system_message_content=system_message_content
-            )
+        self.auto_noise_filter_threshold = auto_noise_filter_threshold
+        self.noise_margin = noise_margin
 
-        if auto_noise_filter_threshold:
+        # Adapter
+        self.adapter = adapter or AIAvatarAdapter(
+            sts=self.sts,
+            face_controller=face_controller or FaceControllerDummy(),
+            animation_controller=animation_controller or AnimationControllerDummy(),
+            input_device_index=self.audio_devices.input_device,
+            output_device_index=self.audio_devices.output_device,
+            cancel_echo=cancel_echo,
+            debug=debug
+        )
+
+    def wakeword_request_filter(self, text: str):
+        now = time()
+
+        if not self.wakewords:
+            self.last_request_at = now
+            return text
+
+        if self.wakeword_timeout > now - self.last_request_at:
+            self.last_request_at = now
+            return text
+
+        for ww in self.wakewords:
+            if ww in text:
+                logger.info(f"Wake by '{ww}': {text}")
+                self.last_request_at = now
+                return text
+
+        return None
+
+    async def on_turn_end_default(self, request: STSRequest, response: STSResponse) -> bool:
+        return False
+
+    def get_context_id(self):
+        if not self.current_context_id or time() - self.last_request_at > self.context_timeout:
+            self.current_context_id = str(uuid4())
+            logger.info(f"New context: {self.current_context_id}")
+        return self.current_context_id
+
+    async def chat(self, text: str = None, audio_data: bytes = None, files: dict = None, wait_performance: bool = False) -> STSResponse:
+        try:
+            request = STSRequest(context_id=self.get_context_id(), text=text, audio_data=audio_data, files=files)
+            audio_data = b""
+            async for response in self.sts.invoke(request):
+                if response.audio_data:
+                    audio_data += response.audio_data
+                await self.sts.handle_response(response)
+                if response.type == "final":
+                    response.audio_data = audio_data
+                    if wait_performance:
+                        wait_start = time()
+                        while not self.adapter.response_queue.empty():
+                            if time() - wait_start >= 60:  # break in one minute
+                                logger.warning(f"Response performance timeout: {response.context_id}")
+                                break
+                            await asyncio.sleep(0.05)
+                    return response
+
+        except Exception as ex:
+            logger.error(f"Error at chatting loop: {str(ex)}\n{traceback.format_exc()}")
+
+    def stop_chat(self):
+        asyncio.run(self.sts.stop_response())
+
+    async def start_listening(self):
+        if self.auto_noise_filter_threshold:
             noise_level_detector = NoiseLevelDetector(
-                rate=input_sample_rate or 16000,
-                channels=1,
+                rate=self.adapter.input_sample_rate,
+                channels=self.adapter.input_channels,
                 device_index=self.audio_devices.input_device
             )
             noise_level = noise_level_detector.get_noise_level()
-            volume_threshold_db = int(noise_level) + noise_margin
+            volume_threshold_db = int(noise_level) + self.noise_margin
 
-        logger.info(f"Set volume threshold: {volume_threshold_db}dB")
-
-        # Request Listener
-        if request_listener:
-            self.request_listener = request_listener
+            logger.info(f"Set volume threshold: {volume_threshold_db}dB")
+            self.sts.volume_db_threshold = volume_threshold_db
         else:
-            self.request_listener = VoiceRequestListener(
-                google_api_key,
-                volume_threshold=volume_threshold_db,
-                device_index=self.audio_devices.input_device,
-                lang=language
-            )
-            if input_sample_rate is not None:
-                self.request_listener.rate = input_sample_rate
-        
-        # Wakeword Listener
-        if wakeword_listener:
-            self.wakeword_listener = wakeword_listener
-        else:
-            async def _on_wakeword(text):
-                await self.start_chat(request_on_start=text, skip_start_voice=start_voice is None)
+            logger.info(f"Set volume threshold: {self.sts.vad.volume_db_threshold}dB")
 
-            self.wakeword_listener = WakewordListener(
-                api_key=google_api_key,
-                wakewords=wakewords or ["こんにちは" if language == "ja-JP" else "Hello"],
-                on_wakeword=_on_wakeword,
-                volume_threshold=volume_threshold_db,
-                device_index=self.audio_devices.input_device,
-                lang=language,
-                verbose=verbose
-            )
-            if input_sample_rate is not None:
-                self.wakeword_listener.rate = input_sample_rate
+        await self.adapter.start_listening(self.get_context_id())
 
-        self.wakeword_listener_thread = None
-
-        # Avatar Controller with Speech, Animation and Face
-        self.avatar_controller = AvatarController(
-            speech_controller or VoicevoxSpeechController(
-                base_url="http://127.0.0.1:50021",
-                rate=output_sample_rate,
-                speaker_id=voicevox_speaker_id,
-                device_index=self.audio_devices.output_device
-            ),
-            animation_controller or AnimationControllerDummy(verbose=verbose),
-            face_controller or FaceControllerDummy(verbose=verbose)
-        )
-
-        # Chat
-        self.start_voice = start_voice
-        self.split_chars = split_chars or ["。", "、", "？", "！", ".", ",", "?", "!"]
-        self.on_turn_end = self.on_turn_end_default
-        self.chat_task = None
-
-    async def on_turn_end_default(self, request_text: str, response_text: str) -> bool:
-        return False
-
-    async def chat(self, request_on_start: str=None, skip_start_voice: bool=False):
-        if not skip_start_voice:
-            try:
-                await self.avatar_controller.speech_controller.speak(self.start_voice)
-            except Exception as ex:
-                logger.error(f"Error at starting chat: {str(ex)}\n{traceback.format_exc()}")
-
-        while True:
-            request_text = ""
-            response_text = ""
-            try:
-                if request_on_start:
-                    request_text = request_on_start
-                    request_on_start = None
-                else:
-                    request_text = await self.request_listener.get_request()
-                    if not request_text:
-                        break
-
-                logger.info(f"User: {request_text}")
-                logger.info("AI:")
-
-                avatar_task = asyncio.create_task(self.avatar_controller.start())
-
-                stream_buffer = ""
-                async for t in self.chat_processor.chat(request_text):
-                    stream_buffer += t
-                    for spc in self.split_chars:
-                        stream_buffer = stream_buffer.replace(spc, spc + "|")
-                    sp = stream_buffer.split("|")
-                    if len(sp) > 1: # >1 means `|` is found (splited at the end of sentence)
-                        sentence = sp.pop(0)
-                        stream_buffer = "".join(sp)
-                        self.avatar_controller.set_text(sentence)
-                        response_text += sentence
-                    await asyncio.sleep(0.01)   # wait slightly in every loop not to use up CPU
-
-                if stream_buffer:
-                    self.avatar_controller.set_text(stream_buffer)
-                    response_text += stream_buffer
-
-                self.avatar_controller.set_stop()
-                await avatar_task
-            
-            except Exception as ex:
-                logger.error(f"Error at chatting loop: {str(ex)}\n{traceback.format_exc()}")
-
-            finally:
-                if await self.on_turn_end(request_text, response_text):
-                    break
-
-    async def start_chat(self, request_on_start: str=None, skip_start_voice: bool=False):
-        self.stop_chat()
-        self.chat_task = asyncio.create_task(self.chat(request_on_start, skip_start_voice))
-        await self.chat_task
-
-    def stop_chat(self):
-        if self.chat_task is not None:
-            self.chat_task.cancel()
-
-    def start_listening_wakeword(self, wait: bool=True):
-        self.wakeword_listener_thread = self.wakeword_listener.start()
-        if wait:
-            self.wakeword_listener_thread.join()
-        else:
-            return self.wakeword_listener_thread
-
-    def stop_listening_wakeword(self, wait: bool=True):
-        self.wakeword_listener.stop()
-
-    def is_wakeword_listener_listening(self):
-        return self.wakeword_listener_thread is not None and self.wakeword_listener_thread.is_alive()
+    def stop_listening(self):
+        self.adapter.stop_listening()
