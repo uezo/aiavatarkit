@@ -1,3 +1,4 @@
-import logging
-from .device import AudioDevice
-from .bot import AIAvatar
+try:
+    from .bot import AIAvatar
+except:
+    pass
