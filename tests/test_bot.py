@@ -4,13 +4,16 @@ import base64
 import io
 import os
 import httpx
+import numpy
 import pyautogui
+from litests.models import STSRequest, STSResponse
+from litests.tts.voicevox import VoicevoxSpeechSynthesizer
 from aiavatar import AIAvatar
 from aiavatar.animation import AnimationControllerDummy
 from aiavatar.face import FaceControllerDummy
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
+INPUT_VOICE_SAMPLE_RATE = 24000 # VOICEVOX
 SYSTEM_PROMPT = """## 表情
 
 あなたは以下の表情を持っています。
@@ -87,15 +90,14 @@ class AnimationControllerTest(AnimationControllerDummy):
 
 @pytest.fixture
 def aiavatar_app():
-    app = AIAvatar(
+    return AIAvatar(
+        face_controller=FaceControllerForTest(),
+        animation_controller=AnimationControllerTest(),
         openai_api_key=OPENAI_API_KEY,
         openai_model="gpt-4o",
         system_prompt=SYSTEM_PROMPT,
         debug=True
     )
-    app.adapter.face_controller = FaceControllerForTest()
-    app.adapter.animation_controller = AnimationControllerTest()
-    return app
 
 
 def transcribe(data: bytes, audio_format: str = "wav") -> str:
@@ -111,114 +113,197 @@ def transcribe(data: bytes, audio_format: str = "wav") -> str:
     return resp.json().get("text")
 
 
+async def chat(app: AIAvatar, text: str, session_id: str, context_id: str = None) -> STSResponse:
+    # TTS for input audio instead of human's speech
+    async def get_input_voice(text: str):
+        voicevox_for_input = VoicevoxSpeechSynthesizer(
+            base_url="http://127.0.0.1:50021",
+            speaker=2,
+            debug=True
+        )
+        voice = await voicevox_for_input.synthesize(text)
+        silence_samples = int(INPUT_VOICE_SAMPLE_RATE * 1.0)
+        silence_bytes = numpy.zeros(silence_samples, dtype=numpy.int16).tobytes()
+        return voice + silence_bytes
+
+    # Invoke Sppech-to-Speech pipeline directly
+    audio_data = b""
+    async for r in app.sts.invoke(STSRequest(
+        audio_data=await get_input_voice(text),
+        session_id=session_id,
+        context_id=context_id
+    )):
+        await app.sts.handle_response(r)
+        if r.type == "chunk" and r.audio_data:
+            audio_data += r.audio_data
+        last_response = r
+
+    # Wait for processing responses
+    while not app.response_queue.empty():
+        await asyncio.sleep(0.1)
+    while app.audio_player.is_playing:
+        await asyncio.sleep(0.1)
+
+    last_response.audio_data = audio_data
+    return last_response
+
+
 @pytest.mark.asyncio
 async def test_chat(aiavatar_app: AIAvatar):
-    await aiavatar_app.chat("こんにちは。", wait_performance=True)
-    assert "こんにちは" in aiavatar_app.adapter.last_response.text
-    trans_text = transcribe(aiavatar_app.adapter.last_response.audio_data)
-    assert "こんにちは" in trans_text or "こんにちわ" in trans_text
+    session_id = "test_chat_session"
+    user_id = "test_chat_user"
+    task = asyncio.create_task(aiavatar_app.start_listening(session_id=session_id, user_id=user_id))
 
-    # Context
-    await aiavatar_app.chat("旅行で悩んでいます。東京、京都、福岡のいずれかに。", wait_performance=True)
-    context_id = aiavatar_app.adapter.last_response.context_id
-    await aiavatar_app.chat("おすすめは？", wait_performance=True)
-    assert aiavatar_app.adapter.last_response.context_id == context_id
-    response_text = aiavatar_app.adapter.last_response.text
-    assert "東京" in response_text or "京都" in response_text or "福岡" in response_text
-    trans_text = transcribe(aiavatar_app.adapter.last_response.audio_data)
-    assert "東京" in trans_text or "京都" in trans_text or "福岡" in trans_text
+    try:
+        # Just chat
+        response = await chat(aiavatar_app, text="こんにちは", session_id=session_id)
+        assert "こんにちは" in response.text
+        context_id = response.context_id
+
+        # Context
+        await chat(aiavatar_app, text="旅行で悩んでいます。東京、京都、福岡のいずれかに。", session_id=session_id, context_id=context_id)
+        response = await chat(aiavatar_app, text="おすすめは？", session_id=session_id, context_id=context_id)
+        assert "東京" in response.text or "京都" in response.text or "福岡" in response.text
+        trans_text = transcribe(response.audio_data)
+        assert response.audio_data is not None
+        assert "東京" in trans_text or "京都" in trans_text or "福岡" in trans_text
+
+    finally:
+        await aiavatar_app.stop_listening()
+        task.cancel()
 
 
 @pytest.mark.asyncio
 async def test_chat_face_animation(aiavatar_app: AIAvatar):
-    await aiavatar_app.chat("表情と身振り手振りで喜怒哀楽を表現してください", wait_performance=True)
+    session_id = "test_chat_face_animation_session"
+    user_id = "test_chat_face_animation_user"
+    task = asyncio.create_task(aiavatar_app.start_listening(session_id=session_id, user_id=user_id))
 
-    face_histories = aiavatar_app.adapter.face_controller.histories
-    assert face_histories[0] == "joy"
-    assert face_histories[1] == "angry"
-    assert face_histories[2] == "sorrow"
-    assert face_histories[3] == "fun"
+    try:
+        response = await chat(aiavatar_app, text="表情と身振り手振りで喜怒哀楽を表現してください", session_id=session_id)
+        print(f"response: {response.text}")
 
-    animation_histories = aiavatar_app.adapter.animation_controller.histories
-    assert animation_histories[0] == "joy_hands_up"
-    assert animation_histories[1] == "angry_hands_on_waist"
-    assert animation_histories[2] == "sorrow_heads_down"
-    assert animation_histories[3] == "fun_waving_arm"
+        face_histories = aiavatar_app.face_controller.histories
+        assert face_histories[0] == "joy"
+        assert face_histories[1] == "angry"
+        assert face_histories[2] == "sorrow"
+        assert face_histories[3] == "fun"
+
+        animation_histories = aiavatar_app.animation_controller.histories
+        assert animation_histories[0] == "joy_hands_up"
+        assert animation_histories[1] == "angry_hands_on_waist"
+        assert animation_histories[2] == "sorrow_heads_down"
+        assert animation_histories[3] == "fun_waving_arm"
+
+    finally:
+        await aiavatar_app.stop_listening()
+        task.cancel()
 
 
 @pytest.mark.asyncio
 async def test_chat_wakeword(aiavatar_app: AIAvatar):
-    aiavatar_app.wakewords = ["こんにちは"]
-    aiavatar_app.wakeword_timeout = 10
+    session_id = "test_chat_wakeword_session"
+    user_id = "test_chat_wakeword_user"
+    task = asyncio.create_task(aiavatar_app.start_listening(session_id=session_id, user_id=user_id))
 
-    # Not triggered chat
-    await aiavatar_app.chat("やあ", wait_performance=True)
-    assert aiavatar_app.adapter.last_response.type == "final"
-    assert aiavatar_app.adapter.last_response.text == ""
-    assert aiavatar_app.adapter.last_response.voice_text == ""
-    assert aiavatar_app.adapter.last_response.audio_data == b""
+    aiavatar_app.sts.wakewords = ["こんにちは"]
+    aiavatar_app.sts.wakeword_timeout = 10
 
-    # Start chat
-    await aiavatar_app.chat("こんにちは、元気？", wait_performance=True)
-    assert "こんにちは" in aiavatar_app.adapter.last_response.text
-    # Continue chat not by wakeword
-    await aiavatar_app.chat("寿司とラーメンどっちが好き？", wait_performance=True)
-    response_text = aiavatar_app.adapter.last_response.text
-    assert "寿司" in response_text or "ラーメン" in response_text
+    try:
+        # Not triggered chat
+        response = await chat(aiavatar_app, text="やあ", session_id=session_id)
+        assert response.type == "final"
+        assert response.text == ""
+        assert response.voice_text == ""
+        assert response.audio_data == b""
+        assert response.context_id is None
 
-    # Wait for wakeword timeout
-    await asyncio.sleep(10)
+        # Start chat
+        response = await chat(aiavatar_app, text="こんにちは、元気？", session_id=session_id)
+        assert "こんにちは" in response.text
+        context_id = response.context_id
 
-    # Not triggered chat
-    await aiavatar_app.chat("そうなんだ", wait_performance=True)
-    assert aiavatar_app.adapter.last_response.type == "final"
-    assert aiavatar_app.adapter.last_response.text == ""
-    assert aiavatar_app.adapter.last_response.voice_text == ""
-    assert aiavatar_app.adapter.last_response.audio_data == b""
+        # Continue chat not by wakeword
+        response = await chat(aiavatar_app, text="寿司とラーメンどっちが好き？", session_id=session_id, context_id=context_id)
+        assert "寿司" in response.text or "ラーメン" in response.text
+
+        # Wait for wakeword timeout
+        await asyncio.sleep(10)
+
+        # Not triggered chat
+        response = await chat(aiavatar_app, text="そうなんだ", session_id=session_id, context_id=context_id)
+        assert response.type == "final"
+        assert response.text == ""
+        assert response.voice_text == ""
+        assert response.audio_data == b""
+        assert response.context_id == context_id    # Context is still alive
+
+    finally:
+        await aiavatar_app.stop_listening()
+        task.cancel()
 
 
 @pytest.mark.asyncio
 async def test_chat_vision(aiavatar_app: AIAvatar):
-    @aiavatar_app.adapter.get_image_url
-    async def get_image_url(source: str) -> str:
-        image_bytes = None
+    session_id = "test_chat_vision_session"
+    user_id = "test_chat_wakeword_user"
+    task = asyncio.create_task(aiavatar_app.start_listening(session_id=session_id, user_id=user_id))
 
-        if source == "screenshot":
-            # Capture screenshot
-            buffered = io.BytesIO()
-            image = pyautogui.screenshot(region=(0, 0, 1280, 720))
-            image.save(buffered, format="PNG")
-            image_bytes = buffered.getvalue()
+    try:
+        @aiavatar_app.get_image_url
+        async def get_image_url(source: str) -> str:
+            image_bytes = None
 
-        if image_bytes:
-            # Upload and get url, or, make base64 encoded url
-            b64_encoded = base64.b64encode(image_bytes).decode('utf-8')
-            b64_url = f"data:image/jpeg;base64,{b64_encoded}"
-            return b64_url
+            if source == "screenshot":
+                # Capture screenshot
+                buffered = io.BytesIO()
+                image = pyautogui.screenshot(region=(0, 0, 1280, 720))
+                image.save(buffered, format="PNG")
+                image_bytes = buffered.getvalue()
 
-    await aiavatar_app.chat("画面を見て。今見えているアプリケーションは何かな？", wait_performance=True)
-    assert "visual" in aiavatar_app.adapter.last_response.text.lower()  # Run test on Visual Studio Code
+            if image_bytes:
+                # Upload and get url, or, make base64 encoded url
+                b64_encoded = base64.b64encode(image_bytes).decode('utf-8')
+                b64_url = f"data:image/jpeg;base64,{b64_encoded}"
+                return b64_url
+
+        # Check `aiavatar_app.last_response`, not response from chat
+        await chat(aiavatar_app, text="画面を見て。今見えているアプリケーションは何かな？", session_id=session_id)
+        assert "visual" in aiavatar_app.last_response.text.lower()  # Run test on Visual Studio Code
+
+    finally:
+        await aiavatar_app.stop_listening()
+        task.cancel()
 
 
 @pytest.mark.asyncio
 async def test_chat_function(aiavatar_app: AIAvatar):
-    # Register tool
-    weather_tool_spec = {
-        "type": "function",
-        "function": {
-            "name": "get_weather",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {"type": "string"}
-                },
-            },
-        }
-    }
-    @aiavatar_app.sts.llm.tool(weather_tool_spec)
-    async def get_weather(location: str = None):
-        return {"weather": "clear", "temperature": 23.4}
+    session_id = "test_chat_function_session"
+    user_id = "test_chat_function_user"
+    task = asyncio.create_task(aiavatar_app.start_listening(session_id=session_id, user_id=user_id))
 
-    await aiavatar_app.chat("東京の天気を教えて。", wait_performance=True)
-    assert "晴" in aiavatar_app.adapter.last_response.text
-    assert "23.4" in aiavatar_app.adapter.last_response.text
+    try:
+        # Register tool
+        weather_tool_spec = {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"}
+                    },
+                },
+            }
+        }
+        @aiavatar_app.sts.llm.tool(weather_tool_spec)
+        async def get_weather(location: str = None):
+            return {"weather": "clear", "temperature": 23.4}
+
+        response = await chat(aiavatar_app, text="東京の天気を教えて。", session_id=session_id)
+        assert "晴" in response.text
+        assert "23.4" in response.text
+
+    finally:
+        await aiavatar_app.stop_listening()
+        task.cancel()

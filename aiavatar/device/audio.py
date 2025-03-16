@@ -1,6 +1,12 @@
+import asyncio
 import collections
+import io
 import logging
 import numpy as np
+import queue
+import threading
+from typing import AsyncGenerator
+import wave
 import pyaudio
 
 logger = logging.getLogger(__name__)
@@ -128,6 +134,118 @@ class AudioDevice:
 
     def terminate(self):
         self._p.terminate()
+
+
+class AudioPlayer:
+    def __init__(self, device_index: int, chunk_size: int = 1024):
+        self.queue = queue.Queue()
+        self.thread = threading.Thread(target=self.process_queue, daemon=True)
+        self.thread.start()
+
+        self.to_wave = None
+        self.p = pyaudio.PyAudio()
+        self.play_stream = None
+        self.device_index = device_index
+        self.chunk_size = chunk_size
+
+        self.wave_params = None
+        self.is_playing = False
+        self.stop_event = threading.Event()
+
+    def play(self, content: bytes):
+        try:
+            self.stop_event.clear()
+            self.is_playing = True
+
+            if self.to_wave:
+                wave_content = self.to_wave(content)
+            else:
+                wave_content = content
+
+            if wave_content:
+                with wave.open(io.BytesIO(wave_content), "rb") as wf:
+                    current_params = wf.getparams()
+                    if not self.play_stream or self.wave_params != current_params:
+                        if self.play_stream:
+                            self.play_stream.stop_stream()
+                            self.play_stream.close()
+                            self.play_stream = None
+
+                        self.wave_params = current_params
+                        self.play_stream = self.p.open(
+                            format=self.p.get_format_from_width(self.wave_params.sampwidth),
+                            channels=self.wave_params.nchannels,
+                            rate=self.wave_params.framerate,
+                            output=True,
+                            output_device_index=self.device_index,
+                            frames_per_buffer=self.chunk_size
+                        )
+
+                    data = wf.readframes(self.chunk_size)
+                    while data:
+                        if self.stop_event.is_set():
+                            break
+                        self.play_stream.write(data)
+                        data = wf.readframes(self.chunk_size)
+
+        except Exception as ex:
+            logger.error(f"Error at play: {ex}", exc_info=True)
+
+        finally:
+            self.is_playing = False
+
+    def process_queue(self):
+        while True:
+            data = self.queue.get()
+            if data is None:
+                break
+
+            self.play(data)
+
+    def add(self, audio_bytes: bytes):
+        self.queue.put(audio_bytes)
+
+    def cancel(self):
+        while not self.queue.empty():
+            self.queue.get()
+
+    def stop(self):
+        self.queue.put(None)
+        self.thread.join()
+        self.stop_event.set()
+
+
+class AudioRecorder:
+    def __init__(self, sample_rate: int = 16000, device_index: int = -1, channels: int = 1, chunk_size: int = 512):
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.chunk_size = chunk_size
+        self.device_index = device_index
+        self.is_listening = False
+
+    async def start_stream(self) -> AsyncGenerator[bytes, None]:
+        p = pyaudio.PyAudio()
+        pyaudio_stream = p.open(
+            rate=self.sample_rate,
+            channels=self.channels,
+            format=pyaudio.paInt16,
+            input=True,
+            frames_per_buffer=self.chunk_size,
+            input_device_index=self.device_index
+        )
+        self.is_listening = True
+
+        try:
+            while self.is_listening:
+                yield pyaudio_stream.read(self.chunk_size, exception_on_overflow=False)
+                await asyncio.sleep(0.0001)
+        finally:
+            pyaudio_stream.stop_stream()
+            pyaudio_stream.close()
+            logger.info("PyAudio stream closed.")
+
+    def stop_stream(self):
+        self.is_listening = False
 
 
 class NoiseLevelDetector:
