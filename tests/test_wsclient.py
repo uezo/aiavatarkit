@@ -3,66 +3,17 @@ import asyncio
 import base64
 import io
 import os
-from time import time
 from uuid import uuid4
 import httpx
 import numpy
 import pyautogui
 from litests.tts.voicevox import VoicevoxSpeechSynthesizer
-from aiavatar import AIAvatar, AIAvatarResponse
+from aiavatar.adapter.websocket.client import AIAvatarWebSocketClient as AIAvatar, AIAvatarResponse
 from aiavatar.animation import AnimationControllerDummy
 from aiavatar.face import FaceControllerDummy
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 INPUT_VOICE_SAMPLE_RATE = 24000 # VOICEVOX
-SYSTEM_PROMPT = """## 表情
-
-あなたは以下の表情を持っています。
-
-- neutral
-- joy
-- angry
-- sorrow
-- fun
-
-特に表情を表現したい場合は、文章の先頭に[face:joy]のように挿入してください。
-一覧以外の表情は絶対に表現してはいけません。
-
-例
-```
-[face:fun]ねえ、海が見えるよ！[face:joy]早く泳ごうよ。
-```
-
-
-## 身振り手振り
-
-あなたは以下の身振り手振りをすることができます。
-
-- joy_hands_up
-- angry_hands_on_waist
-- sorrow_heads_down
-- fun_waving_arm
-
-特に感情を身振り手振りで表現したい場合は、文章に[animation:joy_hands_up]のように挿入してください。
-一覧以外の身振り手振りは絶対に表現してはいけません。
-
-例
-[animation:joy_hands_up]おーい、こっちだよ！
-
-
-## 視覚情報
-
-ユーザーとの会話に応答するために視覚情報（画像）が必要な場合は、[vision:camera]のようなタグを応答に含めてください。
-画像取得のソースは以下のとおりです。
-
-- screenshot: ユーザーのPC画面を見ることができます
-- camera: カメラを通じて現実世界を見ることができます
-
-
-## 話し方
-
-応答内容は読み上げられます。可能な限り1文で、40文字以内を目処に簡潔に応答してください。
-"""
 
 
 class FaceControllerForTest(FaceControllerDummy):
@@ -94,9 +45,6 @@ def aiavatar_app():
     return AIAvatar(
         face_controller=FaceControllerForTest(),
         animation_controller=AnimationControllerTest(),
-        openai_api_key=OPENAI_API_KEY,
-        openai_model="gpt-4o",
-        system_prompt=SYSTEM_PROMPT,
         debug=True
     )
 
@@ -127,18 +75,17 @@ async def chat(app: AIAvatar, text: str, session_id: str, context_id: str = None
         silence_bytes = numpy.zeros(silence_samples, dtype=numpy.int16).tobytes()
         return voice + silence_bytes
 
+    while app.websocket_connection is None:
+        await asyncio.sleep(0.1)
+
     await app.send_microphone_data(
         await get_input_voice(text),
         session_id=session_id
     )
 
     # Wait for processing responses
-    start_time = time()
     while len(app.last_responses) == 0 or app.last_responses[-1].type != "final":
         await asyncio.sleep(0.1)
-        if time() - start_time > 60:
-            print("Response timeout (60 sec)")
-            break
     while not app.response_queue.empty():
         await asyncio.sleep(0.1)
     while app.audio_player.is_playing:
@@ -209,14 +156,14 @@ async def test_chat_face_animation(aiavatar_app: AIAvatar):
         task.cancel()
 
 
+@pytest.mark.skip("Needs server settings for wakeword")
 @pytest.mark.asyncio
 async def test_chat_wakeword(aiavatar_app: AIAvatar):
+    # Before this test, start server with wakewords=["こんにちは"] and wakeword_timeout=10
+
     session_id = f"test_chat_wakeword_session_{str(uuid4())}"
     user_id = "test_chat_wakeword_user"
     task = asyncio.create_task(aiavatar_app.start_listening(session_id=session_id, user_id=user_id))
-
-    aiavatar_app.sts.wakewords = ["こんにちは"]
-    aiavatar_app.sts.wakeword_timeout = 10
 
     try:
         # Not triggered chat
@@ -292,23 +239,6 @@ async def test_chat_function(aiavatar_app: AIAvatar):
     task = asyncio.create_task(aiavatar_app.start_listening(session_id=session_id, user_id=user_id))
 
     try:
-        # Register tool
-        weather_tool_spec = {
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {"type": "string"}
-                    },
-                },
-            }
-        }
-        @aiavatar_app.sts.llm.tool(weather_tool_spec)
-        async def get_weather(location: str = None):
-            return {"weather": "clear", "temperature": 23.4}
-
         response = await chat(aiavatar_app, text="東京の天気を教えて。", session_id=session_id)
         assert "晴" in response.text
         assert "23.4" in response.text
