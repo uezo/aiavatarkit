@@ -74,6 +74,7 @@ Feel free to enjoy the conversation afterwards!
     - [👀 Vision](#-vision)
     - [🐓 Wakeword](#-wakeword-listener)
     - [🔈 Audio Device](#-audio-device)
+    - [🔌 WebSocket](#-websocket)
     - [🎭 Custom Behavior](#-custom-behavior)
     - [🧩 RESTful APIs](#-restful-apis)
     - [🎚️ Noise Filter](#-noise-filter)
@@ -559,6 +560,57 @@ aiavatar_app = AIAvatar(
 ```
 
 
+### 🔌 WebSocket
+
+You can host AIAvatarKit on a server to enable multiple clients to have independent context-based conversations via WebSocket.
+
+Below is the simplest example of a server program:
+
+```python
+from fastapi import FastAPI
+from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer
+
+# Create AIAvatar
+aiavatar_app = AIAvatarWebSocketServer(
+    openai_api_key=OPENAI_API_KEY,
+    volume_db_threshold=-30,  # <- Adjust for your audio env
+    debug=True
+)
+
+# Set router to FastAPI app
+app = FastAPI()
+router = aiavatar_app.get_websocket_router()
+app.include_router(router)
+```
+
+Save the above code as `server.py` and run it using:
+
+```sh
+uvicorn server:app
+```
+
+
+Next is the simplest example of a client program:
+
+```python
+import asyncio
+from aiavatar.adapter.websocket.client import AIAvatarWebSocketClient
+
+client = AIAvatarWebSocketClient()
+asyncio.run(client.start_listening(session_id="session_ws6", user_id="uezo_ws1"))
+```
+
+Save the above code as `client.py` and run it using:
+
+```sh
+python client.py
+```
+
+You can now perform voice interactions just like when running locally.
+
+Please note that the Speech-to-Speech pipeline resides on the server, while avatar controls and input/output device management reside on the client side. This differs from local execution, where all configurations were centralized within a single `AIAvatar` instance.
+
+
 ### 🎭 Custom Behavior
 
 You can invoke custom implementations on start LLM and on start TTS. In the following example, changing face expressions when "thinking" aims to enhance the interaction experience with the AI avatar.
@@ -576,9 +628,9 @@ async def on_completion_stream_start(context_id):
 ```
 
 
-
-
 ### 🧩 RESTful APIs
+
+**NOTE:** Not ready for v0.6.x
 
 You can control AIAvatar via RESTful APIs. The provided functions are:
 
