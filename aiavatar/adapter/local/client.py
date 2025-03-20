@@ -150,9 +150,10 @@ class AIAvatar(AIAvatarClientBase):
             aiavatar_response.avatar_control_request = self.parse_avatar_control_request(response.text)
 
         elif response.type == "final":
-            if image_source_match := re.search(r"\[vision:(\w+)\]", response.text):
-                aiavatar_response.type = "vision"
-                aiavatar_response.metadata={"source": image_source_match.group(1)}
+            if response.text:
+                if image_source_match := re.search(r"\[vision:(\w+)\]", response.text):
+                    aiavatar_response.type = "vision"
+                    aiavatar_response.metadata={"source": image_source_match.group(1)}
 
         await self.response_queue.put(aiavatar_response)
 
@@ -174,7 +175,7 @@ class AIAvatar(AIAvatarClientBase):
             volume_threshold_db = int(noise_level) + self.noise_margin
 
             logger.info(f"Set volume threshold: {volume_threshold_db}dB")
-            self.sts.volume_db_threshold = volume_threshold_db
+            self.sts.vad.set_volume_db_threshold(session_id, volume_threshold_db)
         else:
             logger.info(f"Set volume threshold: {self.sts.vad.volume_db_threshold}dB")
 
