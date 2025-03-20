@@ -74,6 +74,9 @@
 
     <script src="aiavatar.js"></script>
     <script>
+        const sessionId = crypto.randomUUID();  // New session
+        const userId = "user01";
+
         // Create AIAvatar
         const aiavatar = new AIAvatarClient({
             webSocketUrl: "/ws",
@@ -101,6 +104,17 @@
 
         // Custom response handling
         aiavatar.onResponseReceived = (response) => {
+            // Example: Set microphone volume threshold for filtering noise
+            if (response.type == "connected") {
+                const configMessage = {
+                    type: "config",
+                    session_id: sessionId,
+                    user_id: userId,
+                    metadata: {"volume_db_threshold": -20}  // Detect voice over -20 dB
+                };
+                aiavatar.ws.send(JSON.stringify(configMessage));
+            }
+
             // Example: Show thinking effect while server is processing
             if (response.type == "start") {
                 aiavatar.updateFace("think", 10);
@@ -118,8 +132,6 @@
         }
 
         // Start and stop buttons
-        const sessionId = crypto.randomUUID();  // New session
-        const userId = "user01";
         document.getElementById("startBtn").addEventListener("click", () => aiavatar.startListening(sessionId, userId));
         document.getElementById("stopBtn").addEventListener("click", () => aiavatar.stopListening(sessionId));
     </script>
