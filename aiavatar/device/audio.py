@@ -152,6 +152,12 @@ class AudioPlayer:
         self.is_playing = False
         self.stop_event = threading.Event()
 
+    def is_wave_params_changed(self, current_params: wave._wave_params):
+        return self.wave_params is None or current_params is None \
+            or self.wave_params.nchannels != current_params.nchannels \
+            or self.wave_params.sampwidth != current_params.sampwidth \
+            or self.wave_params.framerate != current_params.framerate
+
     def play(self, content: bytes):
         try:
             self.stop_event.clear()
@@ -165,7 +171,7 @@ class AudioPlayer:
             if wave_content:
                 with wave.open(io.BytesIO(wave_content), "rb") as wf:
                     current_params = wf.getparams()
-                    if not self.play_stream or self.wave_params != current_params:
+                    if not self.play_stream or self.is_wave_params_changed(current_params):
                         if self.play_stream:
                             self.play_stream.stop_stream()
                             self.play_stream.close()
