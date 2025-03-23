@@ -10,10 +10,6 @@ class ErrorResponse(BaseModel):
     error: str = Field(..., example="Error message from API", description="Error message from API")
 
 
-class ListenerStartRequest(BaseModel):
-    wakewords: List[str] = Field(default=[], description="List of wakewords to start chat.")
-
-
 class ListenerStatusResponse(BaseModel):
     is_listening: bool = Field(..., description="Whether the listener is listening")
 
