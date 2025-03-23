@@ -85,6 +85,18 @@ class AIAvatarWebSocketServer(WebSocketAdapter):
         data = await websocket.receive_text()
         request = AIAvatarRequest.model_validate_json(data)
 
+        if not request.session_id:
+            await websocket.send_text(AIAvatarResponse(
+                type="final",
+                session_id=request.session_id,
+                user_id=request.user_id,
+                context_id=request.context_id,
+                metadata={"error": "WebSocket disconnect: session_id is required."}
+            ).model_dump_json())
+            logger.info("WebSocket disconnect: session_id is required.")
+            await websocket.close()
+            return
+
         if request.type == "start":
             self.websockets[request.session_id] = websocket
 
@@ -178,6 +190,9 @@ class AIAvatarWebSocketServer(WebSocketAdapter):
             if response.audio_data:
                 b64_chunk = base64.b64encode(response.audio_data).decode("utf-8")
                 aiavatar_response.audio_data = b64_chunk
+
+        elif response.type == "tool_call":
+            aiavatar_response.metadata["tool_call"] = response.tool_call.__dict__
 
         elif response.type == "final":
             if image_source_match := re.search(r"\[vision:(\w+)\]", response.text):
