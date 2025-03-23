@@ -23,7 +23,7 @@
 Install AIAvatarKit.
 
 ```sh
-pip install git+https://github.com/uezo/aiavatarkit.git@v0.6.2
+pip install git+https://github.com/uezo/aiavatarkit.git@v0.6.3
 ```
 
 **NOTE:** Since technical blogs assume [v0.5.8](https://github.com/uezo/aiavatarkit/tree/v0.5.8), the PyPI version will remain based on v0.5.8 during the transition period. We plan to update to the v0.6 series around May 2025.
@@ -74,6 +74,7 @@ Feel free to enjoy the conversation afterwards!
     - [👀 Vision](#-vision)
     - [🐓 Wakeword](#-wakeword-listener)
     - [🔈 Audio Device](#-audio-device)
+    - [💫 Streaming API](#-streaming-api)
     - [🔌 WebSocket](#-websocket)
     - [🎭 Custom Behavior](#-custom-behavior)
     - [🧩 RESTful APIs](#-restful-apis)
@@ -560,6 +561,135 @@ aiavatar_app = AIAvatar(
 ```
 
 
+### 💫 Streaming API
+
+You can host AIAvatarKit on a server to enable multiple clients to have independent context-aware conversations via RESTful API with streaming responses (Server-Sent Events).
+
+Below is the simplest example of a server program:
+
+```python
+from fastapi import FastAPI
+from aiavatar.adapter.http.server import AIAvatarHttpServer
+
+# AIAvatar
+aiavatar_app = AIAvatarHttpServer(
+    openai_api_key=OPENAI_API_KEY,
+    debug=True
+)
+
+# Setup FastAPI app with AIAvatar components 
+app = FastAPI()
+router = aiavatar_app.get_api_router()
+app.include_router(router)
+```
+
+Save the above code as `server.py` and run it using:
+
+```sh
+uvicorn server:app
+```
+
+
+Next is the simplest example of a client program:
+
+```python
+import asyncio
+from aiavatar.adapter.http.client import AIAvatarHttpClient
+
+aiavatar_app = AIAvatarHttpClient(
+    debug=True
+)
+asyncio.run(aiavatar_app.start_listening(session_id="http_session", user_id="http_user"))
+```
+
+Save the above code as `client.py` and run it using:
+
+```sh
+python client.py
+```
+
+You can now perform voice interactions just like when running locally.
+
+
+When using the streaming API via HTTP, clients communicate with the server using JSON-formatted requests.
+
+Below is the format for initiating a session:
+
+```json
+{
+    "type": "start",          // Always `start`
+    "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d",
+    "user_id": "user_id",
+    "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7",   // Set null or provided id in `start` response
+    "text": "こんにちは",       // If set, audio_data will be ignored         
+    "audio_data": "XXXX",     // Base64 encoded audio data
+    "files": [
+        {
+            "type": "image",        // Only `image` is supported for now
+            "url": "https://xxx",
+        }
+    ],
+    "metadata": {}
+}
+```
+
+The server returns responses as a stream of JSON objects in the following structure.
+
+The communication flow typically consists of:
+
+```json
+{
+    "type": "chunk",    // start -> chunk -> final
+    "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d",
+    "user_id": "user01",
+    "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7",
+    "text": "[face:joy]こんにちは！",   // Response text with info
+    "voice_text": "こんにちは！",       // Response text for voice synthesis
+    "avatar_control_request": {
+        "animation_name": null,       // Parsed animation name
+        "animation_duration": null,   // Parsed duration for animation
+        "face_name": "joy",           // Parsed facial expression name
+        "face_duration": 4.0          // Parsed duration for the facial expression
+    },
+    "audio_data": "XXXX",   // Base64 encoded. Playback this as the character's voice.
+    "metadata": {
+        "is_first_chunk": true
+    }
+}
+```
+
+
+You can test the streaming API using a simple curl command:
+
+```sh
+curl -N -X POST http://127.0.0.1:8000/chat \
+    -H "Content-Type: application/json" \
+    -d '{
+        "type": "start",
+        "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d",
+        "user_id": "user01",
+        "text": "こんにちは"
+    }'
+
+```
+
+Sample response (streamed from the server):
+
+```sh
+data: {"type": "start", "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d", "user_id": "user01", "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7", "text": null, "voice_text": null, "avatar_control_request": null, "audio_data": "XXXX", "metadata": {"request_text": "こんにちは"}}
+
+data: {"type": "chunk", "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d", "user_id": "user01", "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7", "text": "[face:joy]こんにちは！", "voice_text": "こんにちは！", "avatar_control_request": {"animation_name": null, "animation_duration": null, "face_name": "joy", "face_duration": 4.0}, "audio_data": "XXXX", "metadata": {"is_first_chunk": true}}
+
+data: {"type": "chunk", "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d", "user_id": "user01", "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7", "text": "今日はどんなことをお手伝いしましょうか？", "voice_text": "今日はどんなことをお手伝いしましょうか？", "avatar_control_request": {"animation_name": null, "animation_duration": null, "face_name": null, "face_duration": null}, "audio_data": "XXXX", "metadata": {"is_first_chunk": false}}
+
+data: {"type": "final", "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d", "user_id": "user01", "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7", "text": "[face:joy]こんにちは！今日はどんなことをお手伝いしましょうか？", "voice_text": "こんにちは！今日はどんなことをお手伝いしましょうか？", "avatar_control_request": null, "audio_data": "XXXX", "metadata": {}}
+```
+
+To continue the conversation, include the `context_id` provided in the `start` response in your next request.
+
+**NOTE:** When using the RESTful API, voice activity detection (VAD) must be performed client-side.
+
+
 ### 🔌 WebSocket
 
 You can host AIAvatarKit on a server to enable multiple clients to have independent context-based conversations via WebSocket.
@@ -597,7 +727,7 @@ import asyncio
 from aiavatar.adapter.websocket.client import AIAvatarWebSocketClient
 
 client = AIAvatarWebSocketClient()
-asyncio.run(client.start_listening(session_id="session_ws6", user_id="uezo_ws1"))
+asyncio.run(client.start_listening(session_id="ws_session", user_id="ws_user"))
 ```
 
 Save the above code as `client.py` and run it using:
@@ -608,23 +738,24 @@ python client.py
 
 You can now perform voice interactions just like when running locally.
 
-Please note that the Speech-to-Speech pipeline resides on the server, while avatar controls and input/output device management reside on the client side. This differs from local execution, where all configurations were centralized within a single `AIAvatar` instance.
+**NOTE:** When using the WebSocket API, voice activity detection (VAD) is performed on the server side, so clients can simply stream microphone input directly to the server.
 
 
 ### 🎭 Custom Behavior
 
-You can invoke custom implementations on start LLM and on start TTS. In the following example, changing face expressions when "thinking" aims to enhance the interaction experience with the AI avatar.
+You can invoke custom implementations `on_response(response_type)`. In the following example, show "thinking" face expression while processing request to enhance the interaction experience with the AI avatar.
 
 ```python
 # Set face when the character is thinking the answer
-@aiavatar_app.sts.on_before_llm
-async def on_before_completion(context_id, text, files):
+@aiavatar_app.on_response("start")
+async def on_start_response(response):
     await aiavatar_app.adapter.face_controller.set_face("thinking", 3.0)
 
 # Reset face before answering
-@aiavatar_app.sts.on_before_tts
-async def on_completion_stream_start(context_id):
-    aiavatar_app.adapter.face_controller.reset()
+@aiavatar_app.on_response("chunk")
+async def on_chunk_response(response):
+    if response.metadata.get("is_first_chunk"):
+        aiavatar_app.adapter.face_controller.reset()
 ```
 
 
@@ -684,9 +815,6 @@ $ curl -X 'POST' \
 ```
 
 See API spec and try it on http://127.0.0.1:8000/docs .
-
-**NOTE**: AzureWakewordListeners stops immediately but the default WakewordListener stops after it recognizes wakeword.
-
 
 
 ### 🎚️ Noise Filter
