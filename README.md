@@ -23,7 +23,7 @@
 Install AIAvatarKit.
 
 ```sh
-pip install git+https://github.com/uezo/aiavatarkit.git@v0.6.3
+pip install git+https://github.com/uezo/aiavatarkit.git@v0.6.4
 ```
 
 **NOTE:** Since technical blogs assume [v0.5.8](https://github.com/uezo/aiavatarkit/tree/v0.5.8), the PyPI version will remain based on v0.5.8 during the transition period. We plan to update to the v0.6 series around May 2025.
@@ -72,6 +72,7 @@ Feel free to enjoy the conversation afterwards!
 - [🤿 Deep Dive](#-deep-dive)
     - [⚡️ Function Calling](#️-function-calling)
     - [👀 Vision](#-vision)
+    - [💾 Long-term Memory](#-long-term-memory)
     - [🐓 Wakeword](#-wakeword-listener)
     - [🔈 Audio Device](#-audio-device)
     - [💫 Streaming API](#-streaming-api)
@@ -520,6 +521,56 @@ async def get_image_url(source: str) -> str:
         return b64_url
 ```
 
+
+### 💾 Long-term Memory
+
+To recall information from past conversations across different contexts, a long-term memory service is used.
+
+To store conversation history, define a function decorated with `@aiavatar_app.sts.on_finish`. To retrieve memories from the conversation history, call the search function of the long-term memory service as a tool.
+
+Below is an example using [ChatMemory](https://github.com/uezo/chatmemory).
+
+```python
+# Create client for ChatMemory
+from examples.misc.chatmemory import ChatMemoryClient
+chat_memory_client = ChatMemoryClient(
+    base_url="http://your_chatmemory_host",
+    debug=True
+)
+
+# Add messages to ChatMemory service
+@aiavatar_app.sts.on_finish
+async def on_finish(request, response):
+    try:
+        await chat_memory_client.enqueue_messages(request, response)
+    except Exception as ex:
+        print(ex)
+
+# Retrieve memory by calling tool
+search_memory_tool_spec = {
+    "type": "function",
+    "function": {
+        "name": "search_memory",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"}
+            },
+        },
+    }
+}
+@aiavatar_app.sts.llm.tool(search_memory_tool_spec)
+async def search_memory(query: str, metadata: dict = None):
+    """Search long-term memory
+
+    Args:
+        query: Query to search memory.
+    """
+    result = await chat_memory_client.search(metadata["user_id"], query)
+    return result.__dict__
+```
+
+
 ### 🐓 Wakeword
 
 Set `wakewords` when instantiating `AIAvatar`. Conversation will start when the AIAvatar recognizes one of the words in this list. You can also set `wakeword_timeout`, after which the AIAvatar will return to listening for the wakeword again.
@@ -688,6 +739,8 @@ data: {"type": "final", "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d", "u
 To continue the conversation, include the `context_id` provided in the `start` response in your next request.
 
 **NOTE:** When using the RESTful API, voice activity detection (VAD) must be performed client-side.
+
+**NOTE:** To protect API with API Key, set `api_key=API_KEY_YOU_MAKE` to AIAvatarHttpServer and send `Authorization: Bearer {API_KEY_YOU_MAKE}` as HTTP header from client.
 
 
 ### 🔌 WebSocket

@@ -16,7 +16,7 @@ class AIAvatarRequest(BaseModel):
     context_id: Optional[str] = None
     text: Optional[str] = None
     audio_data: Optional[Union[bytes, str]] = None
-    files: List[Dict[str, str]] = None
+    files: Optional[List[Dict[str, str]]] = None
     metadata: Optional[Dict] = None
 
 
