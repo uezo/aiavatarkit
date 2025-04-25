@@ -23,7 +23,7 @@
 Install AIAvatarKit.
 
 ```sh
-pip install git+https://github.com/uezo/aiavatarkit.git@v0.6.3
+pip install git+https://github.com/uezo/aiavatarkit.git@v0.6.4
 ```
 
 **NOTE:** Since technical blogs assume [v0.5.8](https://github.com/uezo/aiavatarkit/tree/v0.5.8), the PyPI version will remain based on v0.5.8 during the transition period. We plan to update to the v0.6 series around May 2025.
@@ -688,6 +688,8 @@ data: {"type": "final", "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d", "u
 To continue the conversation, include the `context_id` provided in the `start` response in your next request.
 
 **NOTE:** When using the RESTful API, voice activity detection (VAD) must be performed client-side.
+
+**NOTE:** To protect API with API Key, set `api_key=API_KEY_YOU_MAKE` to AIAvatarHttpServer and send `Authorization: Bearer {API_KEY_YOU_MAKE}` as HTTP header from client.
 
 
 ### 🔌 WebSocket
