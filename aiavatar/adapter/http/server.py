@@ -2,8 +2,9 @@ import base64
 import logging
 import re
 from typing import List
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sse_starlette.sse import EventSourceResponse   # pip install sse-starlette
 from litests import LiteSTS
 from litests.models import STSRequest, STSResponse
@@ -39,6 +40,7 @@ class AIAvatarHttpServer(Adapter):
         wakewords: List[str] = None,
         wakeword_timeout: float = 60.0,
         performance_recorder: PerformanceRecorder = None,
+        api_key: str = None,
         # Debug
         debug: bool = False            
     ):
@@ -69,6 +71,18 @@ class AIAvatarHttpServer(Adapter):
         # Debug
         self.debug = debug
 
+        # API Key
+        self.api_key = api_key
+        self._bearer_scheme = HTTPBearer(auto_error=False)
+
+    def api_key_auth(self, credentials: HTTPAuthorizationCredentials):
+        if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != self.api_key:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or missing API Key",
+            )
+        return credentials.credentials
+
     def parse_avatar_control_request(self, text: str) -> AvatarControlRequest:
         avreq = AvatarControlRequest()
 
@@ -93,14 +107,21 @@ class AIAvatarHttpServer(Adapter):
 
     def get_api_router(self, path: str = "/chat"):
         router = APIRouter()
+        bearer_scheme = HTTPBearer(auto_error=False)
 
         @router.post(path)
-        async def post_chat(request: AIAvatarRequest):
+        async def post_chat(
+            request: AIAvatarRequest,
+            credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
+        ):
             if not request.session_id:
                 return JSONResponse(
                     status_code=400,
                     content={"error": "session_id is required."}
                 )
+
+            if self.api_key:
+                self.api_key_auth(credentials)
 
             async def stream_response():
                 if request.audio_data:
