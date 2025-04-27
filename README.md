@@ -23,7 +23,7 @@
 Install AIAvatarKit.
 
 ```sh
-pip install git+https://github.com/uezo/aiavatarkit.git@v0.6.4
+pip install git+https://github.com/uezo/aiavatarkit.git@v0.6.5
 ```
 
 **NOTE:** Since technical blogs assume [v0.5.8](https://github.com/uezo/aiavatarkit/tree/v0.5.8), the PyPI version will remain based on v0.5.8 during the transition period. We plan to update to the v0.6 series around May 2025.
