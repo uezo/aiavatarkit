@@ -125,7 +125,8 @@ class AIAvatarWebSocketServer(WebSocketAdapter):
                 context_id=request.context_id,
                 text=request.text,
                 audio_data=request.audio_data,
-                files=request.files
+                files=request.files,
+                system_prompt_params=request.system_prompt_params
             )):
                 await self.sts.handle_response(r)
 
