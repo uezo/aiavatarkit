@@ -70,6 +70,7 @@ class AIAvatarHttpClient(AIAvatarClientBase):
                 text=None,
                 audio_data=data,
                 files=[],
+                system_prompt_params={},
                 metadata={}
             ))
 

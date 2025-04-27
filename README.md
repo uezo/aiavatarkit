@@ -584,6 +584,32 @@ aiavatar_app = AIAvatar(
 ```
 
 
+### 📋 System Prompt Parameters
+
+You can embed parameters into your system prompt dynamically.
+
+First, define your `AIAvatar` instance with a system prompt containing placeholders:
+
+```python
+aiavatar_app = AIAvatar(
+    openai_api_key="YOUR_OPENAI_API_KEY",
+    model="gpt-4o",
+    system_prompt="User's name is {name}."
+)
+```
+
+When invoking, pass the parameters as a dictionary using `system_prompt_params`:
+
+```python
+aiavatar_app.sts.invoke(STSRequest(
+    # (other fields omitted)
+    system_prompt_params={"name": "Nekochan"}
+))
+```
+
+Placeholders in the system prompt, such as `{name}`, will be replaced with the corresponding values at runtime.
+
+
 ### 🔈 Audio device
 
 You can specify the audio devices to be used in components by device index.
