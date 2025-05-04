@@ -78,7 +78,6 @@ Feel free to enjoy the conversation afterwards!
     - [💫 Streaming API](#-streaming-api)
     - [🔌 WebSocket](#-websocket)
     - [🎭 Custom Behavior](#-custom-behavior)
-    - [🧩 RESTful APIs](#-restful-apis)
     - [🎚️ Noise Filter](#-noise-filter)
 
 
@@ -455,10 +454,156 @@ weather_tool_spec = {
 }
 
 # Implement tool and register it with spec
-@aiavatar_app.sts.llm.tool(weather_tool_spec)    # NOTE: Gemini doesn't take spec as argument
+@aiavatar_app.sts.llm.tool(weather_tool_spec)
 async def get_weather(location: str = None):
     weather = await weather_api(location=location)  # Call weather API
     return weather  # {"weather": "clear", "temperature": 23.4}
+```
+
+#### Dynamic Tool Call
+
+AIAvatarKit supports **dynamic Tool Calls**.
+When many tools are loaded up-front, it becomes harder to make the model behave as intended and your system instructions explode in size. With AIAvatarKit’s **Dynamic Tool Call** mechanism you load **only the tools that are actually needed at the moment**, eliminating that complexity.
+
+The overall flow is illustrated below.
+
+![Dynamic Tool Call Mechanism](documents/images/dynamic_tool_call.png)
+
+##### 1. Create the tool definitions and implementations  
+*(exactly the same as with ordinary tools)*
+
+```python
+# Weather
+get_weather_spec = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get weather info at the specified location",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location": {"type": "string"}
+            }
+        },
+    }
+}
+
+async def get_weather(location: str):
+    resp = await weather_api(location)
+    return resp.json() # e.g. {"weather": "clear", "temperature": 23.4}
+
+# Web Search
+search_web_spec = {
+    "type": "function",
+    "function": {
+        "name": "search_web",
+        "description": "Search info from the internet websites",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"}
+            }
+        },
+    }
+}
+async def search_web(query: str) -> str:
+    resp = await web_search_api(query)
+    return resp.json() # e.g. {"results": [{...}]}
+```
+
+##### 2. Register the tools as dynamic in the AIAvatarKit LLM service
+
+Setting `is_dynamic=True` tells the framework not to expose the tool by default;
+AIAvatarKit will inject it only when the Trigger Detection Tool decides the tool is relevant.
+You can also supply an `instruction` string that will be spliced into the system prompt on-the-fly.
+
+```python
+from litests.llm import Tool
+
+llm = aiavatar_app.sts.llm
+
+# Turn on Dynamic Tool Mode
+llm.use_dynamic_tools = True
+
+# Register as Dynamic Tools
+llm.tools["get_weather"] = Tool(
+    "get_weather",
+    get_weather_spec,
+    get_weather,
+    instruction=(
+        "## Use of `get_weather`\n\n"
+        "Call this tool to obtain current weather or a forecast. "
+        "Argument:\n"
+        "- `location`: city name or geo-hash."
+    ),
+    is_dynamic=True,
+)
+
+llm.tools["search_web"] = Tool(
+    "search_web",
+    search_web_spec,
+    search_web,
+    instruction=(
+        "## Use of `search_web`\n\n"
+        "Call this tool to look up information on the public internet. "
+        "Argument:\n"
+        "- `query`: keywords describing what you want to find."
+    ),
+    is_dynamic=True,
+)
+```
+
+##### 3. Tweak the system prompt so the model knows how to use tools
+
+Append a concise “How to use external tools” section (example below).
+Replace the example tools with those your application actually relies on for smoother behaviour.
+
+
+```md
+## Use of External Tools
+
+When external tools, knowledge, or data are required to process a user's request, use the appropriate tools.  
+The following rules **must be strictly followed** when using tools.
+
+### Arguments
+
+- Use only arguments that are **explicitly specified by the user** or that can be **reliably inferred from the conversation history**.
+- **If information is missing**, ask the user for clarification or use other tools to retrieve the necessary data.
+- **It is strictly forbidden** to use values as arguments that are not based on the conversation.
+
+### Tool Selection
+
+When a specialized tool is available for a specific purpose, use that tool.  
+If you can use only `execute_external_tool`, use it.
+
+Examples where external tools are needed:
+
+- Retrieving weather information  
+- Retrieving memory from past conversations  
+- Searching for, playing, or otherwise controlling music  
+- Performing web searches  
+- Accessing real-world systems or data to provide better solutions
+```
+
+With these three steps, your AI agent stays lean—loading only what it needs—while still having immediate access to a rich arsenal of capabilities whenever they’re truly required.
+
+
+##### Custom Tool Repository
+
+By default AIAvatarKit simply hands the **entire list of dynamic tools** to the LLM and lets the model decide which ones match the current context. This approach works for a moderate number of tools, but the size of the prompt places a hard limit on how many candidates you can include.
+
+For larger-scale systems, pair AIAvatarKit with a retrieval layer (e.g., a vector-search index) so that, out of thousands of available tools, only the handful that are truly relevant are executed.
+
+AIAvatarKit supports this pattern through the `get_dynamic_tools` hook.
+Register an async function decorated with `@llm.get_dynamic_tools`; it should return a list of **tool specification objects** for the current turn.
+
+```python
+@llm.get_dynamic_tools
+async def my_get_dynamic_tools(messages: list, metadata: dict) -> list:
+    # Retrieve candidate tools from your vector database (or any other store)
+    tools = await search_tools_from_vector_db(messages, metadata)
+    # Extract and return the spec objects (not the implementations)
+    return [t.spec for t in tools]
 ```
 
 
@@ -836,64 +981,6 @@ async def on_chunk_response(response):
     if response.metadata.get("is_first_chunk"):
         aiavatar_app.adapter.face_controller.reset()
 ```
-
-
-### 🧩 RESTful APIs
-
-**NOTE:** Not ready for v0.6.x
-
-You can control AIAvatar via RESTful APIs. The provided functions are:
-
-- Lister
-    - start: Start Listener
-    - stop: Stop Listener
-    - status: Show status of Listener
-
-- Avatar
-    - face: Set face expression
-    - animation: Set animation
-
-- System
-    - log: Show recent logs
-
-To use REST APIs, create API app and set router instead of calling `aiavatar_app.start_listening()`.
-
-```python
-from fastapi import FastAPI
-from aiavatar import AIAvatar
-from aiavatar.api.router import get_router
-
-aiavatar_app = AIAvatar(
-    openai_api_key=OPENAI_API_KEY
-)
-
-# aiavatar_app.start_listening()
-
-# Create API app and set router
-api = FastAPI()
-api_router = get_router(aiavatar_app, "aiavatar.log")
-api.include_router(api_router)
-```
-
-Start API with uvicorn.
-
-```bash
-$ uvicorn run:api
-```
-
-Call `/wakeword/start` to start wakeword listener.
-
-```bash
-$ curl -X 'POST' \
-  'http://127.0.0.1:8000/wakeword/start' \
-  -H 'accept: application/json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "wakewords": []
-}'
-```
-
-See API spec and try it on http://127.0.0.1:8000/docs .
 
 
 ### 🎚️ Noise Filter
