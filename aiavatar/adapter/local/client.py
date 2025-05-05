@@ -1,14 +1,14 @@
 import logging
 import re
 from typing import List
-from litests.models import STSRequest, STSResponse
-from litests.pipeline import LiteSTS
-from litests.vad import SpeechDetector
-from litests.stt import SpeechRecognizer
-from litests.stt.openai import OpenAISpeechRecognizer
-from litests.llm import LLMService
-from litests.tts import SpeechSynthesizer
-from litests.performance_recorder import PerformanceRecorder
+from ...sts.models import STSRequest, STSResponse
+from ...sts.pipeline import STSPipeline
+from ...sts.vad import SpeechDetector
+from ...sts.stt import SpeechRecognizer
+from ...sts.stt.openai import OpenAISpeechRecognizer
+from ...sts.llm import LLMService
+from ...sts.tts import SpeechSynthesizer
+from ...sts.performance_recorder import PerformanceRecorder
 from ...device import NoiseLevelDetector
 from ..models import AvatarControlRequest, AIAvatarResponse
 from ..client import AIAvatarClientBase
@@ -21,7 +21,7 @@ class AIAvatar(AIAvatarClientBase):
         self,
         *,
         # STS Pipeline components
-        sts: LiteSTS = None,
+        sts: STSPipeline = None,
         vad: SpeechDetector = None,
         stt: SpeechRecognizer = None,
         llm: LLMService = None,
@@ -70,7 +70,7 @@ class AIAvatar(AIAvatarClientBase):
         )
 
         # Speech-to-Speech pipeline
-        self.sts = sts or LiteSTS(
+        self.sts = sts or STSPipeline(
             vad=vad,
             vad_volume_db_threshold=volume_db_threshold,
             vad_silence_duration_threshold=silence_duration_threshold,

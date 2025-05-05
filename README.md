@@ -23,10 +23,11 @@
 Install AIAvatarKit.
 
 ```sh
-pip install git+https://github.com/uezo/aiavatarkit.git@v0.6.6
+pip install aiavatar
 ```
 
-**NOTE:** Since technical blogs assume [v0.5.8](https://github.com/uezo/aiavatarkit/tree/v0.5.8), the PyPI version will remain based on v0.5.8 during the transition period. We plan to update to the v0.6 series around May 2025.
+**NOTE:** If the steps in technical blogs don’t work as expected, the blog may be based on a version prior to v0.6. Some features may be limited, but you can try downgrading with `pip install aiavatar==0.5.8` to match the environment described in the blog.
+
 
 Make the script as `run.py`.
 
@@ -50,6 +51,34 @@ $ python run.py
 Conversation will start when you say the wake word "こんにちは" (or "Hello" when language is not `ja-JP`).
 
 Feel free to enjoy the conversation afterwards!
+
+
+## 🔄 Migration Guide: From v0.6.x to v0.7.0
+
+In version **v0.7.0**, the internal Speech-to-Speech pipeline previously provided by the external `LiteSTS` library has been fully integrated into AIAvatarKit.
+
+### What Changed?
+
+- The functionality remains the same — **no API behavior changes**.
+- However, **import paths have been updated**.
+
+### 🔧 Required Changes
+
+All imports from `litests` should now be updated to `aiavatar.sts`.
+
+For example:
+
+```python
+# Before
+from litests import STSRequest, STSResponse
+from litests.llm.chatgpt import ChatGPTService
+
+# After
+from aiavatar.sts import STSRequest, STSResponse
+from aiavatar.sts.llm.chatgpt import ChatGPTService
+```
+
+This change ensures compatibility with the new internal structure and removes the need for `LiteSTS` as a separate dependency.
 
 
 ## 🔖 Contents
@@ -88,7 +117,7 @@ You can set model and system prompt when instantiate `AIAvatar`.
 ```python
 aiavatar_app = AIAvatar(
     openai_api_key="YOUR_OPENAI_API_KEY",
-    model="gpt-4o",
+    openai_model="gpt-4o",
     system_prompt="You are my cat."
 )
 ```
@@ -99,7 +128,7 @@ If you want to configure in detail, create instance of `ChatGPTService` with cus
 
 ```python
 # Create ChatGPTService
-from litests.llm.chatgpt import ChatGPTService
+from aiavatar.sts.llm.chatgpt import ChatGPTService
 llm = ChatGPTService(
     openai_api_key=OPENAI_API_KEY,
     model="gpt-4o",
@@ -120,7 +149,7 @@ Create instance of `ClaudeService` with custom parameters and set it to `AIAvata
 
 ```python
 # Create ClaudeService
-from litests.llm.claude import ClaudeService
+from aiavatar.sts.llm.claude import ClaudeService
 llm = ClaudeService(
     anthropic_api_key=ANTHROPIC_API_KEY,
     model="claude-3-7-sonnet-20250219",
@@ -145,7 +174,7 @@ Create instance of `GeminiService` with custom parameters and set it to `AIAvata
 ```python
 # Create GeminiService
 # pip install google-generativeai
-from litests.llm.gemini import GeminiService
+from aiavatar.sts.llm.gemini import GeminiService
 llm = GeminiService(
     gemini_api_key=GEMINI_API_KEY,
     model="gemini-2.0-pro-latest",
@@ -169,7 +198,7 @@ You can use the Dify API instead of a specific LLM's API. This eliminates the ne
 
 ```python
 # Create DifyService
-from litests.llm.dify import DifyService
+from aiavatar.sts.llm.dify import DifyService
 llm = DifyService(
     api_key=DIFY_API_KEY,
     base_url=DIFY_URL,
@@ -209,7 +238,7 @@ Here is the example for [AivisSpeech](https://aivis-project.com).
 
 ```python
 # Create VoicevoxSpeechSynthesizer with AivisSpeech configurations
-from litests.tts.voicevox import VoicevoxSpeechSynthesizer
+from aiavatar.sts.tts.voicevox import VoicevoxSpeechSynthesizer
 tts = VoicevoxSpeechSynthesizer(
     base_url="http://127.0.0.1:10101",  # Your AivisSpeech API server
     speaker="888753761"   # Anneli
@@ -225,10 +254,10 @@ aiavatar_app = AIAvatar(
 You can also set speech controller that uses alternative Text-to-Speech services. We support Azure, Google, OpenAI and any other TTS services supported by [SpeechGateway](https://github.com/uezo/speech-gateway) such as Style-Bert-VITS2 and NijiVoice.
 
 ```python
-from litests.tts.azure import AzureSpeechSynthesizer
-from litests.tts.google import GoogleSpeechSynthesizer
-from litests.tts.openai import OpenAISpeechSynthesizer
-from litests.tts.speech_gateway import SpeechGatewaySpeechSynthesizer
+from aiavatar.sts.tts.azure import AzureSpeechSynthesizer
+from aiavatar.sts.tts.google import GoogleSpeechSynthesizer
+from aiavatar.sts.tts.openai import OpenAISpeechSynthesizer
+from aiavatar.sts.tts.speech_gateway import SpeechGatewaySpeechSynthesizer
 ```
 
 You can also make custom tts components by impelemting `SpeechSynthesizer` interface.
@@ -242,7 +271,7 @@ NOTE: **`AzureSpeechRecognizer` is much faster** than Google and OpenAI(default)
 
 ```python
 # Create AzureSpeechRecognizer
-from litests.stt.azure import AzureSpeechRecognizer
+from aiavatar.sts.stt.azure import AzureSpeechRecognizer
 stt = AzureSpeechRecognizer(
     azure_api_key=AZURE_API_KEY,
     azure_region=AZURE_REGION
@@ -518,7 +547,7 @@ AIAvatarKit will inject it only when the Trigger Detection Tool decides the tool
 You can also supply an `instruction` string that will be spliced into the system prompt on-the-fly.
 
 ```python
-from litests.llm import Tool
+from aiavatar.sts.llm import Tool
 
 llm = aiavatar_app.sts.llm
 

@@ -5,7 +5,7 @@ import re
 import traceback
 from fastapi import APIRouter
 from fastapi.responses import Response
-from litests.models import STSRequest
+from aiavatar.sts.models import STSRequest
 from aiavatar import AIAvatar, AIAvatarResponse
 from .schema import *
 

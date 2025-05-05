@@ -7,14 +7,14 @@ from uuid import uuid4
 import httpx
 import numpy
 import pyautogui
-from litests.tts.voicevox import VoicevoxSpeechSynthesizer
+from aiavatar.sts.tts.voicevox import VoicevoxSpeechSynthesizer
 from aiavatar.adapter.http.client import AIAvatarHttpClient as AIAvatar, AIAvatarResponse
 from aiavatar.animation import AnimationControllerDummy
 from aiavatar.face import FaceControllerDummy
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 INPUT_VOICE_SAMPLE_RATE = 24000 # VOICEVOX
-
+HTTP_SERVER_URL = os.getenv("HTTP_SERVER_URL")
 
 class FaceControllerForTest(FaceControllerDummy):
     def __init__(self, debug = False):
@@ -43,6 +43,7 @@ class AnimationControllerTest(AnimationControllerDummy):
 @pytest.fixture
 def aiavatar_app():
     return AIAvatar(
+        url=HTTP_SERVER_URL,
         face_controller=FaceControllerForTest(),
         animation_controller=AnimationControllerTest(),
         debug=True

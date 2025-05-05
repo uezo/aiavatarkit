@@ -2,20 +2,20 @@ import base64
 import logging
 import re
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sse_starlette.sse import EventSourceResponse   # pip install sse-starlette
-from litests import LiteSTS
-from litests.models import STSRequest, STSResponse
-from litests.adapter import Adapter
-from litests.vad import SpeechDetectorDummy
-from litests.stt import SpeechRecognizer
-from litests.stt.openai import OpenAISpeechRecognizer
-from litests.llm import LLMService
-from litests.tts import SpeechSynthesizer
-from litests.performance_recorder import PerformanceRecorder
+from ...sts import STSPipeline
+from ...sts.models import STSRequest, STSResponse
+from ...sts.vad import SpeechDetectorDummy
+from ...sts.stt import SpeechRecognizer
+from ...sts.stt.openai import OpenAISpeechRecognizer
+from ...sts.llm import LLMService
+from ...sts.tts import SpeechSynthesizer
+from ...sts.performance_recorder import PerformanceRecorder
 from ..models import AvatarControlRequest, AIAvatarRequest, AIAvatarResponse
+from .. import Adapter
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +24,8 @@ class AIAvatarHttpServer(Adapter):
     def __init__(
         self,
         *,
-        sts: LiteSTS = None,
         # STS Pipeline components
+        sts: STSPipeline = None,
         stt: SpeechRecognizer = None,
         llm: LLMService = None,
         tts: SpeechSynthesizer = None,
@@ -45,7 +45,7 @@ class AIAvatarHttpServer(Adapter):
         debug: bool = False            
     ):
         # Speech-to-Speech pipeline
-        self.sts = sts or LiteSTS(
+        self.sts = sts or STSPipeline(
             vad=SpeechDetectorDummy(),
             stt=stt or OpenAISpeechRecognizer(
                 openai_api_key=openai_api_key,
