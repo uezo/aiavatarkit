@@ -8,7 +8,7 @@ from uuid import uuid4
 import httpx
 import numpy
 import pyautogui
-from litests.tts.voicevox import VoicevoxSpeechSynthesizer
+from aiavatar.sts.tts.voicevox import VoicevoxSpeechSynthesizer
 from aiavatar import AIAvatar, AIAvatarResponse
 from aiavatar.animation import AnimationControllerDummy
 from aiavatar.face import FaceControllerDummy

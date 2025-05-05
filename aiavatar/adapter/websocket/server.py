@@ -1,18 +1,19 @@
+from abc import abstractmethod
 import base64
 import logging
 import re
-from typing import List
-from fastapi import WebSocket
-from litests.models import STSRequest, STSResponse
-from litests.pipeline import LiteSTS
-from litests.adapter.websocket import WebSocketAdapter, WebSocketSessionData
-from litests.vad import SpeechDetector
-from litests.stt import SpeechRecognizer
-from litests.stt.openai import OpenAISpeechRecognizer
-from litests.llm import LLMService
-from litests.tts import SpeechSynthesizer
-from litests.performance_recorder import PerformanceRecorder
+from typing import List, Dict
+from fastapi import APIRouter, WebSocket
+from ...sts.models import STSRequest, STSResponse
+from ...sts.pipeline import STSPipeline
+from ...sts.vad import SpeechDetector
+from ...sts.stt import SpeechRecognizer
+from ...sts.stt.openai import OpenAISpeechRecognizer
+from ...sts.llm import LLMService
+from ...sts.tts import SpeechSynthesizer
+from ...sts.performance_recorder import PerformanceRecorder
 from ..models import AvatarControlRequest, AIAvatarRequest, AIAvatarResponse
+from ..base import Adapter
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +24,11 @@ class WebSocketSessionData:
         self.data = {}
 
 
-class AIAvatarWebSocketServer(WebSocketAdapter):
+class AIAvatarWebSocketServer(Adapter):
     def __init__(
         self,
         *,
-        sts: LiteSTS = None,
+        sts: STSPipeline = None,
         # STS Pipeline components
         vad: SpeechDetector = None,
         stt: SpeechRecognizer = None,
@@ -50,7 +51,7 @@ class AIAvatarWebSocketServer(WebSocketAdapter):
         debug: bool = False
     ):
         # Speech-to-Speech pipeline
-        self.sts = sts or LiteSTS(
+        self.sts = sts or STSPipeline(
             vad=vad,
             vad_volume_db_threshold=volume_db_threshold,
             vad_silence_duration_threshold=silence_duration_threshold,
@@ -75,6 +76,8 @@ class AIAvatarWebSocketServer(WebSocketAdapter):
 
         # Call base after self.sts is set
         super().__init__(self.sts)
+        self.websockets: Dict[str, WebSocket] = {}
+        self.sessions: Dict[str, WebSocketSessionData] = {}
 
         # Debug
         self.debug = debug
@@ -212,3 +215,35 @@ class AIAvatarWebSocketServer(WebSocketAdapter):
             session_id=session_id,
             context_id=context_id
         ))
+
+    def get_websocket_router(self, path: str = "/ws"):
+        router = APIRouter()
+
+        @router.websocket(path)
+        async def websocket_endpoint(websocket: WebSocket):
+            await websocket.accept()
+            session_data = WebSocketSessionData()
+
+            try:
+                while True:
+                    await self.process_websocket(websocket, session_data)
+
+            except Exception as ex:
+                error_message = str(ex)
+
+                if "WebSocket is not connected" in error_message:
+                    logger.info(f"WebSocket disconnected (1): context_id={session_data.id}")
+                elif "<CloseCode.NO_STATUS_RCVD: 1005>" in error_message:
+                    logger.info(f"WebSocket disconnected (2): context_id={session_data.id}")
+                else:
+                    raise
+
+            finally:
+                if session_data.id:
+                    await self.sts.finalize(session_data.id)
+                    if session_data.id in self.websockets:
+                        del self.websockets[session_data.id]
+                    if session_data.id in self.sessions:
+                        del self.sessions[session_data.id]
+
+        return router

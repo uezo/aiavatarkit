@@ -1,7 +1,7 @@
 import base64
 import logging
 import httpx
-from litests.vad import SpeechDetector, StandardSpeechDetector
+from ...sts.vad import SpeechDetector, StandardSpeechDetector
 from .. import AIAvatarRequest, AIAvatarResponse
 from ..client import AIAvatarClientBase
 from ...device import NoiseLevelDetector
