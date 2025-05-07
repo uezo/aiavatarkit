@@ -1,9 +1,10 @@
+import asyncio
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, AsyncGenerator, Tuple
 from uuid import uuid4
 import pytest
-from aiavatar.sts.llm.claude import ClaudeService, ToolCall
+from aiavatar.sts.llm.claude import ClaudeService, ToolCall, Tool
 
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
 MODEL = "claude-3-5-sonnet-latest"
@@ -231,6 +232,87 @@ async def test_claude_service_tool_calls():
 
     async for resp in service.chat_stream(context_id, "test_user", user_message):
         collected_text.append(resp.text)
+
+    # Check context
+    messages = await service.context_manager.get_histories(context_id)
+    assert len(messages) == 4
+
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"] == [{"type": "text", "text": user_message}]
+
+    assert messages[1]["role"] == "assistant"
+    tool_use_content_index = len(messages[1]["content"][0]) - 1
+    assert messages[1]["content"][tool_use_content_index]["type"] == "tool_use"
+    assert messages[1]["content"][tool_use_content_index]["name"] == "solve_math"
+    tool_use_id = messages[1]["content"][tool_use_content_index]["id"]
+
+    assert messages[2]["role"] == "user"
+    assert messages[2]["content"][0]["type"] == "tool_result"
+    assert messages[2]["content"][0]["tool_use_id"] == tool_use_id
+    assert messages[2]["content"][0]["content"] == json.dumps({"answer": 2})
+
+    assert messages[3]["role"] == "assistant"
+    assert "2" in messages[3]["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_claude_service_tool_calls_iter():
+    """
+    Test ClaudeService with a registered tool that returns iteration.
+    The conversation might trigger the tool call, then the tool's result is fed back.
+    This is just an example. The actual trigger depends on the model response.
+    """
+    service = ClaudeService(
+        anthropic_api_key=CLAUDE_API_KEY,
+        system_prompt="You can call a tool to solve math problems if necessary.",
+        model=MODEL,
+        temperature=0.5
+    )
+    context_id = f"test_context_tool_iter_{uuid4()}"
+
+    # Register tool
+    tool_spec = {
+        "name": "solve_math",
+        "description": "Solve simple math problems",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "problem": {"type": "string"}
+            },
+            "required": ["problem"]
+        }
+    }
+    @service.tool(tool_spec)
+    async def solve_math(problem: str) -> AsyncGenerator[Tuple[Dict[str, Any], bool], None]:
+        """
+        Tool function example: parse the problem and return a result.
+        """
+        yield {"message": "It takes long time..."}, False
+        await asyncio.sleep(3)
+        yield {"message": "Solved! Preparing answer..."}, False
+        if problem.strip() == "1+1":
+            yield {"answer": 2}, True
+        else:
+            yield {"answer": "unknown"}, True
+
+    @service.on_before_tool_calls
+    async def on_before_tool_calls(tool_calls: list[ToolCall]):
+        assert len(tool_calls) > 0
+
+    user_message = "次の問題を解いて: 1+1"
+    collected_text = []
+
+    progress = []
+    async for resp in service.chat_stream(context_id, "test_user", user_message):
+        if resp.tool_call:
+            if resp.tool_call.progress:
+                progress.append(resp.tool_call.progress)
+        collected_text.append(resp.text)
+
+    # Check progress
+    assert len(progress) == 2
+    assert progress[0]["message"] == "It takes long time..."
+    assert progress[1]["message"] == "Solved! Preparing answer..."
 
     # Check context
     messages = await service.context_manager.get_histories(context_id)
