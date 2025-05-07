@@ -3,17 +3,18 @@ import asyncio
 import inspect
 import logging
 import re
-from typing import AsyncGenerator, List, Dict, Any, Callable, Optional
+from typing import AsyncGenerator, List, Dict, Any, Callable, Optional, Tuple
 from .context_manager import ContextManager, SQLiteContextManager
 
 logger = logging.getLogger(__name__)
 
 
 class ToolCall:
-    def __init__(self, id: str = None, name: str = None, arguments: any = None):
+    def __init__(self, id: str = None, name: str = None, arguments: any = None, progress: dict = None):
         self.id = id
         self.name = name
         self.arguments = arguments
+        self.progress = progress
 
 
 class LLMResponse:
@@ -25,7 +26,7 @@ class LLMResponse:
 
 
 class Tool:
-    def __init__(self, name: str, spec: Dict[str, Any], func: Callable, instruction: str = None, is_dynamic: bool = False):
+    def __init__(self, name: str, spec: Dict[str, Any], func: Callable, instruction: str = None, is_dynamic: bool = False, is_stream: bool = False):
         self.name = name
         self.spec = spec
         self.func = func
@@ -145,11 +146,17 @@ The list of tools is as follows:
         clean_text = clean_text.strip()
         return clean_text
 
-    async def execute_tool(self, name: str, arguments: dict, metadata: dict):
+    async def execute_tool(self, name: str, arguments: dict, metadata: dict) -> AsyncGenerator[Tuple[dict, bool], None]:
         tool = self.tools[name]
         if "metadata" in inspect.signature(tool.func).parameters:
             arguments["metadata"] = metadata
-        return await tool.func(**arguments)
+        
+        tool_result = tool.func(**arguments)
+        if inspect.isasyncgen(tool_result):
+            async for r in tool_result:
+                yield r
+        else:
+            yield (await tool_result, True)
 
     async def chat_stream(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
         logger.info(f"User: {text}")

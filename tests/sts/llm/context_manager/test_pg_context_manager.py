@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import json
 import os
+from uuid import uuid4
 import pytest
 from aiavatar.sts.llm.context_manager.postgres import PostgreSQLContextManager
 
@@ -28,7 +29,7 @@ async def test_get_histories_empty(context_manager):
 
 @pytest.mark.asyncio
 async def test_add_and_get_histories(context_manager):
-    context_id = "test_context"
+    context_id = f"test_context_{uuid4()}"
     data_list = [
         {"message": "Hello, world!", "role": "user"},
         {"message": "Hi! How can I help you today?", "role": "assistant"}
@@ -47,7 +48,7 @@ async def test_add_and_get_histories(context_manager):
 
 @pytest.mark.asyncio
 async def test_get_histories_limit(context_manager):
-    context_id = "test_limit"
+    context_id = f"test_context_limit_{uuid4()}"
     data_list = [
         {"index": 1}, {"index": 2}, {"index": 3}, {"index": 4}, {"index": 5}
     ]
@@ -64,7 +65,7 @@ async def test_get_histories_limit(context_manager):
 
 @pytest.mark.asyncio
 async def test_get_histories_timeout(context_manager):
-    context_id = "test_timeout"
+    context_id = f"test_context_timeout_{uuid4()}"
     
     old_data = {"message": "Old data"}
     new_data = {"message": "New data"}

@@ -215,7 +215,14 @@ class ClaudeService(LLMService):
                     else:
                         tool_result = {"message": "No tools found"}
                 else:
-                    tool_result = await self.execute_tool(tc.name, arguments_json, {"user_id": user_id})
+                    async for tr, is_final in self.execute_tool(tc.name, arguments_json, {"user_id": user_id}):
+                        if is_final:
+                            tool_result = tr
+                            break
+                        else:
+                            tc.progress = tr
+                            yield LLMResponse(context_id=context_id, tool_call=tc)
+
                 if self.debug:
                     logger.info(f"ToolCall result: {tool_result}")
 

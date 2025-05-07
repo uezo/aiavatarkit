@@ -1,8 +1,9 @@
+import asyncio
 import os
-from typing import Any, Dict
+from typing import Any, Dict, AsyncGenerator, Tuple
 from uuid import uuid4
 import pytest
-from aiavatar.sts.llm.gemini import GeminiService, ToolCall
+from aiavatar.sts.llm.gemini import GeminiService, ToolCall, Tool
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MODEL = "gemini-2.0-flash"
@@ -235,6 +236,86 @@ async def test_gemini_service_tool_calls():
 
     async for resp in service.chat_stream(context_id, "test_user", user_message):
         collected_text.append(resp.text)
+
+    # Check context
+    messages = await service.context_manager.get_histories(context_id)
+    assert len(messages) == 4
+
+    assert messages[0]["role"] == "user"
+    assert messages[0]["parts"][0]["text"] == user_message
+
+    assert messages[1]["role"] == "model"
+    assert "function_call" in messages[1]["parts"][0]
+    assert messages[1]["parts"][0]["function_call"]["name"] == "solve_math"
+
+    assert messages[2]["role"] == "user"
+    assert "function_response" in messages[2]["parts"][0]
+    assert messages[2]["parts"][0]["function_response"] == {"id": None, "name": "solve_math", "response": {"answer": 2}}    # SDK doesn't set id
+
+    assert messages[3]["role"] == "model"
+    assert "2" in messages[3]["parts"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_gemini_service_tool_calls():
+    """
+    Test GeminiService with a registered tool that returns iteration.
+    The conversation might trigger the tool call, then the tool's result is fed back.
+    This is just an example. The actual trigger depends on the model response.
+    """
+    service = GeminiService(
+        gemini_api_key=GEMINI_API_KEY,
+        system_prompt="You can call a tool to solve math problems if necessary.",
+        model=MODEL,
+        temperature=0.5,
+    )
+    context_id = f"test_context_tool_iter_{uuid4()}"
+
+    # Register tool
+    tool_spec = {
+        "functionDeclarations": [{
+            "name": "solve_math",
+            "description": "Solve simple math problems",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "problem": {"type": "string"}
+                },
+                "required": ["problem"]
+            }
+        }]
+    }
+    @service.tool(tool_spec)
+    async def solve_math(problem: str) -> AsyncGenerator[Tuple[Dict[str, Any], bool], None]:
+        """
+        Tool function example: parse the problem and return a result.
+        """
+        yield {"message": "It takes long time..."}, False
+        await asyncio.sleep(3)
+        yield {"message": "Solved! Preparing answer..."}, False
+        if problem.strip() == "1+1":
+            yield {"answer": 2}, True
+        else:
+            yield {"answer": "unknown"}, True
+
+    @service.on_before_tool_calls
+    async def on_before_tool_calls(tool_calls: list[ToolCall]):
+        assert len(tool_calls) > 0
+
+    user_message = "次の問題を解いて: 1+1"
+    collected_text = []
+
+    progress = []
+    async for resp in service.chat_stream(context_id, "test_user", user_message):
+        if resp.tool_call:
+            if resp.tool_call.progress:
+                progress.append(resp.tool_call.progress)
+        collected_text.append(resp.text)
+
+    # Check progress
+    assert len(progress) == 2
+    assert progress[0]["message"] == "It takes long time..."
+    assert progress[1]["message"] == "Solved! Preparing answer..."
 
     # Check context
     messages = await service.context_manager.get_histories(context_id)
