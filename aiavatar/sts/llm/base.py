@@ -262,6 +262,11 @@ The list of tools is as follows:
 
         async for chunk in self.get_llm_stream_response(context_id, user_id, messages, system_prompt_params):
             if chunk.tool_call:
+                if stream_buffer:
+                    voice_text = to_voice_text(stream_buffer)
+                    yield LLMResponse(context_id, stream_buffer, voice_text)
+                    response_text += stream_buffer
+                    stream_buffer = ""
                 yield chunk
                 continue
 
