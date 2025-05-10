@@ -694,6 +694,19 @@ aiavatar_app.sts.llm.add_tool(
 **Note**: When you register a tool with `add_tool`, the spec is automatically converted to the correct format for GPT, Gemini, or Claude, so you can define it once and use it everywhere.
 
 
+Before creating your own tools, start with the example tools:
+
+```python
+# Google Search
+from examples.tools.gemini_websearch import GeminiWebSearchTool
+aiavatar_app.sts.llm.add_tool(GeminiWebSearchTool(gemini_api_key=GEMINI_API_KEY))
+
+# Web Scraper
+from examples.tools.webscraper import WebScraperTool
+aiavatar_app.sts.llm.add_tool(WebScraperTool())
+```
+
+
 ### ⌛️ Tool Call with Streaming Progress
 
 Sometimes you may want to provide feedback to the user when a tool takes time to execute. AIAvatarKit supports tools that return stream responses (via `AsyncGenerator`), which allows you to integrate advanced and costly operations — such as interactions with AI Agent frameworks — into real-time voice conversations without compromising the user experience.
