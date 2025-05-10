@@ -3,7 +3,7 @@ import base64
 import json
 import logging
 import websockets
-from .. import AIAvatarRequest, AIAvatarResponse
+from .. import AIAvatarRequest, AIAvatarResponse, AIAvatarException
 from ..client import AIAvatarClientBase
 
 logger = logging.getLogger(__name__)
@@ -78,6 +78,12 @@ class AIAvatarWebSocketClient(AIAvatarClientBase):
 
             if response.type == "chunk" and response.audio_data:
                 response.audio_data = base64.b64decode(response.audio_data)
+
+            if response.type == "error":
+                raise AIAvatarException(
+                    message=response.metadata.get("error", "Error in processing pipeline"),
+                    response=response
+                )
 
             await self.response_queue.put(response)
 

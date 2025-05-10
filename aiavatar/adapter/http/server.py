@@ -161,9 +161,10 @@ class AIAvatarHttpServer(Adapter):
                         aiavatar_response.metadata["tool_call"] = response.tool_call.__dict__
 
                     elif response.type == "final":
-                        if image_source_match := re.search(r"\[vision:(\w+)\]", response.text):
-                            aiavatar_response.type = "vision"
-                            aiavatar_response.metadata={"source": image_source_match.group(1)}
+                        if response.text:
+                            if image_source_match := re.search(r"\[vision:(\w+)\]", response.text):
+                                aiavatar_response.type = "vision"
+                                aiavatar_response.metadata={"source": image_source_match.group(1)}
 
                     elif response.type == "stop":
                         await self.stop_response(response)

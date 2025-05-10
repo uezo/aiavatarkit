@@ -10,7 +10,7 @@ from ...sts.llm import LLMService
 from ...sts.tts import SpeechSynthesizer
 from ...sts.performance_recorder import PerformanceRecorder
 from ...device import NoiseLevelDetector
-from ..models import AvatarControlRequest, AIAvatarResponse
+from ..models import AvatarControlRequest, AIAvatarResponse, AIAvatarException
 from ..client import AIAvatarClientBase
 
 logger = logging.getLogger(__name__)
@@ -155,6 +155,12 @@ class AIAvatar(AIAvatarClientBase):
                 if image_source_match := re.search(r"\[vision:(\w+)\]", response.text):
                     aiavatar_response.type = "vision"
                     aiavatar_response.metadata={"source": image_source_match.group(1)}
+
+        elif response.type == "error":
+            raise AIAvatarException(
+                message=response.metadata.get("error", "Error in processing pipeline"),
+                response=response
+            )
 
         await self.response_queue.put(aiavatar_response)
 

@@ -683,6 +683,29 @@ async def get_weather(location: str = None):
     return weather  # {"weather": "clear", "temperature": 23.4}
 ```
 
+Alternatively, register the same tool programmatically:
+
+```python
+aiavatar_app.sts.llm.add_tool(
+    Tool("get_weather", weather_tool_spec, get_weather)
+)
+```
+
+**Note**: When you register a tool with `add_tool`, the spec is automatically converted to the correct format for GPT, Gemini, or Claude, so you can define it once and use it everywhere.
+
+
+Before creating your own tools, start with the example tools:
+
+```python
+# Google Search
+from examples.tools.gemini_websearch import GeminiWebSearchTool
+aiavatar_app.sts.llm.add_tool(GeminiWebSearchTool(gemini_api_key=GEMINI_API_KEY))
+
+# Web Scraper
+from examples.tools.webscraper import WebScraperTool
+aiavatar_app.sts.llm.add_tool(WebScraperTool())
+```
+
 
 ### ⌛️ Tool Call with Streaming Progress
 
@@ -800,6 +823,17 @@ llm.tools["search_web"] = Tool(
     is_dynamic=True,
 )
 ```
+
+Or, register via `add_tool`.
+
+```python
+# Difine tool without `is_dynamic` for other use cases
+weather_tool = Tool("get_weather", get_weather_spec, get_weather, instruction="...")
+
+# Register tool via `add_tool` with `is_dynamic`
+llm.add_tool(weather_tool, is_dynamic=True)
+```
+
 
 #### 3. Tweak the system prompt so the model knows how to use tools
 

@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 import asyncio
+import copy
 import inspect
 import logging
 import re
@@ -26,12 +27,57 @@ class LLMResponse:
 
 
 class Tool:
-    def __init__(self, name: str, spec: Dict[str, Any], func: Callable, instruction: str = None, is_dynamic: bool = False, is_stream: bool = False):
+    def __init__(self, name: str, spec: Dict[str, Any], func: Callable, instruction: str = None, is_dynamic: bool = False):
         self.name = name
         self.spec = spec
         self.func = func
         self.instruction = instruction
         self.is_dynamic = is_dynamic
+
+    def parse_spec(self, spec: Dict[str, Any]) -> Tuple[str, str, Dict[str, Any]]:
+        if spec.get("type") == "function" and "function" in spec:
+            f = self.spec["function"]
+            return f["name"], f["description"], f["parameters"]
+        elif "functionDeclarations" in spec:
+            f = self.spec["functionDeclarations"][0]
+            return f["name"], f["description"], f["parameters"]
+        elif "input_schema" in spec:
+            return spec["name"], spec["description"], spec["input_schema"]
+
+        raise ValueError(f"Unknown tool spec format: {spec}")
+
+    def build_spec(self, llm_service_name: str, name: str, description: str, parameters: dict) -> Dict[str, Any]:
+        if "gpt" in llm_service_name.lower():
+            return {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description,
+                    "parameters": parameters
+                }
+            }
+        elif "gemini" in llm_service_name.lower():
+            return {
+                "functionDeclarations": [{
+                    "name": name,
+                    "description": description,
+                    "parameters": parameters
+                }]
+            }
+        elif "claude" in llm_service_name.lower():
+            return {
+                "name": name,
+                "description": description,
+                "input_schema": parameters
+            }
+
+        raise ValueError(f"Unknown LLM service: {llm_service_name}")
+
+    def clone_for(self, llm_service_name: str) -> "Tool":
+        tool = copy.copy(self)
+        n, d, p = self.parse_spec(self.spec)
+        tool.spec = self.build_spec(llm_service_name, n, d, p)
+        return tool
 
 
 class LLMService(ABC):
@@ -104,6 +150,14 @@ The list of tools is as follows:
         def decorator(func):
             return func
         return decorator
+
+    def add_tool(self, tool: Tool, is_dynamic: bool = False, use_original: bool = False):
+        if use_original:
+            tool_to_add = tool
+        else:
+            tool_to_add = tool.clone_for(self.__class__.__name__)
+            tool_to_add.is_dynamic = is_dynamic
+        self.tools[tool_to_add.name] = tool_to_add
 
     async def get_dynamic_tools(self, func):
         self._get_dynamic_tools = func
@@ -208,6 +262,11 @@ The list of tools is as follows:
 
         async for chunk in self.get_llm_stream_response(context_id, user_id, messages, system_prompt_params):
             if chunk.tool_call:
+                if stream_buffer:
+                    voice_text = to_voice_text(stream_buffer)
+                    yield LLMResponse(context_id, stream_buffer, voice_text)
+                    response_text += stream_buffer
+                    stream_buffer = ""
                 yield chunk
                 continue
 
