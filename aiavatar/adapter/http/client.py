@@ -2,7 +2,7 @@ import base64
 import logging
 import httpx
 from ...sts.vad import SpeechDetector, StandardSpeechDetector
-from .. import AIAvatarRequest, AIAvatarResponse
+from .. import AIAvatarRequest, AIAvatarResponse, AIAvatarException
 from ..client import AIAvatarClientBase
 from ...device import NoiseLevelDetector
 
@@ -115,6 +115,12 @@ class AIAvatarHttpClient(AIAvatarClientBase):
                         if response.voice_text:
                             logger.info(f"AI: {response.voice_text}")
                         response.audio_data = base64.b64decode(response.audio_data)
+
+                    elif response.type == "error":
+                        raise AIAvatarException(
+                            message=response.metadata.get("error", "Error in processing pipeline"),
+                            response=response
+                        )
 
                     await self.response_queue.put(response)
 

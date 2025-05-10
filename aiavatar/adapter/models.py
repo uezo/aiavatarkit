@@ -31,3 +31,9 @@ class AIAvatarResponse(BaseModel):
     avatar_control_request: Optional[AvatarControlRequest] = None
     audio_data: Optional[Union[bytes, str]] = None
     metadata: Optional[Dict] = None
+
+
+class AIAvatarException(Exception):
+    def __init__(self, message: str, response: AIAvatarResponse = None):
+        super().__init__(message)
+        self.response = response or None

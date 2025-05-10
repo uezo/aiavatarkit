@@ -363,11 +363,11 @@ class STSPipeline:
             logger.error(f"Error at invoke: {iex}\n\n{tb}")
 
             yield STSResponse(
-                type="final",
+                type="error",
                 session_id=request.session_id,
                 user_id=request.user_id,
                 context_id=request.context_id,
-                metadata={"error": f"Error at invoke: {iex}\n\n{tb}" if self.debug else "Error at invoke."}
+                metadata={"error": "Error in processing Speech-to-Speech pipeline"}
             )
 
     async def finalize(self, context_id: str):
