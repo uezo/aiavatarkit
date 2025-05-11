@@ -101,8 +101,8 @@ This change ensures compatibility with the new internal structure and removes th
 - [🥰 Face Expression](#-face-expression)
 - [💃 Animation](#-animation)
 
-- [🧩 API Reference]
-    - [💫 Streaming API](#-streaming-api)
+- [🧩 API](#-api)
+    - [💫 RESTful API (SSE)](#-restful-api-sse)
     - [🔌 WebSocket](#-websocket)
 
 - [⚡️ Tool Call](#️-tool-call)
