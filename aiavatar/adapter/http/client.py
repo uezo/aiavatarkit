@@ -15,6 +15,7 @@ class AIAvatarHttpClient(AIAvatarClientBase):
         *,
         # STS Pipeline server
         url: str = "http://localhost:8000/chat",
+        api_key: str = None,
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
@@ -89,6 +90,7 @@ class AIAvatarHttpClient(AIAvatarClientBase):
         self.noise_margin = noise_margin
 
         self.url = url
+        self.api_key = api_key
 
     async def send_request(self, request: AIAvatarRequest):
         if request.audio_data and isinstance(request.audio_data, bytes):
@@ -97,6 +99,7 @@ class AIAvatarHttpClient(AIAvatarClientBase):
         async with self.http_client.stream(
             method="post",
             url=self.url,
+            headers={"Authorization": f"Bearer {self.api_key}"} if self.api_key else None,
             json=request.model_dump()
         ) as response:
             if response.status_code != 200:
