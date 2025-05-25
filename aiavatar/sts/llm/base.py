@@ -10,12 +10,26 @@ from .context_manager import ContextManager, SQLiteContextManager
 logger = logging.getLogger(__name__)
 
 
+class ToolCallResult:
+    def __init__(self, data: dict = None, is_final: bool = True):
+        self.data = data or {}
+        self.is_final = is_final
+
+
 class ToolCall:
-    def __init__(self, id: str = None, name: str = None, arguments: any = None, progress: dict = None):
+    def __init__(self, id: str = None, name: str = None, arguments: any = None, result: ToolCallResult = None):
         self.id = id
         self.name = name
         self.arguments = arguments
-        self.progress = progress
+        self.result = result or ToolCallResult()
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "arguments": self.arguments,
+            "result": {"data": self.result.data, "is_final": self.result.is_final}
+        }
 
 
 class LLMResponse:
@@ -98,7 +112,7 @@ class LLMService(ABC):
         self.system_prompt = system_prompt
         self.model = model
         self.temperature = temperature
-        self.split_chars = split_chars or ["。", "？", "！", ". ", "?", "!"]
+        self.split_chars = split_chars or ["。", "？", "！", ". ", "?", "!", "\n"]
         self.option_split_chars = option_split_chars or ["、", ", "]
         self.option_split_threshold = option_split_threshold
         self.split_patterns = []
@@ -116,7 +130,17 @@ class LLMService(ABC):
 
 ## Important: Use of `{dynamic_tool_name}`
 
-Output **only Function / Tool call** parts. Exclude text content.
+When external tools, knowledge, or data are required to process a user's request, use the appropriate tools.  
+
+Examples where external tools are needed:
+
+- Performing web searches
+- Retrieving weather information
+- Retrieving memory from past conversations
+- Playing game
+- Any other cases that requires accessing real-world systems or data to provide better solutions
+
+**NOTE**: Say something before execute tool. (e.g. I will look it up on the web. Wait a moment.)
 
 """
         self.additional_prompt_for_tool_listing = """
@@ -179,6 +203,11 @@ The list of tools is as follows:
         else:
             return self.system_prompt.format(**system_prompt_params)
 
+    @property
+    @abstractmethod
+    def dynamic_tool_name(self) -> str:
+        pass
+
     @abstractmethod
     async def compose_messages(self, context_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
         pass
@@ -200,17 +229,22 @@ The list of tools is as follows:
         clean_text = clean_text.strip()
         return clean_text
 
-    async def execute_tool(self, name: str, arguments: dict, metadata: dict) -> AsyncGenerator[Tuple[dict, bool], None]:
+    async def execute_tool(self, name: str, arguments: dict, metadata: dict) -> AsyncGenerator[ToolCallResult, None]:
         tool = self.tools[name]
         if "metadata" in inspect.signature(tool.func).parameters:
             arguments["metadata"] = metadata
-        
+
         tool_result = tool.func(**arguments)
         if inspect.isasyncgen(tool_result):
             async for r in tool_result:
-                yield r
+                if isinstance(r, Tuple):
+                    yield ToolCallResult(data=r[0], is_final=r[1])
+                else:
+                    yield r
+        elif isinstance(tool_result, ToolCallResult):
+            yield await tool_result
         else:
-            yield (await tool_result, True)
+            yield ToolCallResult(data=await tool_result)
 
     async def chat_stream(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
         logger.info(f"User: {text}")
@@ -263,11 +297,17 @@ The list of tools is as follows:
         async for chunk in self.get_llm_stream_response(context_id, user_id, messages, system_prompt_params):
             if chunk.tool_call:
                 if stream_buffer:
+                    # Yield text content before tool call
                     voice_text = to_voice_text(stream_buffer)
                     yield LLMResponse(context_id, stream_buffer, voice_text)
                     response_text += stream_buffer
                     stream_buffer = ""
                 yield chunk
+
+                if chunk.tool_call.name == self.dynamic_tool_name:
+                    logger.info(f"self.dynamic_tool_name: {self.dynamic_tool_name}")
+                    # Clear text content for `execute_external_tool` not to be included in the context
+                    response_text = ""
                 continue
 
             stream_buffer += chunk.text
@@ -299,5 +339,5 @@ The list of tools is as follows:
             await self.update_context(
                 context_id,
                 messages[message_length_at_start - len(messages):],
-                response_text,
+                response_text.strip(),
             )

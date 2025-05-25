@@ -308,8 +308,8 @@ async def test_gemini_service_tool_calls():
     progress = []
     async for resp in service.chat_stream(context_id, "test_user", user_message):
         if resp.tool_call:
-            if resp.tool_call.progress:
-                progress.append(resp.tool_call.progress)
+            if resp.tool_call.result and not resp.tool_call.result.is_final:
+                progress.append(resp.tool_call.result.data)
         collected_text.append(resp.text)
 
     # Check progress

@@ -64,6 +64,10 @@ class ClaudeService(LLMService):
             }
         }
 
+    @property
+    def dynamic_tool_name(self) -> str:
+        return self.dynamic_tool_spec["name"]
+
     async def compose_messages(self, context_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
         messages = []
 
@@ -159,7 +163,7 @@ class ClaudeService(LLMService):
         elif self.use_dynamic_tools:
             filtered_tools = [self.dynamic_tool_spec]
             tool_instruction = self.dynamic_tool_instruction.format(
-                dynamic_tool_name=self.dynamic_tool_spec["name"]
+                dynamic_tool_name=self.dynamic_tool_name
             )
         else:
             filtered_tools = [t.spec for _, t in self.tools.items() if not t.is_dynamic] or []
@@ -179,7 +183,8 @@ class ClaudeService(LLMService):
                 if chunk.type == "content_block_start":
                     if chunk.content_block.type == "tool_use":
                         tool_calls.append(ToolCall(chunk.content_block.id, chunk.content_block.name, ""))
-                        if chunk.content_block.name == self.dynamic_tool_spec["name"]:
+                        yield LLMResponse(context_id=context_id, text="\n")    # Add "\n" to flush text content immediately
+                        if chunk.content_block.name == self.dynamic_tool_name:
                             logger.info("Get dynamic tool")
                             filtered_tools = await self._get_dynamic_tools(
                                 messages,
@@ -189,8 +194,14 @@ class ClaudeService(LLMService):
                             try_dynamic_tools = True
                 elif chunk.type == "content_block_delta":
                     if chunk.delta.type == "text_delta":
-                        if not try_dynamic_tools:
-                            response_text += chunk.delta.text
+                        response_text += chunk.delta.text
+                        if tools and messages[-1]["content"][0]["type"] != "tool_result":
+                            # Do not yield text content in the response for retrying request with retrieved tools
+                            # - Request with `execute_external_tool` -> "Wait a moment."
+                            # - Request with `google_search` -> "Wait a moment." <= **Skip this text content**
+                            # - Request with google_search result -> "Ui Shigure is a world-wide popular illustrator."
+                            pass
+                        else:
                             yield LLMResponse(context_id=context_id, text=chunk.delta.text)
                     elif chunk.delta.type == "input_json_delta":
                         tool_calls[-1].arguments += chunk.delta.partial_json
@@ -208,20 +219,22 @@ class ClaudeService(LLMService):
                     logger.info(f"ToolCall: {tc.name}")
                 yield LLMResponse(context_id=context_id, tool_call=tc)
 
-                arguments_json = json.loads(tc.arguments)
-                if tc.name == self.dynamic_tool_spec["name"]:
-                    if filtered_tools:
-                        tool_result = None
-                    else:
+                if tc.arguments:
+                    arguments_json = json.loads(tc.arguments)
+                else:
+                    arguments_json = {}
+
+                tool_result = None
+                if tc.name == self.dynamic_tool_name:
+                    if not filtered_tools:
                         tool_result = {"message": "No tools found"}
                 else:
-                    async for tr, is_final in self.execute_tool(tc.name, arguments_json, {"user_id": user_id}):
-                        if is_final:
-                            tool_result = tr
+                    async for tr in self.execute_tool(tc.name, arguments_json, {"user_id": user_id}):
+                        tc.result = tr
+                        yield LLMResponse(context_id=context_id, tool_call=tc)
+                        if tr.is_final:
+                            tool_result = tr.data
                             break
-                        else:
-                            tc.progress = tr
-                            yield LLMResponse(context_id=context_id, tool_call=tc)
 
                 if self.debug:
                     logger.info(f"ToolCall result: {tool_result}")

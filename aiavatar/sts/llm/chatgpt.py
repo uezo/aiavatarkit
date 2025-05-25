@@ -71,6 +71,10 @@ class ChatGPTService(LLMService):
             }
         }
 
+    @property
+    def dynamic_tool_name(self) -> str:
+        return self.dynamic_tool_spec["function"]["name"]
+
     async def compose_messages(self, context_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
         messages = []
         if self.system_prompt:
@@ -168,7 +172,7 @@ class ChatGPTService(LLMService):
         elif self.use_dynamic_tools:
             filtered_tools = [self.dynamic_tool_spec]
             tool_instruction = self.dynamic_tool_instruction.format(
-                dynamic_tool_name=self.dynamic_tool_spec["function"]["name"]
+                dynamic_tool_name=self.dynamic_tool_name
             )
         else:
             filtered_tools = [t.spec for _, t in self.tools.items() if not t.is_dynamic] or None
@@ -197,7 +201,7 @@ class ChatGPTService(LLMService):
                 t = chunk.choices[0].delta.tool_calls[0]
                 if t.id:
                     tool_calls.append(ToolCall(t.id, t.function.name, ""))
-                    if t.function.name == self.dynamic_tool_spec["function"]["name"]:
+                    if t.function.name == self.dynamic_tool_name:
                         logger.info("Get dynamic tool")
                         filtered_tools = await self._get_dynamic_tools(messages)
                         logger.info(f"Dynamic tools: {filtered_tools}")
@@ -220,19 +224,17 @@ class ChatGPTService(LLMService):
                     logger.info(f"ToolCall: {tc.name}")
                 yield LLMResponse(context_id=context_id, tool_call=tc)
 
-                if tc.name == self.dynamic_tool_spec["function"]["name"]:
-                    if filtered_tools:
-                        tool_result = None
-                    else:
+                tool_result = None
+                if tc.name == self.dynamic_tool_name:
+                    if not filtered_tools:
                         tool_result = {"message": "No tools found"}
                 else:
-                    async for tr, is_final in self.execute_tool(tc.name, json.loads(tc.arguments), {"user_id": user_id}):
-                        if is_final:
-                            tool_result = tr
+                    async for tr in self.execute_tool(tc.name, json.loads(tc.arguments), {"user_id": user_id}):
+                        tc.result = tr
+                        yield LLMResponse(context_id=context_id, tool_call=tc)
+                        if tr.is_final:
+                            tool_result = tr.data
                             break
-                        else:
-                            tc.progress = tr
-                            yield LLMResponse(context_id=context_id, tool_call=tc)
 
                 if self.debug:
                     logger.info(f"ToolCall result: {tool_result}")

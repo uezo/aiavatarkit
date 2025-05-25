@@ -196,7 +196,7 @@ class AIAvatarWebSocketServer(Adapter):
                 aiavatar_response.audio_data = b64_chunk
 
         elif response.type == "tool_call":
-            aiavatar_response.metadata["tool_call"] = response.tool_call.__dict__
+            aiavatar_response.metadata["tool_call"] = response.tool_call.to_dict()
 
         elif response.type == "final":
             if image_source_match := re.search(r"\[vision:(\w+)\]", response.text):
