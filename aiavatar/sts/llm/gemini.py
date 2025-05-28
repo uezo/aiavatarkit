@@ -90,11 +90,16 @@ class GeminiService(LLMService):
         if files:
             for f in files:
                 if url := f.get("url"):
-                    image_bytes = await self.download_image(url)
-                    parts.append(types.Part.from_bytes(
-                        data=image_bytes,
-                        mime_type="image/png",
-                    ))
+                    if url.startswith("http://") or url.startswith("https://"):
+                        image_bytes = await self.download_image(url)
+                    elif url.startswith("data:"):
+                        image_bytes = base64.b64decode(url.split(",", 1)[1])
+                    if image_bytes:
+                        parts.append(types.Part.from_bytes(
+                            data=image_bytes,
+                            mime_type="image/png",
+                        ))
+
         if text:
             parts.append(types.Part.from_text(text=text))
 
