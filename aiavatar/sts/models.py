@@ -24,6 +24,7 @@ class STSResponse:
     context_id: str = None
     text: str = None
     voice_text: str = None
+    language: str = None
     audio_data: bytes = None
     tool_call: ToolCall = None
     metadata: dict = None

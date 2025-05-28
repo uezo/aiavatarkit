@@ -187,6 +187,9 @@ class AIAvatarWebSocketServer(Adapter):
         )
 
         if response.type == "chunk":
+            # Language
+            aiavatar_response.language = response.language
+
             # Face and Animation
             aiavatar_response.avatar_control_request = self.parse_avatar_control_request(response.text)
 

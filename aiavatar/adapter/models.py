@@ -28,6 +28,7 @@ class AIAvatarResponse(BaseModel):
     context_id: Optional[str] = None
     text: Optional[str] = None
     voice_text: Optional[str] = None
+    language: Optional[str] = None
     avatar_control_request: Optional[AvatarControlRequest] = None
     audio_data: Optional[Union[bytes, str]] = None
     metadata: Optional[Dict] = None

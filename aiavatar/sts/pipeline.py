@@ -272,7 +272,7 @@ class STSPipeline:
 
                     # ToolCall
                     if llm_stream_chunk.tool_call:
-                        yield None, llm_stream_chunk
+                        yield None, llm_stream_chunk, None
                         continue
 
                     # Voice
@@ -299,13 +299,13 @@ class STSPipeline:
                             performance.tts_first_chunk_time = time() - start_time
                         performance.tts_time = time() - start_time
 
-                    yield audio_chunk, llm_stream_chunk
+                    yield audio_chunk, llm_stream_chunk, language
                 performance.response_voice_text = voice_text
 
             response_text = ""
             response_audios = []
             is_first_chunk = True
-            async for audio_chunk, llm_stream_chunk in synthesize_stream():
+            async for audio_chunk, llm_stream_chunk, language in synthesize_stream():
                 if not self.is_transaction_active(request.session_id, transaction_id):
                     # Break when new transaction started in this session
                     if self.debug:
@@ -333,6 +333,7 @@ class STSPipeline:
                     context_id=llm_stream_chunk.context_id,
                     text=llm_stream_chunk.text,
                     voice_text=llm_stream_chunk.voice_text,
+                    language=language,
                     audio_data=audio_chunk,
                     metadata={"is_first_chunk": is_first_chunk}
                 )
