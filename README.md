@@ -11,7 +11,7 @@
     - Standalone Apps: Enables ultra-low latency real-time interaction via WebSocket or HTTP (SSE), with a unified interface that abstracts differences between LLMs
     - Channels and Devices: Supports edge devices like Raspberry Pi and telephony services like Twilio
 - **🧩 Modular architecture**: Components such as VAD, STT, LLM, and TTS are modular and easy to integrate via lightweight interfaces. Supported modules include:
-    - VAD: Built-in standard VAD (silence-based end-of-turn detection)
+    - VAD: Built-in standard VAD (silence-based end-of-turn detection), SileroVAD
     - STT: Google, Azure, OpenAI
     - LLM: ChatGPT, Gemini, Claude, and any model supported by LiteLLM or Dify
     - TTS: VOICEVOX / AivisSpeech, OpenAI, SpeechGateway (including Style-Bert-VITS2 and NijiVoice)
@@ -98,6 +98,7 @@ This change ensures compatibility with the new internal structure and removes th
     - [Other LLMs](#other-llms)
 - [🗣️ Voice](#️voice)
 - [👂 Speech Listener](#-speech-listener)
+- [🎙️ Speech Detector](#-speech-detector)
 - [🥰 Face Expression](#-face-expression)
 - [💃 Animation](#-animation)
 
@@ -295,6 +296,85 @@ aiavatar_app = AIAvatar(
     openai_api_key=OPENAI_API_KEY   # API Key for LLM
 )
 ```
+
+You can also make custom STT components by implementing `SpeechRecognizer` interface.
+
+
+## 🎙️ Speech Detector
+
+AIAvatarKit includes Voice Activity Detection (VAD) components to automatically detect when speech starts and ends in audio streams. This enables seamless conversation flow without manual input controls.
+
+### Standard Speech Detector
+
+The default `StandardSpeechDetector` uses volume-based detection with configurable thresholds:
+
+```python
+from aiavatar.sts.vad.standard import StandardSpeechDetector
+
+# Create StandardSpeechDetector with custom parameters
+vad = StandardSpeechDetector(
+    volume_db_threshold=-30.0,           # Voice detection threshold in dB
+    silence_duration_threshold=0.5,      # Seconds of silence to end recording
+    max_duration=10.0,                   # Maximum recording duration
+    min_duration=0.2,                    # Minimum recording duration
+    sample_rate=16000,                   # Audio sample rate
+    channels=1,                          # Audio channels
+    preroll_buffer_count=5,              # Pre-recording buffer size
+    debug=True
+)
+
+# Create AIAvatar with custom VAD
+aiavatar_app = AIAvatar(
+    vad=vad,
+    openai_api_key=OPENAI_API_KEY
+)
+```
+
+### Silero Speech Detector
+
+For more accurate speech detection, use `SileroSpeechDetector` which employs AI-based voice activity detection:
+
+```sh
+pip install silero-vad
+```
+
+```python
+from aiavatar.sts.vad.silero import SileroSpeechDetector
+
+# Create SileroSpeechDetector with custom parameters
+vad = SileroSpeechDetector(
+    speech_probability_threshold=0.5,    # AI model confidence threshold (0.0-1.0)
+    silence_duration_threshold=0.5,      # Seconds of silence to end recording
+    max_duration=10.0,                   # Maximum recording duration
+    min_duration=0.2,                    # Minimum recording duration
+    sample_rate=16000,                   # Audio sample rate
+    channels=1,                          # Audio channels
+    chunk_size=512,                      # Audio processing chunk size
+    model_pool_size=1,                   # Number of parallel AI models
+    debug=True
+)
+
+# Create AIAvatar with Silero VAD
+aiavatar_app = AIAvatar(
+    vad=vad,
+    openai_api_key=OPENAI_API_KEY
+)
+```
+
+For applications with many concurrent users:
+
+```python
+# High-performance configuration for 100+ concurrent sessions
+vad = SileroSpeechDetector(
+    speech_probability_threshold=0.6,    # Stricter threshold for noisy environments
+    model_pool_size=4,                   # 4 parallel AI models for load balancing
+    chunk_size=512,                      # Optimized chunk size
+    debug=False                          # Disable debug for production
+)
+```
+
+You can also make custom VAD components by implementing `SpeechDetector` interface.
+
 
 ## 🥰 Face expression
 

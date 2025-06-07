@@ -138,9 +138,10 @@ class AIAvatarWebSocketServer(Adapter):
             await self.sts.vad.process_samples(audio_data, request.session_id)
 
         elif request.type == "config":
-            volume_db_threshold = request.metadata.get("volume_db_threshold")
-            if volume_db_threshold:
-                self.sts.vad.set_volume_db_threshold(request.session_id, volume_db_threshold)
+            if hasattr(self.sts.vad, "volume_db_threshold"):
+                volume_db_threshold = request.metadata.get("volume_db_threshold")
+                if volume_db_threshold:
+                    self.sts.vad.set_volume_db_threshold(request.session_id, volume_db_threshold)
 
         elif request.type == "stop":
             logger.info(f"WebSocket disconnect for session: {request.session_id}")
