@@ -138,18 +138,19 @@ class AIAvatarHttpClient(AIAvatarClientBase):
 
     async def start_listening(self, session_id: str = "http_session", user_id: str = "http_user", context_id: str = None):
         # Set noise filter
-        if self.auto_noise_filter_threshold:
-            noise_level_detector = NoiseLevelDetector(
-                rate=self.audio_recorder.sample_rate,
-                channels=self.audio_recorder.channels,
-                device_index=self.audio_devices.input_device
-            )
-            noise_level = noise_level_detector.get_noise_level()
-            volume_threshold_db = int(noise_level) + self.noise_margin
+        if hasattr(self.sts.vad, "set_volume_db_threshold"):
+            if self.auto_noise_filter_threshold:
+                noise_level_detector = NoiseLevelDetector(
+                    rate=self.audio_recorder.sample_rate,
+                    channels=self.audio_recorder.channels,
+                    device_index=self.audio_devices.input_device
+                )
+                noise_level = noise_level_detector.get_noise_level()
+                volume_threshold_db = int(noise_level) + self.noise_margin
 
-            logger.info(f"Set volume threshold: {volume_threshold_db}dB")
-            self.vad.set_volume_db_threshold(session_id, volume_threshold_db)
-        else:
-            logger.info(f"Set volume threshold: {self.vad.volume_db_threshold}dB")
+                logger.info(f"Set volume threshold: {volume_threshold_db}dB")
+                self.vad.set_volume_db_threshold(session_id, volume_threshold_db)
+            else:
+                logger.info(f"Set volume threshold: {self.vad.volume_db_threshold}dB")
 
         await super().start_listening(session_id, user_id, context_id)
