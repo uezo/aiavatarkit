@@ -138,7 +138,7 @@ class AIAvatarHttpClient(AIAvatarClientBase):
 
     async def start_listening(self, session_id: str = "http_session", user_id: str = "http_user", context_id: str = None):
         # Set noise filter
-        if hasattr(self.sts.vad, "set_volume_db_threshold"):
+        if hasattr(self.vad, "set_volume_db_threshold"):
             if self.auto_noise_filter_threshold:
                 noise_level_detector = NoiseLevelDetector(
                     rate=self.audio_recorder.sample_rate,
