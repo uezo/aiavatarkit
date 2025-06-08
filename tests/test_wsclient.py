@@ -80,10 +80,13 @@ async def chat(app: AIAvatar, text: str, session_id: str, context_id: str = None
     while app.websocket_connection is None:
         await asyncio.sleep(0.1)
 
-    await app.send_microphone_data(
-        await get_input_voice(text),
-        session_id=session_id
-    )
+    audio_bytes = await get_input_voice(text)
+    for i in range(0, len(audio_bytes), 1024):
+        chunk = audio_bytes[i:i + 1024]
+        await app.send_microphone_data(
+            chunk,
+            session_id=session_id
+        )
 
     # Wait for processing responses
     while len(app.last_responses) == 0 or app.last_responses[-1].type != "final":

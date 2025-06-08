@@ -42,8 +42,12 @@ class AnimationControllerTest(AnimationControllerDummy):
 
 @pytest.fixture
 def aiavatar_app():
+    # from aiavatar.sts.vad.silero import SileroSpeechDetector
+    # vad = SileroSpeechDetector(debug=True)
+
     return AIAvatar(
         url=HTTP_SERVER_URL,
+        # vad=vad,
         face_controller=FaceControllerForTest(),
         animation_controller=AnimationControllerTest(),
         debug=True
@@ -76,10 +80,13 @@ async def chat(app: AIAvatar, text: str, session_id: str, context_id: str = None
         silence_bytes = numpy.zeros(silence_samples, dtype=numpy.int16).tobytes()
         return voice + silence_bytes
 
-    await app.send_microphone_data(
-        await get_input_voice(text),
-        session_id=session_id
-    )
+    audio_bytes = await get_input_voice(text)
+    for i in range(0, len(audio_bytes), 1024):
+        chunk = audio_bytes[i:i + 1024]
+        await app.send_microphone_data(
+            chunk,
+            session_id=session_id
+        )
 
     # Wait for processing responses
     while len(app.last_responses) == 0 or app.last_responses[-1].type != "final":
