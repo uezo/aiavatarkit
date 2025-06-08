@@ -12,7 +12,7 @@
     - Channels and Devices: Supports edge devices like Raspberry Pi and telephony services like Twilio
 - **🧩 Modular architecture**: Components such as VAD, STT, LLM, and TTS are modular and easy to integrate via lightweight interfaces. Supported modules include:
     - VAD: Built-in standard VAD (silence-based end-of-turn detection), SileroVAD
-    - STT: Google, Azure, OpenAI
+    - STT: Google, Azure, OpenAI, AmiVoice
     - LLM: ChatGPT, Gemini, Claude, and any model supported by LiteLLM or Dify
     - TTS: VOICEVOX / AivisSpeech, OpenAI, SpeechGateway (including Style-Bert-VITS2 and NijiVoice)
 - **⚡️ AI Agent native**: Designed to support agentic systems. In addition to standard tool calls, it offers Dynamic Tool Calls for extensibility and supports progress feedback for high-latency operations.
