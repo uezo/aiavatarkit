@@ -1,4 +1,4 @@
-from abc import abstractmethod
+import asyncio
 import base64
 import logging
 import re
@@ -79,9 +79,21 @@ class AIAvatarWebSocketServer(Adapter):
         self.websockets: Dict[str, WebSocket] = {}
         self.sessions: Dict[str, WebSocketSessionData] = {}
 
+        # Callbacks
+        self._on_connect = None
+        self._on_disconnect = None
+
         # Debug
         self.debug = debug
         self.last_response = None
+
+    def on_connect(self, func) -> dict:
+        self._on_connect = func
+        return func
+
+    def on_disconnect(self, func) -> dict:
+        self._on_disconnect = func
+        return func
 
     # Request
     async def process_websocket(self, websocket: WebSocket, session_data: WebSocketSessionData):
@@ -119,6 +131,9 @@ class AIAvatarWebSocketServer(Adapter):
                 user_id=request.user_id,
                 context_id=request.context_id
             ))
+
+            if self._on_connect:
+                asyncio.create_task(self._on_connect(request, session_data))
 
         elif request.type == "invoke":
             async for r in self.sts.invoke(STSRequest(
@@ -236,14 +251,17 @@ class AIAvatarWebSocketServer(Adapter):
                 error_message = str(ex)
 
                 if "WebSocket is not connected" in error_message:
-                    logger.info(f"WebSocket disconnected (1): context_id={session_data.id}")
+                    logger.info(f"WebSocket disconnected (1): session_id={session_data.id}")
                 elif "<CloseCode.NO_STATUS_RCVD: 1005>" in error_message:
-                    logger.info(f"WebSocket disconnected (2): context_id={session_data.id}")
+                    logger.info(f"WebSocket disconnected (2): session_id={session_data.id}")
                 else:
                     raise
 
             finally:
                 if session_data.id:
+                    if self._on_disconnect:
+                        await self._on_disconnect(session_data)
+
                     await self.sts.finalize(session_data.id)
                     if session_data.id in self.websockets:
                         del self.websockets[session_data.id]
