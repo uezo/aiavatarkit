@@ -1,6 +1,7 @@
 import logging
-from typing import Dict
+from typing import Dict, List
 from . import SpeechSynthesizer
+from .preprocessor import TTSPreprocessor
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
+        preprocessors: List[TTSPreprocessor] = None,
         debug: bool = False
     ):
         super().__init__(
@@ -24,6 +26,7 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
             max_connections=max_connections,
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
+            preprocessors=preprocessors,
             debug=debug
         )
         self.service_name = service_name
@@ -37,11 +40,14 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
 
         logger.info(f"Speech synthesize: {text}")
 
+        # Preprocess
+        processed_text = await self.preprocess(text, style_info, language)
+
         # Audio format
         query_params = {"x_audio_format": self.audio_format} if self.audio_format else {}
 
         # Apply style
-        request_json = {"text": text, "service_name": self.service_name, "speaker": self.speaker}
+        request_json = {"text": processed_text, "service_name": self.service_name, "speaker": self.speaker}
         if style := self.parse_style(style_info):
             request_json["style"] = style
             logger.info(f"Apply style: {style}")

@@ -1,6 +1,7 @@
 import logging
-from typing import Dict
+from typing import Dict, List
 from . import SpeechSynthesizer
+from .preprocessor import TTSPreprocessor
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ class AzureSpeechSynthesizer(SpeechSynthesizer):
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
+        preprocessors: List[TTSPreprocessor] = None,
         debug: bool = False
     ):
         super().__init__(
@@ -25,6 +27,7 @@ class AzureSpeechSynthesizer(SpeechSynthesizer):
             max_connections=max_connections,
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
+            preprocessors=preprocessors,
             debug=debug
         )
         self.azure_api_key = azure_api_key
@@ -40,6 +43,9 @@ class AzureSpeechSynthesizer(SpeechSynthesizer):
 
         logger.info(f"Speech synthesize: {text}")
 
+        # Preprocess
+        processed_text = await self.preprocess(text, style_info, language)
+
         headers = {
             "X-Microsoft-OutputFormat": self.audio_format,
             "Content-Type": "application/ssml+xml",
@@ -47,7 +53,7 @@ class AzureSpeechSynthesizer(SpeechSynthesizer):
         }
 
         speaker = self.voice_map[language or self.default_language]
-        ssml_text = f"<speak version='1.0' xml:lang='{language or self.default_language}'><voice xml:lang='{language or self.default_language}' name='{speaker}'>{text}</voice></speak>"
+        ssml_text = f"<speak version='1.0' xml:lang='{language or self.default_language}'><voice xml:lang='{language or self.default_language}' name='{speaker}'>{processed_text}</voice></speak>"
         data = ssml_text.encode("utf-8")
 
         # Synthesize

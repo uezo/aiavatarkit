@@ -1,6 +1,7 @@
 import logging
-from typing import Dict
+from typing import Dict, List
 from . import SpeechSynthesizer
+from .preprocessor import TTSPreprocessor
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ class VoicevoxSpeechSynthesizer(SpeechSynthesizer):
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
+        preprocessors: List[TTSPreprocessor] = None,
         debug: bool = False
     ):
         super().__init__(
@@ -22,6 +24,7 @@ class VoicevoxSpeechSynthesizer(SpeechSynthesizer):
             max_connections=max_connections,
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
+            preprocessors=preprocessors,
             debug=debug
         )
         self.base_url = base_url
@@ -39,6 +42,9 @@ class VoicevoxSpeechSynthesizer(SpeechSynthesizer):
 
         logger.info(f"Speech synthesize: {text}")
 
+        # Preprocess
+        processed_text = await self.preprocess(text, style_info, language)
+
         speaker = self.speaker
 
         # Apply style
@@ -47,7 +53,7 @@ class VoicevoxSpeechSynthesizer(SpeechSynthesizer):
             logger.info(f"Apply style: {speaker}")
 
         # Make query
-        audio_query = await self.get_audio_query(text, speaker)
+        audio_query = await self.get_audio_query(processed_text, speaker)
 
         # Synthesize
         response = await self.http_client.post(
