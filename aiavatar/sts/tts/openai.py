@@ -1,6 +1,7 @@
 import logging
-from typing import Dict
+from typing import Dict, List
 from . import SpeechSynthesizer
+from .preprocessor import TTSPreprocessor
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ class OpenAISpeechSynthesizer(SpeechSynthesizer):
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
+        preprocessors: List[TTSPreprocessor] = None,
         debug: bool = False
     ):
         super().__init__(
@@ -24,6 +26,7 @@ class OpenAISpeechSynthesizer(SpeechSynthesizer):
             max_connections=max_connections,
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
+            preprocessors=preprocessors,
             debug=debug
         )
         self.openai_api_key = openai_api_key
@@ -37,6 +40,9 @@ class OpenAISpeechSynthesizer(SpeechSynthesizer):
 
         logger.info(f"Speech synthesize: {text}")
 
+        # Preprocess
+        processed_text = await self.preprocess(text, style_info, language)
+
         # Synthesize
         resp = await self.http_client.post(
             url="https://api.openai.com/v1/audio/speech",
@@ -46,7 +52,7 @@ class OpenAISpeechSynthesizer(SpeechSynthesizer):
             json= {
                 "model": self.model,
                 "voice": self.speaker,
-                "input": text,
+                "input": processed_text,
                 # "speed": self.speed,
                 "response_format": "wav"
             }

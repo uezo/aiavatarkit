@@ -1,8 +1,9 @@
 import base64
 import logging
-from typing import Dict
-
+from typing import Dict, List
 from . import SpeechSynthesizer
+from .preprocessor import TTSPreprocessor
+
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ class GoogleSpeechSynthesizer(SpeechSynthesizer):
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
+        preprocessors: List[TTSPreprocessor] = None,
         debug: bool = False
     ):
         super().__init__(
@@ -26,6 +28,7 @@ class GoogleSpeechSynthesizer(SpeechSynthesizer):
             max_connections=max_connections,
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
+            preprocessors=preprocessors,
             debug=debug
         )
         self.google_api_key = google_api_key
@@ -40,6 +43,9 @@ class GoogleSpeechSynthesizer(SpeechSynthesizer):
 
         logger.info(f"Speech synthesize: {text}")
 
+        # Preprocess
+        processed_text = await self.preprocess(text, style_info, language)
+
         # Set language and speaker
         voice = {"languageCode": self.default_language, "name": self.speaker}
         if language:
@@ -53,7 +59,7 @@ class GoogleSpeechSynthesizer(SpeechSynthesizer):
         resp = await self.http_client.post(
             url=f"https://texttospeech.googleapis.com/v1/text:synthesize?key={self.google_api_key}",
             json={
-                "input": {"text": text},
+                "input": {"text": processed_text},
                 "voice": voice,
                 "audioConfig": {"audioEncoding": self.audio_format}
             }
