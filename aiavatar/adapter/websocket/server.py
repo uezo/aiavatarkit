@@ -114,6 +114,7 @@ class AIAvatarWebSocketServer(Adapter):
 
         if request.type == "start":
             self.websockets[request.session_id] = websocket
+            session_data.id = request.session_id
 
             logger.info(f"WebSocket connected for session: {request.session_id}")
 
