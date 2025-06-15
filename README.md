@@ -280,6 +280,99 @@ from aiavatar.sts.tts.speech_gateway import SpeechGatewaySpeechSynthesizer
 
 You can also make custom tts components by impelemting `SpeechSynthesizer` interface.
 
+### Preprocessing
+
+AIAvatarKit provides text preprocessing functionality that transforms text before Text-to-Speech processing. This enables improved speech quality and conversion of specific text patterns.
+
+#### Alphabet to Katakana Conversion
+
+Here's an example of a preprocessor that converts alphabet text to katakana:
+
+```python
+from aiavatar.sts.tts.preprocessor.alphabet2kana import AlphabetToKanaPreprocessor
+
+# Create preprocessor
+alphabet2kana_preproc = AlphabetToKanaPreprocessor(
+    openai_api_key=OPENAI_API_KEY,
+    model="gpt-4o-mini",                      # Model to use (default: gpt-4.1-mini)
+    alphabet_length=3,                        # Minimum alphabet length to convert (default: 3)
+    system_prompt="Convert foreign languages..." # Custom prompt (optional)
+)
+
+# Add to TTS
+tts.preprocessors.append(alphabet2kana_preproc)
+```
+
+#### Pattern Match Conversion
+
+You can also use regular expressions and string patterns for conversion:
+
+```python
+from aiavatar.sts.tts.preprocessor.patternmatch import PatternMatchPreprocessor
+
+# Create pattern match preprocessor
+pattern_preproc = PatternMatchPreprocessor(patterns=[
+    ("API", "エーピーアイ"),               # Fixed string replacement
+    ("URL", "ユーアールエル"),
+    (r"\d+", lambda m: "number"),          # Regex replacement with function
+])
+
+# Add common patterns
+pattern_preproc.add_number_dash_pattern()  # Number-dash patterns (e.g., 12-34 → イチニの サンヨン)
+pattern_preproc.add_phonenumber_pattern()  # Phone number patterns
+
+# Add to TTS
+tts.preprocessors.append(pattern_preproc)
+```
+
+#### Creating Custom Preprocessors
+
+You can create your own preprocessors by implementing the `TTSPreprocessor` interface:
+
+```python
+from aiavatar.sts.tts.preprocessor import TTSPreprocessor
+
+class CustomPreprocessor(TTSPreprocessor):
+    def __init__(self, custom_dict: dict = None):
+        self.custom_dict = custom_dict or {}
+    
+    async def process(self, text: str, style_info: dict = None, language: str = None) -> str:
+        # Custom conversion logic
+        processed_text = text
+        
+        # Dictionary-based replacement
+        for original, replacement in self.custom_dict.items():
+            processed_text = processed_text.replace(original, replacement)
+        
+        # Language-specific conversions
+        if language == "ja-JP":
+            processed_text = processed_text.replace("OK", "オーケー")
+        
+        return processed_text
+
+# Use custom preprocessor
+custom_preproc = CustomPreprocessor(custom_dict={
+    "GitHub": "ギットハブ",
+    "Python": "パイソン",
+    "Docker": "ドッカー"
+})
+
+tts.preprocessors.append(custom_preproc)
+```
+
+#### Combining Preprocessors
+
+Multiple preprocessors can be used together. They are executed in the order they were registered:
+
+```python
+# Combine multiple preprocessors
+tts.preprocessors.extend([
+    pattern_preproc,        # 1. Pattern match conversion
+    alphabet2kana_preproc,  # 2. Alphabet to katakana conversion
+    custom_preproc          # 3. Custom conversion
+])
+```
+
 
 ## 👂 Speech listener
 
@@ -598,6 +691,36 @@ python client.py
 You can now perform voice interactions just like when running locally.
 
 **NOTE:** When using the WebSocket API, voice activity detection (VAD) is performed on the server side, so clients can simply stream microphone input directly to the server.
+
+
+### Connection and Disconnection Handling
+
+You can register callbacks to handle WebSocket connection and disconnection events. This is useful for logging, session management, or custom initialization/cleanup logic.
+
+```python
+@aiavatar_app.on_connect
+async def on_connect(request, session_data):
+    print(f"Client connected: {session_data.id}")
+    print(f"User ID: {session_data.user_id}")
+    print(f"Session ID: {session_data.session_id}")
+    
+    # Custom initialization logic
+    # e.g., load user preferences, initialize resources, etc.
+
+@aiavatar_app.on_disconnect
+async def on_disconnect(session_data):
+    print(f"Client disconnected: {session_data.id}")
+    
+    # Custom cleanup logic
+    # e.g., save session data, release resources, etc.
+```
+
+The `session_data` object contains information about the WebSocket session:
+
+- `id`: Unique session identifier
+- `user_id`: User identifier from the connection request
+- `session_id`: Session identifier from the connection request
+- Additional metadata passed during connection
 
 
 ## 🌎 Platform Guide
