@@ -3,6 +3,7 @@ import json
 import logging
 from typing import List, Dict
 import psycopg2
+import psycopg2.extras
 from ..base import ContextManager
 
 logger = logging.getLogger(__name__)
