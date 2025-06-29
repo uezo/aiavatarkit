@@ -11,9 +11,10 @@ logger = logging.getLogger(__name__)
 
 
 class ToolCallResult:
-    def __init__(self, data: dict = None, is_final: bool = True):
+    def __init__(self, data: dict = None, is_final: bool = True, text: str = None):
         self.data = data or {}
         self.is_final = is_final
+        self.text = text
 
 
 class ToolCall:
@@ -239,10 +240,14 @@ The list of tools is as follows:
             async for r in tool_result:
                 if isinstance(r, Tuple):
                     yield ToolCallResult(data=r[0], is_final=r[1])
+                elif isinstance(r, dict):
+                    yield ToolCallResult(data=r, is_final=False)
+                elif isinstance(r, str):
+                    yield ToolCallResult(text=r, is_final=False)
                 else:
                     yield r
         elif isinstance(tool_result, ToolCallResult):
-            yield await tool_result
+            yield tool_result
         else:
             yield ToolCallResult(data=await tool_result)
 
