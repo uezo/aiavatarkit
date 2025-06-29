@@ -191,7 +191,7 @@ Create instance of `GeminiService` with custom parameters and set it to `AIAvata
 
 ```python
 # Create GeminiService
-# pip install google-generativeai
+# pip install google-genai
 from aiavatar.sts.llm.gemini import GeminiService
 llm = GeminiService(
     gemini_api_key=GEMINI_API_KEY,
@@ -1191,6 +1191,24 @@ async def get_weather_stream(location: str):
 ```
 
 On the user side, the first value in each yield will be streamed as a `progress` response under the `ToolCall` response type.
+
+Additionally, you can yield string values directly to provide immediate voice feedback to the user during processing:
+
+```python
+@service.tool(weather_tool_spec)
+async def get_weather_stream(location: str):
+    # Provide voice feedback during processing
+    yield "Converting locaton to geo code. Please wait a moment."
+    geocode = await geocode_api(location=location)
+    
+    yield "Getting weather information."
+    weather = await weather_api(geocode=geocode)
+    
+    # Final result
+    yield {"weather": "clear", "temperature": 23.4}, True
+```
+
+When you yield a string (str) value, the AI avatar will speak that text while continuing to process the request.
 
 
 ### 🪄 Dynamic Tool Call
