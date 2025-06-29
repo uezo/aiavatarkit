@@ -231,10 +231,13 @@ class ClaudeService(LLMService):
                 else:
                     async for tr in self.execute_tool(tc.name, arguments_json, {"user_id": user_id}):
                         tc.result = tr
-                        yield LLMResponse(context_id=context_id, tool_call=tc)
-                        if tr.is_final:
-                            tool_result = tr.data
-                            break
+                        if tr.text:
+                            yield LLMResponse(context_id=context_id, text=tr.text)
+                        else:
+                            yield LLMResponse(context_id=context_id, tool_call=tc)
+                            if tr.is_final:
+                                tool_result = tr.data
+                                break
 
                 if self.debug:
                     logger.info(f"ToolCall result: {tool_result}")
