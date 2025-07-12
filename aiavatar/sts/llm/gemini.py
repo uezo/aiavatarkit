@@ -116,6 +116,10 @@ class GeminiService(LLMService):
                 if inline_data and "data" in inline_data:
                     inline_data["data"] = base64.b64encode(inline_data["data"]).decode("utf-8")
             dict_messages.append(dumped)
+
+        if self._update_context_filter:
+            if "text" in dict_messages[0]["parts"][-1]:
+                dict_messages[0]["parts"][-1]["text"] = self._update_context_filter(dict_messages[0]["parts"][-1]["text"])
         await self.context_manager.add_histories(context_id, dict_messages, "gemini")
 
     async def preflight(self):

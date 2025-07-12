@@ -100,6 +100,12 @@ class ChatGPTService(LLMService):
         return messages
 
     async def update_context(self, context_id: str, messages: List[Dict], response_text: str):
+        if self._update_context_filter:
+            if isinstance(messages[0]["content"], list):
+                if "text" in messages[0]["content"][-1]:
+                    messages[0]["content"][-1]["text"] = self._update_context_filter(messages[0]["content"][-1]["text"])
+            elif isinstance(messages[0]["content"], str):
+                messages[0]["content"] = self._update_context_filter(messages[0]["content"])
         messages.append({"role": "assistant", "content": response_text})
         await self.context_manager.add_histories(context_id, messages, "chatgpt")
 

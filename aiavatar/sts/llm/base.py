@@ -124,6 +124,7 @@ class LLMService(ABC):
                 self.split_patterns.append(f"{re.escape(char)}\s?")
         self.option_split_chars_regex = f"({'|'.join(self.split_patterns)})\s*(?!.*({'|'.join(self.split_patterns)}))"
         self._request_filter = self.request_filter_default
+        self._update_context_filter = None
         self.voice_text_tag = voice_text_tag
         self.tools: Dict[str, Tool] = {}
         self.use_dynamic_tools = use_dynamic_tools
@@ -170,6 +171,10 @@ The list of tools is as follows:
 
     def request_filter_default(self, text: str) -> str:
         return text
+
+    def update_context_filter(self, func):
+        self._update_context_filter = func
+        return func
 
     def tool(self, spec):
         def decorator(func):
