@@ -11,8 +11,10 @@ class OpenAISpeechSynthesizer(SpeechSynthesizer):
         self,
         *,
         openai_api_key: str,
-        speaker: str,
+        base_url: str = "https://api.openai.com/v1",
+        speaker: str = "sage",
         model: str = "tts-1",
+        instructions: str = None,
         style_mapper: Dict[str, str] = None,
         audio_format: str = "wav",
         max_connections: int = 100,
@@ -30,8 +32,10 @@ class OpenAISpeechSynthesizer(SpeechSynthesizer):
             debug=debug
         )
         self.openai_api_key = openai_api_key
+        self.base_url = base_url
         self.speaker = speaker
         self.model = model
+        self.instructions = instructions
         self.audio_format = audio_format
 
     async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
@@ -43,16 +47,23 @@ class OpenAISpeechSynthesizer(SpeechSynthesizer):
         # Preprocess
         processed_text = await self.preprocess(text, style_info, language)
 
+        # Headers and params
+        if "azure" in self.base_url:
+            url = self.base_url
+            headers = {"api-key": self.openai_api_key}
+        else:
+            url = f"{self.base_url}/audio/speech"
+            headers = {"Authorization": f"Bearer {self.openai_api_key}"}
+
         # Synthesize
         resp = await self.http_client.post(
-            url="https://api.openai.com/v1/audio/speech",
-            headers={
-                "Authorization": f"Bearer {self.openai_api_key}"
-            },
+            url=url,
+            headers=headers,
             json= {
                 "model": self.model,
                 "voice": self.speaker,
                 "input": processed_text,
+                "instructions": self.instructions,
                 # "speed": self.speed,
                 "response_format": "wav"
             }
