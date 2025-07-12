@@ -482,7 +482,7 @@ You can also make custom VAD components by implementing `SpeechDetector` interfa
 To control facial expressions within conversations, set the facial expression names and values in `FaceController.faces` as shown below, and then include these expression keys in the response message by adding instructions to the prompt.
 
 ```python
-aiavatar_app.adapter.face_controller.faces = {
+aiavatar_app.face_controller.faces = {
     "neutral": "🙂",
     "joy": "😀",
     "angry": "😠",
@@ -1550,7 +1550,7 @@ import pyautogui    # pip install pyautogui
 from aiavatar.device.video import VideoDevice   # pip install opencv-python
 default_camera = VideoDevice(device_index=0, width=960, height=540)
 
-@aiavatar_app.adapter.get_image_url
+@aiavatar_app.get_image_url
 async def get_image_url(source: str) -> str:
     image_bytes = None
 
@@ -1696,13 +1696,13 @@ You can invoke custom implementations `on_response(response_type)`. In the follo
 # Set face when the character is thinking the answer
 @aiavatar_app.on_response("start")
 async def on_start_response(response):
-    await aiavatar_app.adapter.face_controller.set_face("thinking", 3.0)
+    await aiavatar_app.face_controller.set_face("thinking", 3.0)
 
 # Reset face before answering
 @aiavatar_app.on_response("chunk")
 async def on_chunk_response(response):
     if response.metadata.get("is_first_chunk"):
-        aiavatar_app.adapter.face_controller.reset()
+        aiavatar_app.face_controller.reset()
 ```
 
 
