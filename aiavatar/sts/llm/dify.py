@@ -48,6 +48,10 @@ class DifyService(LLMService):
             )
         )
 
+    @property
+    def dynamic_tool_name(self) -> str:
+        pass
+
     async def compose_messages(self, context_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
         if self.make_inputs:
             inputs = self.make_inputs(context_id, text, files, system_prompt_params)
