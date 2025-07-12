@@ -106,7 +106,8 @@ This change ensures compatibility with the new internal structure and removes th
     - [💫 RESTful API (SSE)](#-restful-api-sse)
     - [🔌 WebSocket](#-websocket)
 
-- [⚡️ Tool Call](#️-tool-call)
+- [🦜 AI Agent](#️-ai-agent)
+    - [⚡️ Tool Call](#️-tool-call)
     - [⌛️ Stream Response](#-stream-response)
     - [🪄 Dynamic Tool Call](#-dynamic-tool-call)
 
@@ -118,6 +119,8 @@ This change ensures compatibility with the new internal structure and removes th
     - [🎛️ Configuration API](#️-configuration-api)
     - [🎮 Control API](#-control-api)
     - [🔐 Authorization](#-authorization)
+
+- [🧪 Evaluation](#-evaluation)
 
 - [🤿 Deep Dive](#-deep-dive)
     - [👀 Vision](#-vision)
@@ -1366,6 +1369,141 @@ async def my_get_dynamic_tools(messages: list, metadata: dict) -> list:
     tools = await search_tools_from_vector_db(messages, metadata)
     # Extract and return the spec objects (not the implementations)
     return [t.spec for t in tools]
+```
+
+
+## 🧪 Evaluation
+
+AIAvatarKit includes a comprehensive evaluation framework for testing and assessing AI avatar conversations. The `DialogEvaluator` enables scenario-based conversation execution with automatic evaluation capabilities.
+
+### Features
+
+- **Scenario Execution**: Run predefined dialog scenarios against your AI system
+- **Turn-by-Turn Evaluation**: Evaluate each conversation turn against specific criteria
+- **Goal Assessment**: Evaluate overall scenario objective achievement
+- **Result Management**: Save, load, and display evaluation results
+
+### Basic Usage
+
+```python
+import asyncio
+from aiavatar.eval.dialog import DialogEvaluator, Scenario, Turn
+from aiavatar.sts.llm.chatgpt import ChatGPTService
+
+async def main():
+    # Initialize LLM services
+    llm = ChatGPTService(api_key="your_api_key")
+    evaluation_llm = ChatGPTService(api_key="your_api_key")
+    
+    # Create evaluator
+    evaluator = DialogEvaluator(
+        llm=llm,                    # LLM for conversation
+        evaluation_llm=evaluation_llm  # LLM for evaluation
+    )
+    
+    # Define scenario
+    scenario = Scenario(
+        goal="Provide helpful customer support",
+        turns=[
+            Turn(
+                input_text="Hello, I need help with my order",
+                evaluation_criteria="Responds politely and shows willingness to help"
+            ),
+            Turn(
+                input_text="My order number is 12345",
+                evaluation_criteria="Acknowledges the order number and proceeds appropriately"
+            )
+        ]
+    )
+    
+    # Run evaluation
+    results = await evaluator.run(
+        dataset=[scenario],
+        detailed=True,                # Enable turn-by-turn evaluation
+        overwrite_execution=False,    # Skip if already executed
+        overwrite_evaluation=False    # Skip if already evaluated
+    )
+    
+    # Display results
+    evaluator.print_results(results)
+    
+    # Save results
+    evaluator.save_results(results, "evaluation_results.json")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Example Output:
+
+```
+=== Scenario 1 ===
+Goal: Provide helpful customer support
+
+Turn 1:
+  Input: Hello, I need help with my order
+  Actual Output: Hello! I'd be happy to help you with your order. Could you please provide your order number?
+  Result: ✓ PASS
+  Reason: The response is polite, helpful, and appropriately asks for the order number.
+
+Turn 2:
+  Input: My order number is 12345
+  Actual Output: Thank you for providing order number 12345. Let me look that up for you.
+  Result: ✓ PASS
+  Reason: Acknowledges the order number and shows willingness to help.
+
+Summary: 2/2 turns passed (100.0%)
+
+=== Overall Scenario Evaluation ===
+Goal Achievement: ✓ SUCCESS
+Reason: The AI successfully provided helpful customer support by responding politely and efficiently handling the order inquiry.
+```
+
+### File-Based Evaluation
+
+Load scenarios from JSON files:
+
+```json
+{
+  "scenarios": [
+    {
+      "goal": "Basic greeting and assistance",
+      "turns": [
+        {
+          "input_text": "Hello",
+          "expected_output": "Friendly greeting",
+          "evaluation_criteria": "Responds warmly and appropriately"
+        }
+      ]
+    }
+  ]
+}
+```
+
+```python
+# Load and evaluate from file
+results = await evaluator.run(dataset="test_scenarios.json")
+
+# Save results back to file
+evaluator.save_results(results, "results.json")
+```
+
+### Configuration Options
+
+```python
+# Execution modes
+results = await evaluator.run(
+    dataset=scenarios,
+    detailed=True,                # Turn-by-turn evaluation
+    overwrite_execution=True,     # Re-run conversations
+    overwrite_evaluation=True     # Re-evaluate results
+)
+
+# Simple mode (scenario-level evaluation only)
+results = await evaluator.run(
+    dataset=scenarios,
+    detailed=False
+)
 ```
 
 
