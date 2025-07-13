@@ -1,9 +1,9 @@
-from dataclasses import dataclass, field
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import List, Dict, Any, Union, Optional
+from typing import List, Union, Optional
 from uuid import uuid4
+from pydantic import BaseModel, Field
 from ..sts.llm import LLMService
 
 
@@ -19,84 +19,26 @@ DEFAULT_TURN_USER_ID = "turn_user"
 DEFAULT_SCENARIO_USER_ID = "scenario_eval_user"
 
 
-# Data Classes
-@dataclass
-class EvaluationResult:
+# Data models
+class EvaluationResult(BaseModel):
     result: bool
     reason: str
 
 
-@dataclass
-class Turn:
+class Turn(BaseModel):
     input_text: Optional[str] = None
     expected_output_text: Optional[str] = None
     evaluation_criteria: Optional[str] = None
     actual_output_text: Optional[str] = None
     evaluation_result: Optional[EvaluationResult] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        data = {
-            "input_text": self.input_text,
-            "expected_output": self.expected_output_text,
-            "evaluation_criteria": self.evaluation_criteria,
-            "actual_output": self.actual_output_text
-        }
-        if self.evaluation_result:
-            data["evaluation_result"] = {
-                "result": self.evaluation_result.result,
-                "reason": self.evaluation_result.reason
-            }
-        return data
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Turn':
-        turn = cls(
-            input_text=data.get("input_text"),
-            expected_output_text=data.get("expected_output"),
-            evaluation_criteria=data.get("evaluation_criteria"),
-            actual_output_text=data.get("actual_output")
-        )
-        if "evaluation_result" in data:
-            eval_data = data["evaluation_result"]
-            turn.evaluation_result = EvaluationResult(
-                result=eval_data["result"],
-                reason=eval_data["reason"]
-            )
-        return turn
 
 
-@dataclass
-class Scenario:
-    turns: List[Turn] = field(default_factory=list)
+class Scenario(BaseModel):
+    turns: List[Turn] = Field(default_factory=list)
     goal: Optional[str] = None
     scenario_evaluation_result: Optional[EvaluationResult] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        data = {
-            "goal": self.goal,
-            "turns": [turn.to_dict() for turn in self.turns]
-        }
-        if self.scenario_evaluation_result:
-            data["scenario_evaluation_result"] = {
-                "result": self.scenario_evaluation_result.result,
-                "reason": self.scenario_evaluation_result.reason
-            }
-        return data
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Scenario':
-        turns = [Turn.from_dict(turn_data) for turn_data in data.get("turns", [])]
-        scenario = cls(turns=turns, goal=data.get("goal"))
-        if "scenario_evaluation_result" in data:
-            eval_data = data["scenario_evaluation_result"]
-            scenario.scenario_evaluation_result = EvaluationResult(
-                result=eval_data["result"],
-                reason=eval_data["reason"]
-            )
-        return scenario
     
     def has_execution_results(self) -> bool:
-        """Check if this scenario already has execution results"""
         return all(turn.actual_output_text is not None for turn in self.turns)
 
 
@@ -195,7 +137,7 @@ class DialogEvaluator:
         )
 
         result = EVALUATION_SUCCESS_MARKER in eval_result_text.lower()
-        return EvaluationResult(result, eval_result_text)
+        return EvaluationResult(result=result, reason=eval_result_text)
 
     async def evaluate_scenario_goal(self, scenario: Scenario) -> EvaluationResult:
         DataValidator.validate_scenario(scenario)
@@ -221,7 +163,7 @@ class DialogEvaluator:
         )
 
         result = EVALUATION_SUCCESS_MARKER in eval_result_text.lower()
-        return EvaluationResult(result, eval_result_text)
+        return EvaluationResult(result=result, reason=eval_result_text)
 
     async def run(self, *, dataset: Union[List[Scenario], str], detailed: bool = True, overwrite_execution: bool = False, overwrite_evaluation: bool = False) -> List[Scenario]:
         # Load dataset from file if string path is provided
@@ -323,7 +265,7 @@ class DialogEvaluator:
     def save_results(self, scenarios: List[Scenario], filepath: str):
         data = {
             "timestamp": datetime.now().isoformat(),
-            "scenarios": [scenario.to_dict() for scenario in scenarios]
+            "scenarios": [scenario.model_dump() for scenario in scenarios]
         }
         
         with open(filepath, "w", encoding="utf-8") as f:
@@ -347,7 +289,7 @@ class DialogEvaluator:
         scenarios = []
         try:
             for scenario_data in data["scenarios"]:
-                scenario = Scenario.from_dict(scenario_data)
+                scenario = Scenario.model_validate(scenario_data)
                 scenarios.append(scenario)
         except Exception as ex:
             raise ValueError(f"Failed to parse scenario data: {ex}")
