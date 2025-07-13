@@ -1522,6 +1522,37 @@ config_router = ConfigAPI(aiavatar_app.sts, evaluator=evaluator).get_router()   
 app.include_router(config_router)
 ```
 
+### Logic-based evaluation
+
+In addition to LLM-based evaluation using `evaluation_criteria`, you can evaluate more explicitly using custom logic functions.
+
+```python
+# Make evaluation function(s)
+def evaluate_weather_tool_call(output_text, tool_call, evaluation_criteria, result, eval_result_text):
+    if tool_call is not None and tool_call.name != "get_weather":
+        # Overwrite result and reason
+        return False, f"Incorrect tool call: {tool_call.name}"
+    else:
+        # Pass through
+        return result, eval_result_text
+
+# Register evaluation function(s)
+evaluator = DialogEvaluator(
+    llm=aiavatar_app.sts.llm,
+    evaluation_llm=eval_llm,
+    evaluation_functions={"evaluate_weather_tool_call_func": evaluate_weather_tool_call}
+)
+
+# Use evaluation function in scenario
+scenario = Scenario(
+    turns=[
+        Turn(input_text="Hello", expected_output_text="Hi", evaluation_criteria="Greeting"),
+        Turn(input_text="What is the weather in Tokyo?", expected_output_text="It's sunny.", evaluation_criteria="Answer the weather based on the result of calling get_weather tool.", evaluation_function_name="evaluate_weather_tool_call_func"),
+    ],
+    goal="Answer the weather in Tokyo based on the result of get_weather."
+)
+```
+
 
 ## 🤿 Deep dive
 
