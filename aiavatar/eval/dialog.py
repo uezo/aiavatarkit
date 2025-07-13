@@ -1,7 +1,7 @@
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import List, Tuple, Union, Optional
+from typing import List, Dict, Tuple, Union, Optional
 from uuid import uuid4
 from pydantic import BaseModel, Field
 from ..sts.llm import LLMService, ToolCall as TC
@@ -42,6 +42,7 @@ class Turn(BaseModel):
     input_text: Optional[str] = None
     expected_output_text: Optional[str] = None
     evaluation_criteria: Optional[str] = None
+    evaluation_function_name: Optional[str] = None
     actual_output_text: Optional[str] = None
     actual_tool_call: Optional[ToolCall] = None
     evaluation_result: Optional[EvaluationResult] = None
@@ -92,11 +93,12 @@ class DataValidator:
 
 # Evaluator
 class DialogEvaluator:
-    def __init__(self, llm: LLMService, evaluation_llm: LLMService = None):
+    def __init__(self, llm: LLMService, evaluation_llm: LLMService = None, evaluation_functions: Dict[str, callable] = None):
         self.llm = llm
         self.evaluation_llm = evaluation_llm
         if self.evaluation_llm and not self.evaluation_llm.system_prompt:
             self.evaluation_llm.system_prompt = DEFAULT_EVALUATION_SYSTEM_PROMPT
+        self.evaluation_functions = evaluation_functions or {}
 
     async def get_llm_response(self, llm: LLMService, context_id: str, user_id: str, text: str) -> Tuple[str, Union[TC, None]]:
         result_text = ""
@@ -144,7 +146,7 @@ class DialogEvaluator:
                 raise
         print()
 
-    async def evaluate_turn_output(self, output_text: str, tool_call: ToolCall, evaluation_criteria: str) -> EvaluationResult:
+    async def evaluate_turn_output(self, output_text: str, tool_call: ToolCall, evaluation_criteria: str, evaluation_function_name: str) -> EvaluationResult:
         if not output_text or not evaluation_criteria:
             raise ValidationError("Both output_text and evaluation_criteria are required")
 
@@ -157,6 +159,11 @@ class DialogEvaluator:
         )
 
         result = EVALUATION_SUCCESS_MARKER in eval_result_text.lower()
+
+        if evaluation_function_name:
+            evaluation_function = self.evaluation_functions.get(evaluation_function_name)
+            result, eval_result_text = evaluation_function(output_text, tool_call, evaluation_criteria, result, eval_result_text)
+
         return EvaluationResult(result=result, reason=eval_result_text)
 
     async def evaluate_scenario_goal(self, scenario: Scenario) -> EvaluationResult:
@@ -231,7 +238,8 @@ class DialogEvaluator:
                                 turn.evaluation_result = await self.evaluate_turn_output(
                                     output_text=turn.actual_output_text,
                                     tool_call=turn.actual_tool_call,
-                                    evaluation_criteria=turn.evaluation_criteria
+                                    evaluation_criteria=turn.evaluation_criteria,
+                                    evaluation_function_name=turn.evaluation_function_name
                                 )
                             except Exception as ex:
                                 print(f"\nTurn {i+1} evaluation failed: {ex}. Continuing with next turn.")
@@ -270,6 +278,7 @@ class DialogEvaluator:
                             print(f"  Actual Output: {turn.actual_output_text}")
                             print(f"  Actual ToolCall: {turn.actual_tool_call}")
                             print(f"  Evaluation Criteria: {turn.evaluation_criteria}")
+                            print(f"  Evaluation Function: {turn.evaluation_function_name}")
                             print(f"  Result: {'✓ PASS' if turn.evaluation_result.result else '✗ FAIL'}")
                             print(f"  Reason: {turn.evaluation_result.reason}")
                     
