@@ -1,10 +1,10 @@
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import List, Union, Optional
+from typing import List, Tuple, Union, Optional
 from uuid import uuid4
 from pydantic import BaseModel, Field
-from ..sts.llm import LLMService
+from ..sts.llm import LLMService, ToolCall as TC
 
 
 # Constants
@@ -25,11 +25,25 @@ class EvaluationResult(BaseModel):
     reason: str
 
 
+class ToolCallResult(BaseModel):
+    data: Optional[dict] = None
+    is_final: bool
+    text: Optional[str] = None
+
+
+class ToolCall(BaseModel):
+    id: str
+    name: str
+    arguments: Optional[Union[str, dict]] = None
+    result: Optional[ToolCallResult] = None
+
+
 class Turn(BaseModel):
     input_text: Optional[str] = None
     expected_output_text: Optional[str] = None
     evaluation_criteria: Optional[str] = None
     actual_output_text: Optional[str] = None
+    actual_tool_call: Optional[ToolCall] = None
     evaluation_result: Optional[EvaluationResult] = None
 
 
@@ -84,33 +98,37 @@ class DialogEvaluator:
         if self.evaluation_llm and not self.evaluation_llm.system_prompt:
             self.evaluation_llm.system_prompt = DEFAULT_EVALUATION_SYSTEM_PROMPT
 
-    async def get_llm_response(self, llm: LLMService, context_id: str, user_id: str, text: str) -> str:
+    async def get_llm_response(self, llm: LLMService, context_id: str, user_id: str, text: str) -> Tuple[str, Union[TC, None]]:
         result_text = ""
+        tool_call = None
         try:
             async for resp in llm.chat_stream(
                 context_id=context_id, 
                 user_id=user_id, 
                 text=text
             ):
-                result_text += resp.text
-            return result_text
+                if resp.tool_call:
+                    tool_call = resp.tool_call
+                if resp.text:
+                    result_text += resp.text
+            return result_text, tool_call
         except Exception as ex:
             print(f"Error during turn processing: {ex}")
             raise
 
-    async def process_turn(self, context_id: str, turn: Turn) -> str:
+    async def process_turn(self, context_id: str, turn: Turn) -> Tuple[str, Union[TC, None]]:
         if not self.llm:
             raise ValidationError("LLM service is required for processing turns")
         
         DataValidator.validate_turn(turn)
-        actual_output_text = await self.get_llm_response(
+        actual_output_text, tool_call = await self.get_llm_response(
             llm=self.llm,
             context_id=context_id, 
             user_id=DEFAULT_TURN_USER_ID, 
             text=turn.input_text
         )
 
-        return actual_output_text
+        return actual_output_text, tool_call
 
     async def process_scenario(self, scenario: Scenario):
         context_id = str(uuid4())
@@ -118,18 +136,20 @@ class DialogEvaluator:
         for i, turn in enumerate(scenario.turns, 1):
             print(f"\rProcessing turn {i}/{len(scenario.turns)}: {turn.input_text[:50]}...", end="", flush=True)
             try:
-                turn.actual_output_text = await self.process_turn(context_id, turn)
+                turn.actual_output_text, tool_call = await self.process_turn(context_id, turn)
+                if tool_call:
+                    turn.actual_tool_call = ToolCall.model_validate(tool_call.to_dict())
             except Exception as ex:
                 print(f"\nError in turn {i}: {ex}. Stopping scenario processing.")
                 raise
         print()
 
-    async def evaluate_turn_output(self, output_text: str, evaluation_criteria: str) -> EvaluationResult:
+    async def evaluate_turn_output(self, output_text: str, tool_call: ToolCall, evaluation_criteria: str) -> EvaluationResult:
         if not output_text or not evaluation_criteria:
             raise ValidationError("Both output_text and evaluation_criteria are required")
-        
-        eval_input_text = f"## Output\n{output_text}\n\n## Evaluation Criteria\n{evaluation_criteria}"
-        eval_result_text = await self.get_llm_response(
+
+        eval_input_text = f"## Output\n{output_text}\n\n## ToolCall\n{tool_call}\n\n## Evaluation Criteria\n{evaluation_criteria}"
+        eval_result_text, _ = await self.get_llm_response(
             llm=self.evaluation_llm,
             context_id=str(uuid4()), 
             user_id=DEFAULT_USER_ID, 
@@ -155,7 +175,7 @@ class DialogEvaluator:
             f"## Full Conversation\n{conversation_text}\n## Goal\n{scenario.goal}\n\n"
             "Evaluate whether the goal was achieved based on the full conversation above."
         )
-        eval_result_text = await self.get_llm_response(
+        eval_result_text, _ = await self.get_llm_response(
             self.evaluation_llm,
             context_id=str(uuid4()), 
             user_id=DEFAULT_SCENARIO_USER_ID, 
@@ -210,6 +230,7 @@ class DialogEvaluator:
                             try:
                                 turn.evaluation_result = await self.evaluate_turn_output(
                                     output_text=turn.actual_output_text,
+                                    tool_call=turn.actual_tool_call,
                                     evaluation_criteria=turn.evaluation_criteria
                                 )
                             except Exception as ex:
@@ -247,6 +268,7 @@ class DialogEvaluator:
                             print(f"  Input: {turn.input_text}")
                             print(f"  Expected Output: {turn.expected_output_text}")
                             print(f"  Actual Output: {turn.actual_output_text}")
+                            print(f"  Actual ToolCall: {turn.actual_tool_call}")
                             print(f"  Evaluation Criteria: {turn.evaluation_criteria}")
                             print(f"  Result: {'✓ PASS' if turn.evaluation_result.result else '✗ FAIL'}")
                             print(f"  Reason: {turn.evaluation_result.reason}")
