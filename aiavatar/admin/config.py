@@ -1,13 +1,17 @@
 import collections
 import logging
+import uuid
+import os
+from datetime import datetime
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, HTTPException, status, Query, BackgroundTasks
 from pydantic import BaseModel, Field
 from ..sts.vad import SpeechDetector
 from ..sts.stt import SpeechRecognizer
 from ..sts.llm import LLMService
 from ..sts.tts import SpeechSynthesizer
 from ..sts import STSPipeline
+from ..eval.dialog import DialogEvaluator, Scenario
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +236,18 @@ class LogResponse(BaseModel):
     lines: List[str] = Field(default=[], description="List of lines in log file")
 
 
+class EvaluationRequest(BaseModel):
+    scenarios: List[Scenario] = Field(description="List of evaluation scenarios")
+
+
+class EvaluationResponse(BaseModel):
+    scenarios: List[Scenario] = Field(description="List of evaluation scenarios including results")
+
+
+class EvaluationStartResponse(BaseModel):
+    evaluation_id: str = Field(description="Id to retrieve evaluation results")
+
+
 # Router
 class ConfigAPI:
     DEFAULT_COMPONENT_KEY = "default"
@@ -245,6 +261,7 @@ class ConfigAPI:
         llms: Dict[str, LLMService] = None,
         ttss: Dict[str, SpeechSynthesizer] = None,
         logfile_path: str = None,
+        evaluator: DialogEvaluator = None
     ):
         self.sts = sts
         self._vads = vads or {}
@@ -252,6 +269,7 @@ class ConfigAPI:
         self._llms = llms or {}
         self._ttss = ttss or {}
         self.logfile_path = logfile_path
+        self.evaluator = evaluator
 
     @property
     def vads(self):
@@ -835,6 +853,80 @@ class ConfigAPI:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Internal server error while reading log file"
+                )
+
+        async def run_evaluation_task(evaluation_id: str, scenarios: List[Scenario]):
+            try:
+                results = await self.evaluator.run(dataset=scenarios, detailed=True)
+                self.evaluator.save_results(results, f"evaluation_results/{evaluation_id}.json")
+            except Exception as ex:
+                logger.error(f"Evaluation failed {evaluation_id}: {ex}")
+
+        @router.post(
+            "/evaluate",
+            response_model=EvaluationStartResponse,
+            tags=["System"],
+            summary="Start dialog evaluation",
+            description="Start dialog evaluation in the background task. You can retrieve the results with evaluation_id after evaluation finished.",
+            response_description="Id to retrieve evaluation results.",
+            responses={
+                200: {"description": "Successfully start evaluation"},
+                500: {"description": "Internal server error"}
+            }
+        )
+        async def evaluate(
+            request: EvaluationRequest,
+            background_tasks: BackgroundTasks
+        ) -> EvaluationStartResponse:
+            if not self.evaluator:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Evaluator is not set"
+                )
+
+            try:
+                evaluation_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
+                background_tasks.add_task(run_evaluation_task, evaluation_id, request.scenarios)
+                return EvaluationStartResponse(evaluation_id=evaluation_id)
+            except Exception as ex:
+                logger.error(f"Starting evaluation failed {evaluation_id}: {ex}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Internal server error while starting evaluation"
+                )
+
+        @router.get(
+            "/evaluate/{evaluation_id}",
+            tags=["System"],
+            summary="Get dialog evaluation results",
+            description="Get dialog evaluation results with evaluation_id.",
+            response_description="List of evaluation scenario including results.",
+            responses={
+                200: {"description": "Successfully returns evaluation results"},
+                404: {"description": "Results not found"},
+                500: {"description": "Internal server error"}
+            }
+        )
+        async def get_evaluation_status(
+            evaluation_id: str
+        ) -> EvaluationResponse:
+            if not self.evaluator:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Evaluator is not set"
+                )
+
+            filepath = f"evaluation_results/{evaluation_id}.json"
+            if not os.path.exists(filepath):
+                raise HTTPException(status_code=404, detail="Evaluation not found")
+            try:
+                results = self.evaluator.load_results(filepath)
+                return EvaluationResponse(scenarios=results)
+            except Exception as ex:
+                logger.error(f"Retrieving evaluation results failed {evaluation_id}: {ex}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Internal server error while retrieving evaluation results"
                 )
 
         return router

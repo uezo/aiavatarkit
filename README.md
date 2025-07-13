@@ -1506,6 +1506,22 @@ results = await evaluator.run(
 )
 ```
 
+### Use via Config API
+
+You can evaluate scenario on the fly via Config API:
+
+```python
+# Make evaluator
+from aiavatar.eval.dialog import DialogEvaluator
+eval_llm = ChatGPTService(openai_api_key=OPENAI_API_KEY)
+evaluator = DialogEvaluator(llm=aiavatar_app.sts.llm, evaluation_llm=eval_llm)
+
+# Activate Config API
+from aiavatar.admin.config import ConfigAPI
+config_router = ConfigAPI(aiavatar_app.sts, evaluator=evaluator).get_router()   # Set evaluator here
+app.include_router(config_router)
+```
+
 
 ## 🤿 Deep dive
 
