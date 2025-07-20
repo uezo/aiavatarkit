@@ -322,8 +322,9 @@ The list of tools is as follows:
 
             stream_buffer += chunk.text
 
-            for spc in self.split_chars:
-                stream_buffer = stream_buffer.replace(spc, spc + "|")
+            # Replace consecutive punctuation with the same punctuation followed by delimiter
+            split_chars_escaped = [re.escape(char) for char in self.split_chars]
+            stream_buffer = re.sub("([" + "".join(split_chars_escaped) + "]+)", r"\1|", stream_buffer)
 
             if len(stream_buffer) > self.option_split_threshold:
                 stream_buffer = self.replace_last_option_split_char(stream_buffer)
