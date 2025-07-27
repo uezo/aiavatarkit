@@ -404,3 +404,289 @@ def test_reset_vad_state(detector_with_model_pool):
     for session_id in session_ids:
         iterator = detector_with_model_pool.get_session(session_id).vad_iterator
         assert iterator.reset_states.call_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_on_recording_started_callback(mock_silero_model):
+    """
+    Test that on_recording_started callback is triggered when recording exceeds min_duration
+    """
+    callback_calls = []
+    
+    async def mock_callback(session_id: str):
+        callback_calls.append(session_id)
+    
+    model, utils = mock_silero_model
+    
+    with patch('torch.hub.load', return_value=(model, utils)):
+        detector = SileroSpeechDetector(
+            silence_duration_threshold=0.5,
+            max_duration=3.0,
+            min_duration=0.5,
+            sample_rate=16000,
+            channels=1,
+            preroll_buffer_count=5,
+            speech_probability_threshold=0.5,
+            chunk_size=512,
+            on_recording_started=mock_callback,
+            debug=True
+        )
+    
+    # Mock high speech probability
+    detector.model_pool[0].return_value = torch.tensor(0.8)
+    
+    session_id = "test_callback"
+    
+    # Start recording with speech samples
+    speech_samples1 = generate_samples(amplitude=1200, num_samples=4000)  # 0.25 sec
+    is_recording = await detector.process_samples(speech_samples1, session_id)
+    assert is_recording is True
+    
+    # Callback should not be triggered yet (below min_duration)
+    await asyncio.sleep(0.1)
+    assert len(callback_calls) == 0
+    
+    # Add more samples to exceed min_duration
+    speech_samples2 = generate_samples(amplitude=1200, num_samples=4000)  # Another 0.25 sec
+    is_recording = await detector.process_samples(speech_samples2, session_id)
+    assert is_recording is True
+    
+    # Wait for callback task to complete
+    await asyncio.sleep(0.1)
+    
+    # Verify callback was triggered
+    assert len(callback_calls) == 1
+    assert callback_calls[0] == session_id
+    
+    # Verify flag is set
+    session = detector.get_session(session_id)
+    assert session.on_recording_started_triggered is True
+    
+    # Additional samples should not trigger callback again
+    more_samples = generate_samples(amplitude=1200, num_samples=3200)
+    await detector.process_samples(more_samples, session_id)
+    await asyncio.sleep(0.1)
+    assert len(callback_calls) == 1  # Still only one call
+
+
+@pytest.mark.asyncio
+async def test_on_recording_started_not_triggered_below_min_duration(mock_silero_model):
+    """
+    Test that on_recording_started callback is NOT triggered for short recordings
+    """
+    callback_calls = []
+    
+    async def mock_callback(session_id: str):
+        callback_calls.append(session_id)
+    
+    model, utils = mock_silero_model
+    
+    with patch('torch.hub.load', return_value=(model, utils)):
+        detector = SileroSpeechDetector(
+            silence_duration_threshold=0.5,
+            max_duration=3.0,
+            min_duration=0.5,
+            sample_rate=16000,
+            channels=1,
+            preroll_buffer_count=5,
+            speech_probability_threshold=0.5,
+            chunk_size=512,
+            on_recording_started=mock_callback,
+            debug=True
+        )
+    
+    # Mock high speech probability initially, then low
+    detector.model_pool[0].return_value = torch.tensor(0.8)
+    
+    session_id = "test_short_callback"
+    
+    # Short samples below min_duration
+    short_samples = generate_samples(amplitude=1200, num_samples=7000)  # Well under 0.5 sec (0.4375 sec)
+    is_recording = await detector.process_samples(short_samples, session_id)
+    assert is_recording is True
+    
+    # Mock low speech probability for silence
+    detector.model_pool[0].return_value = torch.tensor(0.2)
+    
+    # Stop with silence
+    silent_samples = generate_samples(amplitude=0, num_samples=8000)
+    is_recording = await detector.process_samples(silent_samples, session_id)
+    assert is_recording is False
+    
+    await asyncio.sleep(0.1)
+    
+    # Callback should not have been triggered
+    assert len(callback_calls) == 0
+    
+    # Flag should remain False
+    session = detector.get_session(session_id)
+    assert session.on_recording_started_triggered is False
+
+
+@pytest.mark.asyncio
+async def test_on_recording_started_callback_reset(mock_silero_model):
+    """
+    Test that on_recording_started_triggered flag is reset properly
+    """
+    callback_calls = []
+    
+    async def mock_callback(session_id: str):
+        callback_calls.append(session_id)
+    
+    model, utils = mock_silero_model
+    
+    with patch('torch.hub.load', return_value=(model, utils)):
+        detector = SileroSpeechDetector(
+            silence_duration_threshold=0.5,
+            max_duration=3.0,
+            min_duration=0.5,
+            sample_rate=16000,
+            channels=1,
+            preroll_buffer_count=5,
+            speech_probability_threshold=0.5,
+            chunk_size=512,
+            on_recording_started=mock_callback,
+            debug=True
+        )
+    
+    # Mock high speech probability
+    detector.model_pool[0].return_value = torch.tensor(0.8)
+    
+    session_id = "test_reset_callback"
+    
+    # First recording
+    speech_samples1 = generate_samples(amplitude=1200, num_samples=4000)
+    await detector.process_samples(speech_samples1, session_id)
+    speech_samples2 = generate_samples(amplitude=1200, num_samples=4000)
+    await detector.process_samples(speech_samples2, session_id)
+    await asyncio.sleep(0.1)
+    assert len(callback_calls) == 1
+    
+    # Reset session
+    detector.reset_session(session_id)
+    session = detector.get_session(session_id)
+    assert session.on_recording_started_triggered is False
+    
+    # Second recording after reset
+    await detector.process_samples(speech_samples1, session_id)
+    await detector.process_samples(speech_samples2, session_id)
+    await asyncio.sleep(0.1)
+    assert len(callback_calls) == 2  # Callback triggered again
+
+
+@pytest.mark.asyncio
+async def test_process_samples_return_value(mock_silero_model):
+    """
+    Test that process_samples returns correct boolean value indicating recording status
+    """
+    model, utils = mock_silero_model
+    
+    with patch('torch.hub.load', return_value=(model, utils)):
+        detector = SileroSpeechDetector(
+            silence_duration_threshold=0.5,
+            max_duration=3.0,
+            min_duration=0.5,
+            sample_rate=16000,
+            channels=1,
+            preroll_buffer_count=5,
+            speech_probability_threshold=0.5,
+            chunk_size=512,
+            debug=True
+        )
+    
+    session_id = "test_return_value"
+    
+    # Mock high speech probability for recording
+    detector.model_pool[0].return_value = torch.tensor(0.8)
+    
+    # Start recording
+    speech_samples = generate_samples(amplitude=1200, num_samples=8000)
+    is_recording = await detector.process_samples(speech_samples, session_id)
+    assert is_recording is True
+    
+    # Continue recording
+    more_speech_samples = generate_samples(amplitude=1200, num_samples=3200)
+    is_recording = await detector.process_samples(more_speech_samples, session_id)
+    assert is_recording is True
+    
+    # Mock low speech probability for silence
+    detector.model_pool[0].return_value = torch.tensor(0.2)
+    
+    # Stop with silence
+    silent_samples = generate_samples(amplitude=0, num_samples=8000)
+    is_recording = await detector.process_samples(silent_samples, session_id)
+    assert is_recording is False
+
+
+@pytest.mark.asyncio
+async def test_process_samples_return_value_when_muted(mock_silero_model):
+    """
+    Test that process_samples returns False when detector is muted
+    """
+    model, utils = mock_silero_model
+    
+    with patch('torch.hub.load', return_value=(model, utils)):
+        detector = SileroSpeechDetector(
+            silence_duration_threshold=0.5,
+            max_duration=3.0,
+            min_duration=0.5,
+            sample_rate=16000,
+            channels=1,
+            preroll_buffer_count=5,
+            speech_probability_threshold=0.5,
+            chunk_size=512,
+            debug=True
+        )
+    
+    # Mute the detector
+    detector.should_mute = lambda: True
+    
+    session_id = "test_muted_return"
+    
+    # Try to record
+    speech_samples = generate_samples(amplitude=1200, num_samples=8000)
+    is_recording = await detector.process_samples(speech_samples, session_id)
+    assert is_recording is False
+
+
+@pytest.mark.asyncio
+async def test_on_recording_started_callback_error_handling(mock_silero_model):
+    """
+    Test that errors in on_recording_started callback are handled gracefully
+    """
+    async def failing_callback(session_id: str):
+        raise ValueError("Test error in callback")
+    
+    model, utils = mock_silero_model
+    
+    with patch('torch.hub.load', return_value=(model, utils)):
+        detector = SileroSpeechDetector(
+            silence_duration_threshold=0.5,
+            max_duration=3.0,
+            min_duration=0.5,
+            sample_rate=16000,
+            channels=1,
+            preroll_buffer_count=5,
+            speech_probability_threshold=0.5,
+            chunk_size=512,
+            on_recording_started=failing_callback,
+            debug=True
+        )
+    
+    # Mock high speech probability
+    detector.model_pool[0].return_value = torch.tensor(0.8)
+    
+    session_id = "test_error_callback"
+    
+    # Recording should continue despite callback error
+    speech_samples1 = generate_samples(amplitude=1200, num_samples=4000)
+    await detector.process_samples(speech_samples1, session_id)
+    speech_samples2 = generate_samples(amplitude=1200, num_samples=4000)
+    is_recording = await detector.process_samples(speech_samples2, session_id)
+    assert is_recording is True
+    
+    await asyncio.sleep(0.1)
+    
+    # Flag should still be set even with callback error
+    session = detector.get_session(session_id)
+    assert session.on_recording_started_triggered is True

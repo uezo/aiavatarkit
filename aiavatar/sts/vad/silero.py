@@ -21,6 +21,7 @@ class RecordingSession:
         self.data: dict = {}
         self.vad_buffer: bytearray = bytearray()
         self.vad_iterator = vad_iterator
+        self.on_recording_started_triggered: bool = False
 
     def reset(self):
         # Reset status data except for preroll_buffer
@@ -28,6 +29,7 @@ class RecordingSession:
         self.is_recording = False
         self.silence_duration = 0
         self.record_duration = 0
+        self.on_recording_started_triggered = False
         # Don't reset vad_buffer here as it's used for continuous processing
 
 
@@ -46,7 +48,8 @@ class SileroSpeechDetector(SpeechDetector):
         model_path: Optional[str] = None,
         speech_probability_threshold: float = 0.5,
         chunk_size: int = 512,
-        model_pool_size: int = 1
+        model_pool_size: int = 1,
+        on_recording_started: Optional[Callable[[str, float], None]] = None
     ):
         self.silence_duration_threshold = silence_duration_threshold
         self.max_duration = max_duration
@@ -58,7 +61,8 @@ class SileroSpeechDetector(SpeechDetector):
         self.to_linear16 = to_linear16
         self.should_mute = lambda: False
         self.recording_sessions: Dict[str, RecordingSession] = {}
-        
+        self.on_recording_started = on_recording_started
+
         # Silero VAD specific parameters
         self.speech_probability_threshold = speech_probability_threshold
         self.chunk_size = chunk_size
@@ -159,7 +163,7 @@ class SileroSpeechDetector(SpeechDetector):
         except Exception as ex:
             logger.error(f"Error in task for session {session_id}: {ex}", exc_info=True)
 
-    async def process_samples(self, samples: bytes, session_id: str):
+    async def process_samples(self, samples: bytes, session_id: str) -> bool:
         if self.to_linear16:
             samples = self.to_linear16(samples)
 
@@ -170,7 +174,7 @@ class SileroSpeechDetector(SpeechDetector):
             session.preroll_buffer.clear()
             session.vad_buffer.clear()
             logger.debug("SileroSpeechDetector is muted.")
-            return
+            return False
 
         session.preroll_buffer.append(samples)
         session.vad_buffer.extend(samples)
@@ -214,6 +218,17 @@ class SileroSpeechDetector(SpeechDetector):
             else:
                 session.silence_duration += sample_duration
 
+            # Check if we've exceeded min_duration and call callback once
+            if (session.record_duration - session.silence_duration >= self.min_duration and 
+                not session.on_recording_started_triggered and 
+                self.on_recording_started
+            ):
+                session.on_recording_started_triggered = True
+                try:
+                    asyncio.create_task(self.on_recording_started(session_id))
+                except Exception as ex:
+                    logger.error(f"Error in on_recording_started callback: {ex}", exc_info=True)
+
             if session.silence_duration >= self.silence_duration_threshold:
                 recorded_duration = session.record_duration - session.silence_duration
                 if recorded_duration < self.min_duration:
@@ -230,6 +245,8 @@ class SileroSpeechDetector(SpeechDetector):
                 if self.debug:
                     logger.info(f"Recording too long: {session.record_duration} sec")
                 session.reset()
+
+        return session.is_recording
 
     async def process_stream(self, input_stream: AsyncGenerator[bytes, None], session_id: str):
         logger.info("SileroSpeechDetector start processing stream.")

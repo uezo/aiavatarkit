@@ -19,6 +19,7 @@ class RecordingSession:
         self.preroll_buffer: deque = deque(maxlen=preroll_buffer_count)
         self.amplitude_threshold: float = 0
         self.data: dict = {}
+        self.on_recording_started_triggered: bool = False
 
     def reset(self):
         # Reset status data except for preroll_buffer
@@ -26,6 +27,7 @@ class RecordingSession:
         self.is_recording = False
         self.silence_duration = 0
         self.record_duration = 0
+        self.on_recording_started_triggered = False
 
 
 class StandardSpeechDetector(SpeechDetector):
@@ -40,6 +42,7 @@ class StandardSpeechDetector(SpeechDetector):
         channels: int = 1,
         preroll_buffer_count: int = 5,
         to_linear16: Optional[Callable[[bytes], bytes]] = None,
+        on_recording_started: Optional[Callable[[str, float], None]] = None,
         debug: bool = False
     ):
         self._volume_db_threshold = volume_db_threshold
@@ -49,6 +52,7 @@ class StandardSpeechDetector(SpeechDetector):
         self.min_duration = min_duration
         self.sample_rate = sample_rate
         self.channels = channels
+        self.on_recording_started = on_recording_started
         self.debug = debug
         self.preroll_buffer_count = preroll_buffer_count
         self.to_linear16 = to_linear16
@@ -71,7 +75,7 @@ class StandardSpeechDetector(SpeechDetector):
         except Exception as ex:
             logger.error(f"Error in task for session {session_id}: {ex}", exc_info=True)
 
-    async def process_samples(self, samples: bytes, session_id: str):
+    async def process_samples(self, samples: bytes, session_id: str) -> bool:
         if self.to_linear16:
             samples = self.to_linear16(samples)
 
@@ -81,7 +85,7 @@ class StandardSpeechDetector(SpeechDetector):
             session.reset()
             session.preroll_buffer.clear()
             logger.debug("StandardSpeechDetector is muted.")
-            return
+            return False
 
         session.preroll_buffer.append(samples)
 
@@ -117,6 +121,17 @@ class StandardSpeechDetector(SpeechDetector):
             else:
                 session.silence_duration += sample_duration
 
+            # Check if we've exceeded min_duration and call callback once
+            if (session.record_duration - session.silence_duration >= self.min_duration and 
+                not session.on_recording_started_triggered and 
+                self.on_recording_started
+            ):
+                session.on_recording_started_triggered = True
+                try:
+                    asyncio.create_task(self.on_recording_started(session_id))
+                except Exception as ex:
+                    logger.error(f"Error in on_recording_started callback: {ex}", exc_info=True)
+
             if session.silence_duration >= self.silence_duration_threshold:
                 recorded_duration = session.record_duration - session.silence_duration
                 if recorded_duration < self.min_duration:
@@ -133,6 +148,8 @@ class StandardSpeechDetector(SpeechDetector):
                 if self.debug:
                     logger.info(f"Recording too long: {session.record_duration} sec")
                 session.reset()
+        
+        return session.is_recording
 
     async def process_stream(self, input_stream: AsyncGenerator[bytes, None], session_id: str):
         logger.info("STSPipeline start processing stream.")
