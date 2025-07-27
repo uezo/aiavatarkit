@@ -1,11 +1,12 @@
 import base64
 import logging
 import re
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
+from typing import List, Dict, Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Request, File, UploadFile
+from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sse_starlette.sse import EventSourceResponse   # pip install sse-starlette
+from pydantic import BaseModel
 from ...sts import STSPipeline
 from ...sts.models import STSRequest, STSResponse
 from ...sts.vad import SpeechDetectorDummy
@@ -18,6 +19,16 @@ from ..models import AvatarControlRequest, AIAvatarRequest, AIAvatarResponse
 from .. import Adapter
 
 logger = logging.getLogger(__name__)
+
+
+class SynthesizeRequest(BaseModel):
+    text: str
+    style_info: Optional[Dict] = None
+    language: Optional[str] = None
+
+
+class TranscribeResponse(BaseModel):
+    text: str
 
 
 class AIAvatarHttpServer(Adapter):
@@ -105,7 +116,7 @@ class AIAvatarHttpServer(Adapter):
 
         return avreq
 
-    def get_api_router(self, path: str = "/chat"):
+    def get_api_router(self, path: str = "/chat", stt: SpeechRecognizer = None, tts: SpeechSynthesizer = None):
         router = APIRouter()
         bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -175,6 +186,52 @@ class AIAvatarHttpServer(Adapter):
                     yield aiavatar_response.model_dump_json()
 
             return EventSourceResponse(stream_response())
+
+        @router.post("/transcribe")
+        async def post_transcribe(
+            audio: UploadFile = File(...),
+            credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
+        ):
+            if self.api_key:
+                self.api_key_auth(credentials)
+
+            audio_bytes = await audio.read()
+
+            if not audio_bytes:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "audio data is required."}
+                )
+
+            text = await (stt or self.sts.stt).transcribe(data=audio_bytes)
+
+            return TranscribeResponse(text=text)
+
+        @router.post("/synthesize")
+        async def post_synthesize(
+            request: SynthesizeRequest,
+            credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
+        ):
+            if self.api_key:
+                self.api_key_auth(credentials)
+
+            if not request.text:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "text is required."}
+                )
+
+            audio_bytes = await (tts or self.sts.tts).synthesize(
+                text=request.text,
+                style_info=request.style_info,
+                language=request.language
+            )
+
+            return Response(
+                content=audio_bytes,
+                media_type="audio/wav",
+                headers={"Content-Disposition": "attachment; filename=voice.wav"}
+            )
 
         return router
 
