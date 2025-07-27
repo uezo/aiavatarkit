@@ -476,6 +476,25 @@ vad = SileroSpeechDetector(
 
 You can also make custom VAD components by implementing `SpeechDetector` interface.
 
+### Speech Detection Callback
+
+SpeechDetectors supports an `on_recording_started` callback that gets triggered when speech recording starts and meets the minimum duration threshold. The callback will be executed asynchronously as a background task.
+
+```python
+from aiavatar.sts.vad.standard import StandardSpeechDetector
+
+async def my_recording_started_handler(session_id: str):
+    print(f"Recording started for session: {session_id}")
+    # Add your custom logic here
+
+detector = StandardSpeechDetector(
+    on_recording_started=my_recording_started_handler,
+    volume_db_threshold=-30.0,
+    silence_duration_threshold=0.5,
+    # other parameters...
+)
+```
+
 
 ## 🥰 Face expression
 
