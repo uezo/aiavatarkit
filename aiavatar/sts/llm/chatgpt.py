@@ -200,7 +200,7 @@ class ChatGPTService(LLMService):
         tool_calls: List[ToolCall] = []
         try_dynamic_tools = False
         async for chunk in stream_resp:
-            if not chunk.choices:
+            if not chunk.choices or not chunk.choices[0].delta: # Azure OpenAI with content filter (streaming mode) returns choices without delta
                 continue
 
             if chunk.choices[0].delta.tool_calls:
