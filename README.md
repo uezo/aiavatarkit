@@ -281,6 +281,28 @@ from aiavatar.sts.tts.openai import OpenAISpeechSynthesizer
 from aiavatar.sts.tts.speech_gateway import SpeechGatewaySpeechSynthesizer
 ```
 
+### Instant TTS Synthesizer
+
+For quick setup of custom TTS services with HTTP API endpoints, use `create_instant_synthesizer`. This allows you to create a TTS synthesizer with just HTTP request parameters.
+
+```python
+from aiavatar.sts.tts.base import create_instant_synthesizer
+
+# Example: Style-Bert-VITS2 API
+sbv2_tts = create_instant_synthesizer(
+    method="POST",
+    url="http://127.0.0.1:5000/voice",
+    json={
+        "model_id": "0",
+        "speaker_id": "0",
+        "text": "{text}"  # Placeholder for processed text
+    }
+)
+```
+
+The `{text}` and `{language}` placeholders in params, headers, and json will be automatically replaced with the processed text and language values during synthesis.
+
+
 You can also make custom tts components by impelemting `SpeechSynthesizer` interface.
 
 ### Preprocessing
