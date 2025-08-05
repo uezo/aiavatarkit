@@ -119,6 +119,7 @@ This change ensures compatibility with the new internal structure and removes th
     - [🎛️ Configuration API](#️-configuration-api)
     - [🎮 Control API](#-control-api)
     - [🔐 Authorization](#-authorization)
+    - [🧵 Request merging](#-request-merging)
 
 - [🧪 Evaluation](#-evaluation)
 
@@ -1746,6 +1747,46 @@ aiavatar_app.sts.invoke(STSRequest(
 ```
 
 Placeholders in the system prompt, such as `{name}`, will be replaced with the corresponding values at runtime.
+
+
+### 🧵 Request merging
+
+Request merging helps prevent conversation breakdown when speech recognition produces fragmented results. When enabled, consecutive requests within a specified time window are automatically merged into a single request, improving conversation continuity and user experience.
+
+
+Example without request merging:
+
+```
+User: I'm feeling hungry...
+AI: Would you... (interrupted mid-sentence while saying "Would you like me to book a restaurant? The place from last time has availability")
+User: Uh-huh (misrecognized from "Um..." - a hesitant sound)
+AI: Booking completed. (responded to "Uh-huh" and executed restaurant booking)
+User: What are you talking about??
+```
+
+Example with request merging:
+
+```
+User: I'm feeling hungry...
+AI: Would you... (interrupted mid-sentence while saying "Would you like me to book a restaurant? The place from last time has availability")
+User: Uh-huh (misrecognized from "Um..." - a hesitant sound)
+AI: Would you like me to book a restaurant? The place from last time has availability (responding to merged request "I'm feeling hungry... Uh-huh...")
+User: Yes, please!
+```
+
+To enable this feature, set `merge_request_threshold > 0`.
+
+```python
+aiavatar_app.sts.merge_request_threshold = 2.0  # Merge requests within 2 seconds
+```
+
+You can also customize the merge prefix message. Here's an example of setting the prefix in Japanese:
+
+```python
+aiavatar_app.sts.merge_request_prefix = "$直前のユーザーの要求とあなたの応答はキャンセルされました。以下の要求に対して、あらためて応答しなおしてください:\n\n"
+```
+
+NOTE: Files from the previous request are preserved in the merged request
 
 
 ### 🔈 Audio device

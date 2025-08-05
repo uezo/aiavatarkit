@@ -42,6 +42,10 @@ class STSPipeline:
         tts_voicevox_speaker: int = 46,
         wakewords: List[str] = None,
         wakeword_timeout: float = 60.0,
+        merge_request_threshold: float = 0.0,
+        merge_request_prefix: str = "$Previous user's request and your response have been canceled. Please respond again to the following request:\n\n",
+        # Japanese version
+        # merge_request_prefix: str = "$直前のユーザーの要求とあなたの応答はキャンセルされました。以下の要求に対して、あらためて応答しなおしてください:\n\n"
         performance_recorder: PerformanceRecorder = None,
         voice_recorder: VoiceRecorder = None,
         voice_recorder_enabled: bool = True,
@@ -50,7 +54,7 @@ class STSPipeline:
         self.debug = debug
 
         # Cancellation
-        self.active_transactions: Dict[str, str] = {}
+        self.active_transactions: Dict[str, str] = {}   # TODO: Use external data store
 
         # VAD
         self.vad = vad or StandardSpeechDetector(
@@ -99,6 +103,11 @@ class STSPipeline:
         # Wakeword
         self.wakewords = wakewords
         self.wakeword_timeout = wakeword_timeout
+
+        # Merge consecutive requests
+        self.merge_request_threshold = merge_request_threshold
+        self.merge_request_prefix = merge_request_prefix
+        self.previous_requests = {}     # TODO: Use external data store
 
         # Response handler
         self.handle_response = self.handle_response_default
@@ -215,6 +224,18 @@ class STSPipeline:
             performance.request_files = json.dumps(request.files or [], ensure_ascii=False)
             performance.voice_length = request.audio_duration
             performance.stt_time = time() - start_time
+
+            # Merge consecutive requests
+            if self.merge_request_threshold > 0:
+                now = datetime.now(timezone.utc)
+                if previous_request := self.previous_requests.get(request.session_id):
+                    requests_interval = (now - previous_request["timestamp"]).total_seconds()
+                    if self.merge_request_threshold > requests_interval:
+                        logger.info(f"Merge consecutive requests: Interval {requests_interval} < Threshold {self.merge_request_threshold}")
+                        previous_request_text = (previous_request["text"] or "").replace(self.merge_request_prefix, "")
+                        request.text = f"{self.merge_request_prefix}\n\n{previous_request_text}\n{request.text}"
+                        request.files = request.files or previous_request["files"]
+                self.previous_requests[request.session_id] = {"timestamp": now, "text": request.text, "files": request.files}
 
             last_created_at = await self.llm.context_manager.get_last_created_at(request.context_id)
             if self.is_awake(request, last_created_at):

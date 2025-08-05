@@ -2,6 +2,8 @@ import asyncio
 import os
 import pytest
 import numpy
+from datetime import datetime, timezone
+from time import sleep
 from aiavatar.sts import STSPipeline
 from aiavatar.sts.vad import SpeechDetectorDummy
 from aiavatar.sts.vad.standard import StandardSpeechDetector
@@ -355,3 +357,330 @@ async def test_sts_pipeline_with_user():
     await sts.shutdown()
     await voicevox_for_input.close()
     await stt_for_final.close()
+
+
+@pytest.mark.asyncio
+async def test_request_merging_enabled():
+    """Test request merging when merge_request_threshold > 0"""
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        merge_request_threshold=3.0,  # 3 second threshold
+        performance_recorder=SQLitePerformanceRecorder(),
+        debug=True
+    )
+
+    session_id = "test_merge_session"
+    user_id = "test_user"
+    context_id = "test_context"
+
+    # First request
+    request1 = STSRequest(
+        session_id=session_id,
+        user_id=user_id,
+        context_id=context_id,
+        text="Hello"
+    )
+
+    responses1 = []
+    async for response in sts.invoke(request1):
+        responses1.append(response)
+
+    # Immediately send second request (within threshold)
+    request2 = STSRequest(
+        session_id=session_id,
+        user_id=user_id,
+        context_id=context_id,
+        text="World"
+    )
+
+    responses2 = []
+    async for response in sts.invoke(request2):
+        responses2.append(response)
+
+    # Check that second request was merged with prefix
+    assert sts.merge_request_prefix in request2.text
+    assert "Hello" in request2.text  # Previous request text should be included
+    assert "World" in request2.text  # Current request text should be included
+    
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_request_merging_disabled():
+    """Test that requests are not merged when merge_request_threshold = 0"""
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        merge_request_threshold=0.0,  # Disabled
+        performance_recorder=SQLitePerformanceRecorder(),
+        debug=True
+    )
+
+    session_id = "test_no_merge_session"
+    user_id = "test_user"
+    context_id = "test_context"
+
+    # First request
+    request1 = STSRequest(
+        session_id=session_id,
+        user_id=user_id,
+        context_id=context_id,
+        text="Hello"
+    )
+
+    responses1 = []
+    async for response in sts.invoke(request1):
+        responses1.append(response)
+
+    # Immediately send second request
+    request2 = STSRequest(
+        session_id=session_id,
+        user_id=user_id,
+        context_id=context_id,
+        text="World"
+    )
+
+    responses2 = []
+    async for response in sts.invoke(request2):
+        responses2.append(response)
+
+    # Check that second request was NOT merged
+    assert sts.merge_request_prefix not in request2.text
+    assert request2.text == "World"  # Should remain unchanged
+    
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_request_merging_threshold_exceeded():
+    """Test that requests are not merged when time threshold is exceeded"""
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        merge_request_threshold=0.5,  # 0.5 second threshold
+        performance_recorder=SQLitePerformanceRecorder(),
+        debug=True
+    )
+
+    session_id = "test_threshold_session"
+    user_id = "test_user"
+    context_id = "test_context"
+
+    # First request
+    request1 = STSRequest(
+        session_id=session_id,
+        user_id=user_id,
+        context_id=context_id,
+        text="Hello"
+    )
+
+    responses1 = []
+    async for response in sts.invoke(request1):
+        responses1.append(response)
+
+    # Wait longer than threshold
+    sleep(0.6)
+
+    # Send second request after threshold
+    request2 = STSRequest(
+        session_id=session_id,
+        user_id=user_id,
+        context_id=context_id,
+        text="World"
+    )
+
+    responses2 = []
+    async for response in sts.invoke(request2):
+        responses2.append(response)
+
+    # Check that second request was NOT merged due to time threshold
+    assert sts.merge_request_prefix not in request2.text
+    assert request2.text == "World"  # Should remain unchanged
+    
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_request_merging_different_sessions():
+    """Test that requests from different sessions are not merged"""
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        merge_request_threshold=1.0,  # 1 second threshold
+        performance_recorder=SQLitePerformanceRecorder(),
+        debug=True
+    )
+
+    user_id = "test_user"
+    context_id = "test_context"
+
+    # First request from session 1
+    request1 = STSRequest(
+        session_id="session1",
+        user_id=user_id,
+        context_id=context_id,
+        text="Hello"
+    )
+
+    responses1 = []
+    async for response in sts.invoke(request1):
+        responses1.append(response)
+
+    # Immediately send request from session 2
+    request2 = STSRequest(
+        session_id="session2",
+        user_id=user_id,
+        context_id=context_id,
+        text="World"
+    )
+
+    responses2 = []
+    async for response in sts.invoke(request2):
+        responses2.append(response)
+
+    # Check that requests from different sessions are NOT merged
+    assert sts.merge_request_prefix not in request2.text
+    assert request2.text == "World"  # Should remain unchanged
+    
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_request_merging_with_files():
+    """Test that files are preserved during request merging"""
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        merge_request_threshold=1.0,  # 1 second threshold
+        performance_recorder=SQLitePerformanceRecorder(),
+        debug=True
+    )
+
+    session_id = "test_files_session"
+    user_id = "test_user"
+    context_id = "test_context"
+
+    # First request with files
+    request1 = STSRequest(
+        session_id=session_id,
+        user_id=user_id,
+        context_id=context_id,
+        text="Hello",
+        files={"file1": "content1"}
+    )
+
+    responses1 = []
+    async for response in sts.invoke(request1):
+        responses1.append(response)
+
+    # Second request without files (within threshold)
+    request2 = STSRequest(
+        session_id=session_id,
+        user_id=user_id,
+        context_id=context_id,
+        text="World"
+    )
+
+    responses2 = []
+    async for response in sts.invoke(request2):
+        responses2.append(response)
+
+    # Check that files from previous request are preserved
+    assert request2.files == {"file1": "content1"}
+    assert sts.merge_request_prefix in request2.text
+    
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_request_merging_prefix_removal():
+    """Test that merge prefix is properly removed from previous request text"""
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        merge_request_threshold=3.0,  # 3 second threshold
+        merge_request_prefix="$MERGED:",
+        performance_recorder=SQLitePerformanceRecorder(),
+        debug=True
+    )
+
+    session_id = "test_prefix_session"
+    user_id = "test_user"
+    context_id = "test_context"
+
+    # First request
+    request1 = STSRequest(
+        session_id=session_id,
+        user_id=user_id,
+        context_id=context_id,
+        text="First request"
+    )
+
+    responses1 = []
+    async for response in sts.invoke(request1):
+        responses1.append(response)
+
+    # Second request (will be merged)
+    request2 = STSRequest(
+        session_id=session_id,
+        user_id=user_id,
+        context_id=context_id,
+        text="Second request"
+    )
+
+    responses2 = []
+    async for response in sts.invoke(request2):
+        responses2.append(response)
+
+    # Third request (should remove prefix from previous merged request)
+    request3 = STSRequest(
+        session_id=session_id,
+        user_id=user_id,
+        context_id=context_id,
+        text="Third request"
+    )
+
+    responses3 = []
+    async for response in sts.invoke(request3):
+        responses3.append(response)
+
+    # Check that prefix was properly removed and text was merged correctly
+    assert "$MERGED:" in request3.text
+    # The merged text should not contain duplicate prefixes
+    assert request3.text.count("$MERGED:") == 1
+    assert "First request" in request3.text
+    assert "Second request" in request3.text
+    assert "Third request" in request3.text
+    
+    await sts.shutdown()
