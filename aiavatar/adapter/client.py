@@ -146,9 +146,22 @@ class AIAvatarClientBase:
                 if avreq.animation_name:
                     asyncio.create_task(self.animation_controller.animate(avreq.animation_name, avreq.animation_duration))
 
-            if response.audio_data:
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, self.audio_player.play, response.audio_data)
+            if response.type == "chunk":
+                if pcm_format := response.metadata.get("pcm_format"):
+                    if not response.audio_data:
+                        # Initialize audio player with the PCM format
+                        if not self.audio_player.play_stream:
+                            self.audio_player.initilize_stream(
+                                pcm_format["sample_rate"], pcm_format["channels"], pcm_format["sample_width"]
+                            )
+                    else:
+                        # Add PCM data to player queue
+                        self.audio_player.add(response.audio_data)
+
+                elif response.audio_data:
+                    # Playback wave directly
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, self.audio_player.play, response.audio_data)
 
         except Exception as ex:
             logger.error(f"Error processing response: {ex}", exc_info=True)

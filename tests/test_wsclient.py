@@ -3,6 +3,7 @@ import asyncio
 import base64
 import io
 import os
+import wave
 from uuid import uuid4
 import httpx
 import numpy
@@ -218,7 +219,7 @@ async def test_chat_vision(aiavatar_app: AIAvatar):
             if source == "screenshot":
                 # Capture screenshot
                 buffered = io.BytesIO()
-                image = pyautogui.screenshot(region=(0, 0, 1280, 720))
+                image = pyautogui.screenshot(region=(0, 0, 640, 360))
                 image.save(buffered, format="PNG")
                 image_bytes = buffered.getvalue()
 
@@ -250,4 +251,190 @@ async def test_chat_function(aiavatar_app: AIAvatar):
 
     finally:
         await aiavatar_app.stop_listening(session_id)
+        task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_websocket_multiple_sessions_isolation():
+    """Test that multiple AIAvatar instances connecting to the same server with different session IDs maintain separate session data"""
+    
+    # Create two separate AIAvatar instances for different sessions
+    session_id_1 = f"isolation_test_session_1_{str(uuid4())}"
+    session_id_2 = f"isolation_test_session_2_{str(uuid4())}"
+    user_id_1 = "isolation_user_1"
+    user_id_2 = "isolation_user_2"
+    
+    aiavatar_1 = AIAvatar(
+        url=WS_SERVER_URL,
+        face_controller=FaceControllerForTest(),
+        animation_controller=AnimationControllerTest(),
+        debug=True
+    )
+    
+    aiavatar_2 = AIAvatar(
+        url=WS_SERVER_URL,
+        face_controller=FaceControllerForTest(),
+        animation_controller=AnimationControllerTest(),
+        debug=True
+    )
+    
+    # Start both sessions simultaneously
+    task_1 = asyncio.create_task(aiavatar_1.start_listening(session_id=session_id_1, user_id=user_id_1))
+    task_2 = asyncio.create_task(aiavatar_2.start_listening(session_id=session_id_2, user_id=user_id_2))
+    
+    try:
+        # Wait a bit for connections to establish
+        await asyncio.sleep(1)
+        
+        # Session 1: First conversation
+        response_1_1 = await chat(aiavatar_1, text="私の名前は田中です。覚えてください。", session_id=session_id_1)
+        assert response_1_1.context_id is not None
+        context_id_1 = response_1_1.context_id
+        
+        # Session 2: First conversation (different topic)
+        response_2_1 = await chat(aiavatar_2, text="私の名前は鈴木です。覚えてください。", session_id=session_id_2)
+        assert response_2_1.context_id is not None
+        context_id_2 = response_2_1.context_id
+        
+        # Verify different context IDs for different sessions
+        assert context_id_1 != context_id_2
+        
+        # Session 1: Ask about the name (should remember Alice)
+        response_1_2 = await chat(aiavatar_1, text="私の名前は何ですか？", session_id=session_id_1, context_id=context_id_1)
+        
+        # Session 2: Ask about the name (should remember Bob)
+        response_2_2 = await chat(aiavatar_2, text="私の名前は何ですか？", session_id=session_id_2, context_id=context_id_2)
+        
+        # Verify session isolation: each session should only know its own context
+        # Session 1 should respond about Alice, not Bob
+        response_1_text = response_1_2.text.lower()
+        assert "田中" in response_1_text
+        assert "鈴木" not in response_1_text
+        
+        # Session 2 should respond about Bob, not Alice
+        response_2_text = response_2_2.text.lower()
+        assert "鈴木" in response_2_text
+        assert "田中" not in response_2_text
+        
+        # Verify that session IDs are correctly maintained
+        assert response_1_1.session_id == session_id_1
+        assert response_1_2.session_id == session_id_1
+        assert response_2_1.session_id == session_id_2
+        assert response_2_2.session_id == session_id_2
+        
+        # Verify that user IDs are correctly maintained
+        assert response_1_1.user_id == user_id_1
+        assert response_1_2.user_id == user_id_1
+        assert response_2_1.user_id == user_id_2
+        assert response_2_2.user_id == user_id_2
+        
+        # Verify that context IDs remain consistent within each session
+        assert response_1_1.context_id == context_id_1
+        assert response_1_2.context_id == context_id_1
+        assert response_2_1.context_id == context_id_2
+        assert response_2_2.context_id == context_id_2
+
+    finally:
+        await aiavatar_1.stop_listening(session_id_1)
+        await aiavatar_2.stop_listening(session_id_2)
+        task_1.cancel()
+        task_2.cancel()
+
+
+@pytest.mark.skip("Needs server settings for chunked audio response")
+@pytest.mark.asyncio
+async def test_chunked_audio_response():
+    """Test that audio responses are chunked when response_audio_chunk_size is set to a positive value"""
+    session_id = f"test_chunked_audio_session_{str(uuid4())}"
+    user_id = "test_chunked_audio_user"
+    
+    # Create a custom AIAvatar client to capture raw responses
+    chunked_responses = []
+    pcm_format = None
+    
+    class ChunkedAudioTestClient(AIAvatar):
+        async def perform_response(self, response: AIAvatarResponse):
+            # Capture all responses to analyze chunking behavior
+            chunked_responses.append(response)
+            
+            # Store PCM format from first response
+            nonlocal pcm_format
+            if response.metadata and "pcm_format" in response.metadata:
+                pcm_format = response.metadata["pcm_format"]
+                
+            await super().perform_response(response)
+    
+    test_client = ChunkedAudioTestClient(
+        url=WS_SERVER_URL,
+        face_controller=FaceControllerForTest(),
+        animation_controller=AnimationControllerTest(),
+        debug=True
+    )
+    
+    task = asyncio.create_task(test_client.start_listening(session_id=session_id, user_id=user_id))
+
+    try:
+        # Send a request that will generate audio response
+        response = await chat(test_client, text="こんにちは、元気ですか？", session_id=session_id)
+        
+        audio_chunks = []
+        
+        for resp in chunked_responses:
+            if resp.metadata and "pcm_format" in resp.metadata and not resp.audio_data:
+                # This is the initial response with format info
+                initial_response = resp
+            elif resp.audio_data and isinstance(resp.audio_data, (str, bytes)):
+                # This is an audio chunk
+                audio_chunks.append(resp)
+
+        # Verify we got a response with audio
+        assert response.text is not None and len(response.text) > 0
+        assert len(audio_chunks) > 10
+
+        # Verify PCM format is provided
+        assert pcm_format is not None
+        assert "sample_rate" in pcm_format
+        assert "channels" in pcm_format  
+        assert "sample_width" in pcm_format
+        
+        # Reconstruct PCM audio from chunks
+        reconstructed_pcm = b""
+        for chunk_resp in audio_chunks:
+            if isinstance(chunk_resp.audio_data, str):
+                # Decode base64 chunk
+                chunk_data = base64.b64decode(chunk_resp.audio_data)
+            else:
+                chunk_data = chunk_resp.audio_data
+            reconstructed_pcm += chunk_data
+        
+        # Verify reconstructed audio has reasonable length
+        assert len(reconstructed_pcm) > 0
+        
+        # Verify audio parameters are reasonable
+        assert pcm_format["sample_rate"] > 0
+        assert pcm_format["channels"] in [1, 2]  # Mono or stereo
+        assert pcm_format["sample_width"] in [1, 2, 3, 4]  # Common bit depths
+        
+        # Create a WAV file from the PCM data to verify it's valid
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, 'wb') as wav_file:
+            wav_file.setnchannels(pcm_format["channels"])
+            wav_file.setsampwidth(pcm_format["sample_width"])
+            wav_file.setframerate(pcm_format["sample_rate"])
+            wav_file.writeframes(reconstructed_pcm)
+        
+        wav_data = wav_buffer.getvalue()
+        assert len(wav_data) > 44  # WAV header is 44 bytes, so audio data should exist
+        
+        # Verify the WAV can be parsed back
+        wav_buffer.seek(0)
+        with wave.open(wav_buffer, 'rb') as wav_file:
+            assert wav_file.getnchannels() == pcm_format["channels"]
+            assert wav_file.getsampwidth() == pcm_format["sample_width"] 
+            assert wav_file.getframerate() == pcm_format["sample_rate"]
+            frames = wav_file.readframes(wav_file.getnframes())
+            assert len(frames) == len(reconstructed_pcm)
+    
+    finally:
+        await test_client.stop_listening(session_id)
         task.cancel()
