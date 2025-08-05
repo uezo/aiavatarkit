@@ -1,7 +1,9 @@
 import asyncio
 import base64
+import io
 import logging
 import re
+import wave
 from typing import List, Dict
 from fastapi import APIRouter, WebSocket
 from ...sts.models import STSRequest, STSResponse
@@ -47,6 +49,8 @@ class AIAvatarWebSocketServer(Adapter):
         wakewords: List[str] = None,
         wakeword_timeout: float = 60.0,
         performance_recorder: PerformanceRecorder = None,
+        # WebSocket processing
+        response_audio_chunk_size: int = 0, # 0 = Send whole audio data at once
         # Debug
         debug: bool = False
     ):
@@ -82,6 +86,9 @@ class AIAvatarWebSocketServer(Adapter):
         # Callbacks
         self._on_connect = None
         self._on_disconnect = None
+
+        # WebSocket processing
+        self.response_audio_chunk_size = response_audio_chunk_size
 
         # Debug
         self.debug = debug
@@ -212,8 +219,45 @@ class AIAvatarWebSocketServer(Adapter):
 
             # Voice
             if response.audio_data:
-                b64_chunk = base64.b64encode(response.audio_data).decode("utf-8")
-                aiavatar_response.audio_data = b64_chunk
+                if self.response_audio_chunk_size > 0:
+                    # Extract WAV audio data and parameters
+                    with wave.open(io.BytesIO(response.audio_data), "rb") as wav_file:
+                        frames = wav_file.getnframes()
+                        sample_rate = wav_file.getframerate()
+                        channels = wav_file.getnchannels()
+                        sample_width = wav_file.getsampwidth()
+                        audio_data = wav_file.readframes(frames)
+
+                    pcm_format = {
+                        "sample_rate": sample_rate,
+                        "channels": channels,
+                        "sample_width": sample_width
+                    }
+
+                    # Send response without audio data first
+                    aiavatar_response.metadata["pcm_format"] = pcm_format
+                    aiavatar_response.audio_data = None
+                    await self.send_response(aiavatar_response)
+
+                    # Send audio data in chunks
+                    for i in range(0, len(audio_data), self.response_audio_chunk_size):
+                        # Encode chunk as base64
+                        b64_chunk = base64.b64encode(audio_data[i:i + self.response_audio_chunk_size]).decode("utf-8")
+                        chunk_response = AIAvatarResponse(
+                            type=response.type,
+                            session_id=response.session_id,
+                            user_id=response.user_id,
+                            context_id=response.context_id,
+                            audio_data=b64_chunk,
+                            metadata={"pcm_format": pcm_format}
+                        )
+                        await self.send_response(chunk_response)
+                    # Return here not to send response again at the end of this method
+                    return
+
+                else:
+                    b64_chunk = base64.b64encode(response.audio_data).decode("utf-8")
+                    aiavatar_response.audio_data = b64_chunk
 
         elif response.type == "tool_call":
             aiavatar_response.metadata["tool_call"] = response.tool_call.to_dict()

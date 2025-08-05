@@ -158,6 +158,22 @@ class AudioPlayer:
             or self.wave_params.sampwidth != current_params.sampwidth \
             or self.wave_params.framerate != current_params.framerate
 
+    def initilize_stream(self, sample_rate: int, channels: int, sample_width: int, wave_params: wave._wave_params = None):
+        if self.play_stream:
+            self.play_stream.stop_stream()
+            self.play_stream.close()
+            self.play_stream = None
+
+        self.wave_params = wave_params
+        self.play_stream = self.p.open(
+            format=self.p.get_format_from_width(sample_width),
+            channels=channels,
+            rate=sample_rate,
+            output=True,
+            output_device_index=self.device_index,
+            frames_per_buffer=self.chunk_size
+        )
+
     def play(self, content: bytes):
         try:
             self.stop_event.clear()
@@ -172,19 +188,11 @@ class AudioPlayer:
                 with wave.open(io.BytesIO(wave_content), "rb") as wf:
                     current_params = wf.getparams()
                     if not self.play_stream or self.is_wave_params_changed(current_params):
-                        if self.play_stream:
-                            self.play_stream.stop_stream()
-                            self.play_stream.close()
-                            self.play_stream = None
-
-                        self.wave_params = current_params
-                        self.play_stream = self.p.open(
-                            format=self.p.get_format_from_width(self.wave_params.sampwidth),
-                            channels=self.wave_params.nchannels,
-                            rate=self.wave_params.framerate,
-                            output=True,
-                            output_device_index=self.device_index,
-                            frames_per_buffer=self.chunk_size
+                        self.initilize_stream(
+                            sample_rate=current_params.framerate,
+                            channels=current_params.nchannels,
+                            sample_width=current_params.sampwidth,
+                            wave_params=current_params
                         )
 
                     data = wf.readframes(self.chunk_size)
@@ -205,19 +213,16 @@ class AudioPlayer:
             data = self.queue.get()
             if data is None:
                 break
-
-            self.play(data)
+            self.is_playing = True
+            self.play_stream.write(data)
+            self.is_playing = False
 
     def add(self, audio_bytes: bytes):
         self.queue.put(audio_bytes)
 
-    def cancel(self):
+    def stop(self):
         while not self.queue.empty():
             self.queue.get()
-
-    def stop(self):
-        self.queue.put(None)
-        self.thread.join()
         self.stop_event.set()
 
 
