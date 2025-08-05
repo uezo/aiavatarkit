@@ -233,7 +233,7 @@ class STSPipeline:
                     if self.merge_request_threshold > requests_interval:
                         logger.info(f"Merge consecutive requests: Interval {requests_interval} < Threshold {self.merge_request_threshold}")
                         previous_request_text = (previous_request["text"] or "").replace(self.merge_request_prefix, "")
-                        request.text = f"{self.merge_request_prefix}\n\n{previous_request_text}\n{request.text}"
+                        request.text = f"{self.merge_request_prefix}{previous_request_text}\n{request.text}"
                         request.files = request.files or previous_request["files"]
                 self.previous_requests[request.session_id] = {"timestamp": now, "text": request.text, "files": request.files}
 
