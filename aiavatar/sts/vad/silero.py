@@ -2,6 +2,7 @@ import asyncio
 from collections import deque
 import logging
 import numpy as np
+import struct
 import threading
 import torch
 from typing import AsyncGenerator, Callable, Optional, Dict
@@ -18,6 +19,7 @@ class RecordingSession:
         self.silence_duration: float = 0
         self.record_duration: float = 0
         self.preroll_buffer: deque = deque(maxlen=preroll_buffer_count)
+        self.amplitude_threshold: Optional[float] = None
         self.data: dict = {}
         self.vad_buffer: bytearray = bytearray()
         self.vad_iterator = vad_iterator
@@ -30,6 +32,7 @@ class RecordingSession:
         self.silence_duration = 0
         self.record_duration = 0
         self.on_recording_started_triggered = False
+        self.amplitude_threshold = None
         # Don't reset vad_buffer here as it's used for continuous processing
 
 
@@ -37,6 +40,7 @@ class SileroSpeechDetector(SpeechDetector):
     def __init__(
         self,
         *,
+        volume_db_threshold: Optional[float] = None,
         silence_duration_threshold: float = 0.5,
         max_duration: float = 10.0,
         min_duration: float = 0.2,
@@ -51,6 +55,11 @@ class SileroSpeechDetector(SpeechDetector):
         model_pool_size: int = 1,
         on_recording_started: Optional[Callable[[str, float], None]] = None
     ):
+        self._volume_db_threshold = volume_db_threshold
+        if volume_db_threshold is not None:
+            self.amplitude_threshold = 32767 * (10 ** (self.volume_db_threshold / 20.0))
+        else:
+            self.amplitude_threshold = None
         self.silence_duration_threshold = silence_duration_threshold
         self.max_duration = max_duration
         self.min_duration = min_duration
@@ -70,7 +79,21 @@ class SileroSpeechDetector(SpeechDetector):
         
         # Initialize Silero VAD model pool
         self._init_silero_model(model_path)
-        
+
+    @property
+    def volume_db_threshold(self) -> float:
+        return self._volume_db_threshold
+
+    @volume_db_threshold.setter
+    def volume_db_threshold(self, value: Optional[float]):
+        self._volume_db_threshold = value
+        if value is not None:
+            self.amplitude_threshold = 32767 * (10 ** (value / 20.0))
+            logger.debug(f"Updated volume_db_threshold to {value} dB, amplitude_threshold={self.amplitude_threshold}")
+        else:
+            self.amplitude_threshold = None
+            logger.debug("Volume threshold disabled (set to None)")
+
     def _init_silero_model(self, model_path: Optional[str] = None):
         """Initialize Silero VAD model pool"""
         try:
@@ -188,7 +211,12 @@ class SileroSpeechDetector(SpeechDetector):
             # Take the required chunk size from the end of buffer
             vad_chunk = bytes(session.vad_buffer[-self.chunk_size * 2:])
             speech_detected = self._detect_speech_silero(vad_chunk, session_id)
-            
+            if speech_detected and session.amplitude_threshold is not None:
+                # Check the volume if threshold is set
+                max_amplitude = float(max(abs(sample) for sample, in struct.iter_unpack("<h", samples)))
+                if max_amplitude <= session.amplitude_threshold:
+                    speech_detected = False
+
             # Keep only the last chunk_size worth of data to avoid unbounded growth
             if len(session.vad_buffer) > self.chunk_size * 4:  # Keep 2x chunk_size
                 session.vad_buffer = session.vad_buffer[-self.chunk_size * 2:]
@@ -275,6 +303,8 @@ class SileroSpeechDetector(SpeechDetector):
             )
             session = RecordingSession(session_id, self.preroll_buffer_count, vad_iterator)
             self.recording_sessions[session_id] = session
+        if session.amplitude_threshold is None:
+            session.amplitude_threshold = self.amplitude_threshold
         return session
 
     def reset_session(self, session_id: str):
@@ -325,3 +355,7 @@ class SileroSpeechDetector(SpeechDetector):
                 if session.vad_iterator:
                     session.vad_iterator.reset_states()
             logger.debug("Silero VAD state reset for all sessions")
+
+    def set_volume_db_threshold(self, session_id: str, value: float):
+        session = self.get_session(session_id)
+        session.amplitude_threshold = 32767 * (10 ** (value / 20.0))

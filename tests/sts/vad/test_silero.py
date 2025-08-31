@@ -690,3 +690,181 @@ async def test_on_recording_started_callback_error_handling(mock_silero_model):
     # Flag should still be set even with callback error
     session = detector.get_session(session_id)
     assert session.on_recording_started_triggered is True
+
+
+@pytest.mark.asyncio
+async def test_volume_db_threshold_filtering(mock_silero_model):
+    """
+    Test that volume_db_threshold properly filters out low volume audio
+    even when speech probability is high
+    """
+    model, utils = mock_silero_model
+    
+    with patch('torch.hub.load', return_value=(model, utils)):
+        # Set volume_db_threshold to -20 dB (relatively high threshold)
+        detector = SileroSpeechDetector(
+            volume_db_threshold=-20.0,  # Only sounds louder than -20 dB will be considered
+            silence_duration_threshold=0.5,
+            max_duration=3.0,
+            min_duration=0.5,
+            sample_rate=16000,
+            channels=1,
+            preroll_buffer_count=5,
+            speech_probability_threshold=0.5,
+            chunk_size=512,
+            debug=True
+        )
+    
+    # Mock high speech probability (would normally trigger recording)
+    detector.model_pool[0].return_value = torch.tensor(0.8)
+    
+    session_id = "test_volume_filter"
+    
+    # Calculate amplitude for -20 dB threshold
+    # amplitude_threshold = 32767 * 10^(-20/20) ≈ 3277
+    expected_threshold = 32767 * (10 ** (-20.0 / 20.0))
+    assert abs(detector.amplitude_threshold - expected_threshold) < 1  # Allow small floating point error
+    
+    # Test 1: Low volume samples (below threshold) - should NOT trigger recording
+    low_volume_samples = generate_samples(amplitude=1000, num_samples=8000)  # Below threshold
+    is_recording = await detector.process_samples(low_volume_samples, session_id)
+    assert is_recording is False, "Low volume samples should not trigger recording despite high speech probability"
+    
+    session = detector.get_session(session_id)
+    assert session.is_recording is False
+    
+    # Test 2: High volume samples (above threshold) - should trigger recording
+    high_volume_samples = generate_samples(amplitude=5000, num_samples=8000)  # Above threshold
+    is_recording = await detector.process_samples(high_volume_samples, session_id)
+    assert is_recording is True, "High volume samples should trigger recording"
+    
+    session = detector.get_session(session_id)
+    assert session.is_recording is True
+    
+    # Test 3: Low volume during recording - should continue recording (no immediate stop)
+    low_volume_samples2 = generate_samples(amplitude=1000, num_samples=3200)
+    is_recording = await detector.process_samples(low_volume_samples2, session_id)
+    assert is_recording is True, "Recording should continue even with low volume samples"
+    
+    # Mock low speech probability for proper stop
+    detector.model_pool[0].return_value = torch.tensor(0.2)
+    
+    # Test 4: Silent samples to stop recording
+    silent_samples = generate_samples(amplitude=0, num_samples=8000)
+    is_recording = await detector.process_samples(silent_samples, session_id)
+    assert is_recording is False, "Recording should stop with silence"
+
+
+@pytest.mark.asyncio
+async def test_volume_db_threshold_property_update(mock_silero_model):
+    """
+    Test that volume_db_threshold property can be updated dynamically
+    and amplitude_threshold is recalculated correctly
+    """
+    model, utils = mock_silero_model
+    
+    with patch('torch.hub.load', return_value=(model, utils)):
+        # Start with default threshold (0 dB)
+        detector = SileroSpeechDetector(
+            volume_db_threshold=0.0,
+            silence_duration_threshold=0.5,
+            max_duration=3.0,
+            min_duration=0.5,
+            sample_rate=16000,
+            channels=1,
+            preroll_buffer_count=5,
+            speech_probability_threshold=0.5,
+            chunk_size=512,
+            debug=True
+        )
+    
+    # Check initial values
+    assert detector.volume_db_threshold == 0.0
+    expected_threshold_0db = 32767 * (10 ** (0.0 / 20.0))  # Should be 32767
+    assert abs(detector.amplitude_threshold - expected_threshold_0db) < 1
+    
+    # Update to -10 dB
+    detector.volume_db_threshold = -10.0
+    assert detector.volume_db_threshold == -10.0
+    expected_threshold_minus10db = 32767 * (10 ** (-10.0 / 20.0))  # ≈ 10362
+    assert abs(detector.amplitude_threshold - expected_threshold_minus10db) < 1
+    
+    # Update to -30 dB
+    detector.volume_db_threshold = -30.0
+    assert detector.volume_db_threshold == -30.0
+    expected_threshold_minus30db = 32767 * (10 ** (-30.0 / 20.0))  # ≈ 1036
+    assert abs(detector.amplitude_threshold - expected_threshold_minus30db) < 1
+    
+    # Test with actual processing
+    detector.model_pool[0].return_value = torch.tensor(0.8)  # High speech probability
+    session_id = "test_dynamic_threshold"
+    
+    # With -30 dB threshold, even quiet sounds should trigger
+    quiet_samples = generate_samples(amplitude=1500, num_samples=8000)
+    is_recording = await detector.process_samples(quiet_samples, session_id)
+    assert is_recording is True
+    
+    # Change threshold to -10 dB
+    detector.volume_db_threshold = -10.0
+    detector.reset_session(session_id)
+    
+    # Same quiet samples should NOT trigger with stricter threshold
+    is_recording = await detector.process_samples(quiet_samples, session_id)
+    assert is_recording is False
+    
+    # Louder samples should trigger
+    loud_samples = generate_samples(amplitude=15000, num_samples=8000)
+    is_recording = await detector.process_samples(loud_samples, session_id)
+    assert is_recording is True
+
+
+@pytest.mark.asyncio
+async def test_volume_threshold_with_mixed_volume(mock_silero_model):
+    """
+    Test volume threshold behavior with mixed volume audio
+    (quiet start, loud middle, quiet end)
+    """
+    model, utils = mock_silero_model
+    
+    with patch('torch.hub.load', return_value=(model, utils)):
+        detector = SileroSpeechDetector(
+            volume_db_threshold=-15.0,  # Moderate threshold
+            silence_duration_threshold=0.5,
+            max_duration=3.0,
+            min_duration=0.5,
+            sample_rate=16000,
+            channels=1,
+            preroll_buffer_count=5,
+            speech_probability_threshold=0.5,
+            chunk_size=512,
+            debug=True
+        )
+    
+    # Always return high speech probability
+    detector.model_pool[0].return_value = torch.tensor(0.8)
+    
+    session_id = "test_mixed_volume"
+    
+    # Start with quiet samples (below threshold)
+    quiet_start = generate_samples(amplitude=2000, num_samples=3200)
+    is_recording = await detector.process_samples(quiet_start, session_id)
+    assert is_recording is False
+    
+    # Loud samples (above threshold) - should start recording
+    loud_middle = generate_samples(amplitude=8000, num_samples=8000)
+    is_recording = await detector.process_samples(loud_middle, session_id)
+    assert is_recording is True
+    
+    # Continue with more loud samples
+    more_loud = generate_samples(amplitude=8000, num_samples=3200)
+    is_recording = await detector.process_samples(more_loud, session_id)
+    assert is_recording is True
+    
+    # Quiet end (below threshold but recording continues)
+    quiet_end = generate_samples(amplitude=2000, num_samples=3200)
+    is_recording = await detector.process_samples(quiet_end, session_id)
+    assert is_recording is True  # Recording continues despite low volume
+    
+    # Verify recording is still active
+    session = detector.get_session(session_id)
+    assert session.is_recording is True
