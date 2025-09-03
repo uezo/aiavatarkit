@@ -4,6 +4,7 @@ import pytest
 import numpy
 from datetime import datetime, timezone
 from time import sleep
+from uuid import uuid4
 from aiavatar.sts import STSPipeline
 from aiavatar.sts.vad import SpeechDetectorDummy
 from aiavatar.sts.vad.standard import StandardSpeechDetector
@@ -57,6 +58,8 @@ async def test_sts_pipeline():
       3. A custom ResponseHandler captures the final synthesized audio
       4. Use GoogleSpeechRecognizer on the final audio to check if "東京" is present.
     """
+    session_id = f"test_sts_pipeline_{str(uuid4())}"
+
     # TTS for input audio instead of human's speech
     voicevox_for_input = VoicevoxSpeechSynthesizer(
         base_url="http://127.0.0.1:50021",
@@ -109,7 +112,7 @@ async def test_sts_pipeline():
     adapter = RecordingAdapter(sts)
 
     # Invoke pipeline with the first request (Ask capital of Japan)
-    await adapter.handle_request(STSRequest(user_id="aiavatar.sts_user", audio_data=await get_input_voice("日本の首都は？")))
+    await adapter.handle_request(STSRequest(session_id=session_id, user_id="aiavatar.sts_user", audio_data=await get_input_voice("日本の首都は？")))
     context_id = adapter.final_context_id
 
     # Check output voice audio
@@ -119,7 +122,7 @@ async def test_sts_pipeline():
     assert "東京" in output_text, f"Expected '東京' in recognized text, but got: {output_text}"
 
     # Invoke pipeline with the successive request (Ask about of US, without using the word 'capital' to check context)
-    await adapter.handle_request(STSRequest(context_id=context_id, user_id="aiavatar.sts_user", audio_data=await get_input_voice("アメリカは？")))
+    await adapter.handle_request(STSRequest(session_id=session_id, context_id=context_id, user_id="aiavatar.sts_user", audio_data=await get_input_voice("アメリカは？")))
 
     # Check output voice audio
     final_audio = adapter.final_audio
@@ -134,6 +137,8 @@ async def test_sts_pipeline():
 
 @pytest.mark.asyncio
 async def test_sts_pipeline_wakeword():
+    session_id = f"test_sts_pipeline_wakeword_{str(uuid4())}"
+
     # TTS for input audio instead of human's speech
     voicevox_for_input = VoicevoxSpeechSynthesizer(
         base_url="http://127.0.0.1:50021",
@@ -189,7 +194,7 @@ async def test_sts_pipeline_wakeword():
 
     # First request without wakeword: not invoked
     await adapter.handle_request(STSRequest(
-        user_id="aiavatar.sts_user", audio_data=await get_input_voice("もしもし")
+        session_id=session_id, user_id="aiavatar.sts_user", audio_data=await get_input_voice("もしもし")
     ))
     context_id = adapter.final_context_id
 
@@ -199,7 +204,7 @@ async def test_sts_pipeline_wakeword():
 
     # Second request with wakeword: invoked
     await adapter.handle_request(STSRequest(
-        context_id=context_id, user_id="aiavatar.sts_user", audio_data=await get_input_voice("やあ、こんにちは！ところで日本の首都は？")
+        session_id=session_id, context_id=context_id, user_id="aiavatar.sts_user", audio_data=await get_input_voice("やあ、こんにちは！ところで日本の首都は？")
     ))
     context_id = adapter.final_context_id
 
@@ -212,7 +217,7 @@ async def test_sts_pipeline_wakeword():
 
     # Third request without wakeword, within wakeword timeout: invoked
     await adapter.handle_request(STSRequest(
-        context_id=context_id, user_id="aiavatar.sts_user", audio_data=await get_input_voice("アメリカは？")
+        session_id=session_id, context_id=context_id, user_id="aiavatar.sts_user", audio_data=await get_input_voice("アメリカは？")
     ))
 
     # Check output voice audio
@@ -227,7 +232,7 @@ async def test_sts_pipeline_wakeword():
 
     # Fourth request without wakeword, timeout: not invoked
     await adapter.handle_request(STSRequest(
-        context_id=context_id, user_id="aiavatar.sts_user", audio_data=await get_input_voice("じゃあフランスは？")
+        session_id=session_id, context_id=context_id, user_id="aiavatar.sts_user", audio_data=await get_input_voice("じゃあフランスは？")
     ))
 
     # Check no voice generated
@@ -236,7 +241,7 @@ async def test_sts_pipeline_wakeword():
 
     # Second request with wakeword: invoked
     await adapter.handle_request(STSRequest(
-        context_id=context_id, user_id="aiavatar.sts_user", audio_data=await get_input_voice("こんにちは。ドイツはどうだろうか？")
+        session_id=session_id, context_id=context_id, user_id="aiavatar.sts_user", audio_data=await get_input_voice("こんにちは。ドイツはどうだろうか？")
     ))
     final_audio = adapter.final_audio
     assert len(final_audio) > 0, "No final audio was captured by the response handler."
@@ -252,6 +257,8 @@ async def test_sts_pipeline_wakeword():
 
 @pytest.mark.asyncio
 async def test_sts_pipeline_novoice():
+    session_id = f"test_sts_pipeline_novoice_{str(uuid4())}"
+
     # Initialize pipeline
     sts = STSPipeline(
         vad=SpeechDetectorDummy(),
@@ -265,7 +272,7 @@ async def test_sts_pipeline_novoice():
         debug=True
     )
 
-    async for response in sts.invoke(STSRequest(context_id="test_pipeline_novoice", user_id="aiavatar.sts_user", text="こんにちは")):
+    async for response in sts.invoke(STSRequest(session_id=session_id, context_id="test_pipeline_novoice", user_id="aiavatar.sts_user", text="こんにちは")):
         if response.type == "chunk" or response.type == "final":
             assert response.text is not None and response.text != ""
             assert response.voice_text is not None and response.voice_text != ""
@@ -274,6 +281,8 @@ async def test_sts_pipeline_novoice():
 
 @pytest.mark.asyncio
 async def test_sts_pipeline_with_user():
+    session_id = f"test_sts_pipeline_with_user_{str(uuid4())}"
+
     # TTS for input audio instead of human's speech
     voicevox_for_input = VoicevoxSpeechSynthesizer(
         base_url="http://127.0.0.1:50021",
@@ -322,7 +331,6 @@ async def test_sts_pipeline_with_user():
         debug=True
     )
 
-    session_id = "test_sts_pipeline_with_user_session"
     user_id = "test_sts_pipeline_with_user_user"
 
     # Set user to vad as recording session data
@@ -361,6 +369,8 @@ async def test_sts_pipeline_with_user():
 
 @pytest.mark.asyncio
 async def test_request_merging_enabled():
+    session_id = f"test_request_merging_enabled_{str(uuid4())}"
+
     """Test request merging when merge_request_threshold > 0"""
     sts = STSPipeline(
         vad=SpeechDetectorDummy(),
@@ -375,7 +385,6 @@ async def test_request_merging_enabled():
         debug=True
     )
 
-    session_id = "test_merge_session"
     user_id = "test_user"
     context_id = "test_context"
 
@@ -413,6 +422,8 @@ async def test_request_merging_enabled():
 
 @pytest.mark.asyncio
 async def test_request_merging_disabled():
+    session_id = f"test_request_merging_disabled_{str(uuid4())}"
+
     """Test that requests are not merged when merge_request_threshold = 0"""
     sts = STSPipeline(
         vad=SpeechDetectorDummy(),
@@ -427,7 +438,6 @@ async def test_request_merging_disabled():
         debug=True
     )
 
-    session_id = "test_no_merge_session"
     user_id = "test_user"
     context_id = "test_context"
 
@@ -464,6 +474,8 @@ async def test_request_merging_disabled():
 
 @pytest.mark.asyncio
 async def test_request_merging_threshold_exceeded():
+    session_id = f"test_request_merging_threshold_exceeded_{str(uuid4())}"
+
     """Test that requests are not merged when time threshold is exceeded"""
     sts = STSPipeline(
         vad=SpeechDetectorDummy(),
@@ -478,7 +490,6 @@ async def test_request_merging_threshold_exceeded():
         debug=True
     )
 
-    session_id = "test_threshold_session"
     user_id = "test_user"
     context_id = "test_context"
 
@@ -518,6 +529,8 @@ async def test_request_merging_threshold_exceeded():
 
 @pytest.mark.asyncio
 async def test_request_merging_different_sessions():
+    session_id = f"test_request_merging_different_sessions_{str(uuid4())}"
+
     """Test that requests from different sessions are not merged"""
     sts = STSPipeline(
         vad=SpeechDetectorDummy(),
@@ -537,7 +550,7 @@ async def test_request_merging_different_sessions():
 
     # First request from session 1
     request1 = STSRequest(
-        session_id="session1",
+        session_id=f"{session_id}_1",
         user_id=user_id,
         context_id=context_id,
         text="Hello"
@@ -549,7 +562,7 @@ async def test_request_merging_different_sessions():
 
     # Immediately send request from session 2
     request2 = STSRequest(
-        session_id="session2",
+        session_id=f"{session_id}_2",
         user_id=user_id,
         context_id=context_id,
         text="World"
@@ -568,6 +581,8 @@ async def test_request_merging_different_sessions():
 
 @pytest.mark.asyncio
 async def test_request_merging_with_files():
+    session_id = f"test_request_merging_with_files_{str(uuid4())}"
+
     """Test that files are preserved during request merging"""
     sts = STSPipeline(
         vad=SpeechDetectorDummy(),
@@ -582,7 +597,6 @@ async def test_request_merging_with_files():
         debug=True
     )
 
-    session_id = "test_files_session"
     user_id = "test_user"
     context_id = "test_context"
 
@@ -620,6 +634,8 @@ async def test_request_merging_with_files():
 
 @pytest.mark.asyncio
 async def test_request_merging_prefix_removal():
+    session_id = f"test_request_merging_prefix_removal_{str(uuid4())}"
+
     """Test that merge prefix is properly removed from previous request text"""
     sts = STSPipeline(
         vad=SpeechDetectorDummy(),
@@ -635,7 +651,6 @@ async def test_request_merging_prefix_removal():
         debug=True
     )
 
-    session_id = "test_prefix_session"
     user_id = "test_user"
     context_id = "test_context"
 

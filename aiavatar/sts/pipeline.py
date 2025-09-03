@@ -3,7 +3,7 @@ import json
 import logging
 from time import time
 import traceback
-from typing import AsyncGenerator, Tuple, List, Dict
+from typing import AsyncGenerator, Tuple, List, Optional
 from uuid import uuid4
 from .models import STSRequest, STSResponse
 from .vad import SpeechDetector, StandardSpeechDetector
@@ -17,6 +17,7 @@ from .performance_recorder import PerformanceRecord, PerformanceRecorder
 from .performance_recorder.sqlite import SQLitePerformanceRecorder
 from .voice_recorder import VoiceRecorder, RequestVoice, ResponseVoices
 from .voice_recorder.file import FileVoiceRecorder
+from .session_state_manager import SessionStateManager, SQLiteSessionStateManager
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ class STSPipeline:
         merge_request_prefix: str = "$Previous user's request and your response have been canceled. Please respond again to the following request:\n\n",
         # Japanese version
         # merge_request_prefix: str = "$直前のユーザーの要求とあなたの応答はキャンセルされました。以下の要求に対して、あらためて応答しなおしてください:\n\n"
+        session_state_manager: SessionStateManager = None,
         performance_recorder: PerformanceRecorder = None,
         voice_recorder: VoiceRecorder = None,
         voice_recorder_enabled: bool = True,
@@ -53,8 +55,8 @@ class STSPipeline:
     ):
         self.debug = debug
 
-        # Cancellation
-        self.active_transactions: Dict[str, str] = {}   # TODO: Use external data store
+        # Session state management
+        self.session_state_manager = session_state_manager or SQLiteSessionStateManager()
 
         # VAD
         self.vad = vad or StandardSpeechDetector(
@@ -107,7 +109,6 @@ class STSPipeline:
         # Merge consecutive requests
         self.merge_request_threshold = merge_request_threshold
         self.merge_request_prefix = merge_request_prefix
-        self.previous_requests = {}     # TODO: Use external data store
 
         # Response handler
         self.handle_response = self.handle_response_default
@@ -184,11 +185,15 @@ class STSPipeline:
 
         return False
 
-    def is_transaction_active(self, session_id: str, transaction_id: str) -> bool:
-        return self.active_transactions.get(session_id) == transaction_id
+    async def is_transaction_active(self, session_id: str, transaction_id: str) -> Tuple[bool, Optional[str]]:
+        state = await self.session_state_manager.get_session_state(session_id)
+        return state.active_transaction_id == transaction_id, state.active_transaction_id
 
     async def invoke(self, request: STSRequest) -> AsyncGenerator[STSResponse, None]:
         try:
+            if not request.session_id:
+                raise ValueError("session_id is required but not provided")
+
             start_time = time()
             transaction_id = str(uuid4())
 
@@ -225,17 +230,22 @@ class STSPipeline:
             performance.voice_length = request.audio_duration
             performance.stt_time = time() - start_time
 
+            # Get session state
+            state = await self.session_state_manager.get_session_state(request.session_id)
+
             # Merge consecutive requests
             if self.merge_request_threshold > 0:
                 now = datetime.now(timezone.utc)
-                if previous_request := self.previous_requests.get(request.session_id):
-                    requests_interval = (now - previous_request["timestamp"]).total_seconds()
+                if state.previous_request_timestamp:
+                    requests_interval = (now - state.previous_request_timestamp).total_seconds()
                     if self.merge_request_threshold > requests_interval:
                         logger.info(f"Merge consecutive requests: Interval {requests_interval} < Threshold {self.merge_request_threshold}")
-                        previous_request_text = (previous_request["text"] or "").replace(self.merge_request_prefix, "")
+                        previous_request_text = (state.previous_request_text or "").replace(self.merge_request_prefix, "")
                         request.text = f"{self.merge_request_prefix}{previous_request_text}\n{request.text}"
-                        request.files = request.files or previous_request["files"]
-                self.previous_requests[request.session_id] = {"timestamp": now, "text": request.text, "files": request.files}
+                        request.files = request.files or state.previous_request_files
+                await self.session_state_manager.update_previous_request(
+                    request.session_id, now, request.text, request.files
+                )
 
             last_created_at = await self.llm.context_manager.get_last_created_at(request.context_id)
             if self.is_awake(request, last_created_at):
@@ -251,8 +261,8 @@ class STSPipeline:
 
                 # Overwrite active transaction
                 if self.debug:
-                    logger.info(f"Start transaction: {transaction_id} {request.text} (previous: {self.active_transactions.get(request.session_id)})")
-                self.active_transactions[request.session_id] = transaction_id
+                    logger.info(f"Start transaction: {transaction_id} {request.text} (previous: {state.active_transaction_id})")
+                await self.session_state_manager.update_transaction(request.session_id, transaction_id)
             else:
                 # Clear request content to avoid LLM and TTS processing
                 request.text = None
@@ -281,10 +291,11 @@ class STSPipeline:
                 voice_text = ""
                 language = None
                 async for llm_stream_chunk in llm_stream:
-                    if not self.is_transaction_active(request.session_id, transaction_id):
+                    is_txn_active, active_txn = await self.is_transaction_active(request.session_id, transaction_id)
+                    if not is_txn_active:
                         # Break when new transaction started in this session
                         if self.debug:
-                            logger.info(f"Break llm_stream for new transaction: {self.active_transactions.get(request.session_id)} {request.text} (current: {transaction_id})")
+                            logger.info(f"Break llm_stream for new transaction: {active_txn} {request.text} (current: {transaction_id})")
                         break
 
                     # LLM performance
@@ -327,10 +338,11 @@ class STSPipeline:
             response_audios = []
             is_first_chunk = True
             async for audio_chunk, llm_stream_chunk, language in synthesize_stream():
-                if not self.is_transaction_active(request.session_id, transaction_id):
+                is_txn_active, active_txn = await self.is_transaction_active(request.session_id, transaction_id)
+                if not is_txn_active:
                     # Break when new transaction started in this session
                     if self.debug:
-                        logger.info(f"Break synthesize_stream for new transaction: {self.active_transactions.get(request.session_id)} {request.text} (current: {transaction_id})")
+                        logger.info(f"Break synthesize_stream for new transaction: {active_txn} {request.text} (current: {transaction_id})")
                     break
 
                 if llm_stream_chunk.tool_call:
