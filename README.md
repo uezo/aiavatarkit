@@ -469,6 +469,7 @@ from aiavatar.sts.vad.silero import SileroSpeechDetector
 vad = SileroSpeechDetector(
     speech_probability_threshold=0.5,    # AI model confidence threshold (0.0-1.0)
     silence_duration_threshold=0.5,      # Seconds of silence to end recording
+    volume_db_threshold=-30.0,           # Voice detection threshold in dB (Default is None: set value only when you want to filter out non-speaker voices)
     max_duration=10.0,                   # Maximum recording duration
     min_duration=0.2,                    # Minimum recording duration
     sample_rate=16000,                   # Audio sample rate
@@ -716,6 +717,8 @@ Save the above code as `server.py` and run it using:
 uvicorn server:app
 ```
 
+**NOTE:** When you specify `response_audio_chunk_size` in the `AIAvatarWebSocketServer` instance, the audio response will be streamed as PCM data chunks of the specified byte size. In this case, no WAVE header will be included in the response - you'll receive raw PCM audio data only.
+
 
 Next is the simplest example of a client program:
 
@@ -766,6 +769,50 @@ The `session_data` object contains information about the WebSocket session:
 - `user_id`: User identifier from the connection request
 - `session_id`: Session identifier from the connection request
 - Additional metadata passed during connection
+
+
+### STT / TTS Endpoints
+
+AIAvatarHttpServer provides REST API endpoints for Speech-to-Text (STT) and Text-to-Speech (TTS) functionality:
+
+#### STT Endpoint
+`POST /stt` - Converts audio to text.
+
+```python
+import requests
+
+# Read audio file
+with open("audio.wav", "rb") as f:
+    audio_data = f.read()
+
+# Send to STT endpoint
+response = requests.post(
+    "http://localhost:8000/stt",
+    data=audio_data,
+    headers={"Content-Type": "audio/wav"}
+)
+
+print(response.json())  # {"text": "recognized speech"}
+```
+
+#### TTS Endpoint
+`POST /tts` - Converts text to speech.
+
+```python
+import requests
+
+# Send text to TTS endpoint
+response = requests.post(
+    "http://localhost:8000/tts",
+    json={"text": "Hello, this is AI Avatar speaking"}
+)
+
+# Save audio response
+with open("output.wav", "wb") as f:
+    f.write(response.content)
+```
+
+
 
 
 ## 🌎 Platform Guide
