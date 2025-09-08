@@ -11,6 +11,7 @@ from .stt import SpeechRecognizer
 from .stt.google import GoogleSpeechRecognizer
 from .llm import LLMService, LLMResponse
 from .llm.chatgpt import ChatGPTService
+from .llm.context_manager import ContextManager
 from .tts import SpeechSynthesizer
 from .tts.voicevox import VoicevoxSpeechSynthesizer
 from .performance_recorder import PerformanceRecord, PerformanceRecorder
@@ -38,6 +39,7 @@ class STSPipeline:
         llm_base_url: str = None,
         llm_model: str = "gpt-4o-mini",
         llm_system_prompt: str = None,
+        llm_context_manager: ContextManager = None,
         tts: SpeechSynthesizer = None,
         tts_voicevox_url: str = "http://127.0.0.1:50021",
         tts_voicevox_speaker: int = 46,
@@ -47,6 +49,7 @@ class STSPipeline:
         merge_request_prefix: str = "$Previous user's request and your response have been canceled. Please respond again to the following request:\n\n",
         # Japanese version
         # merge_request_prefix: str = "$直前のユーザーの要求とあなたの応答はキャンセルされました。以下の要求に対して、あらためて応答しなおしてください:\n\n"
+        db_connection_str: str = "aiavatar.db",
         session_state_manager: SessionStateManager = None,
         performance_recorder: PerformanceRecorder = None,
         voice_recorder: VoiceRecorder = None,
@@ -56,7 +59,14 @@ class STSPipeline:
         self.debug = debug
 
         # Session state management
-        self.session_state_manager = session_state_manager or SQLiteSessionStateManager()
+        if session_state_manager:
+            self.session_state_manager = session_state_manager
+        else:
+            if db_connection_str.startswith("postgresql://"):
+                from .session_state_manager.postgres import PostgreSQLSessionStateManager
+                self.session_state_manager = PostgreSQLSessionStateManager(connection_str=db_connection_str)
+            else:
+                self.session_state_manager = SQLiteSessionStateManager(db_path=db_connection_str)
 
         # VAD
         self.vad = vad or StandardSpeechDetector(
@@ -87,13 +97,18 @@ class STSPipeline:
         )
 
         # LLM
-        self.llm = llm or ChatGPTService(
-            openai_api_key=llm_openai_api_key,
-            base_url=llm_base_url,
-            model=llm_model,
-            system_prompt=llm_system_prompt,
-            debug=debug
-        )
+        if llm:
+            self.llm = llm
+        else:
+            self.llm = ChatGPTService(
+                openai_api_key=llm_openai_api_key,
+                base_url=llm_base_url,
+                model=llm_model,
+                system_prompt=llm_system_prompt,
+                context_manager=llm_context_manager,
+                db_connection_str=db_connection_str,
+                debug=debug
+            )
 
         # Text-to-Speech
         self.tts = tts or VoicevoxSpeechSynthesizer(
@@ -116,7 +131,14 @@ class STSPipeline:
         self._process_llm_chunk = self.process_llm_chunk_default
 
         # Performance recorder
-        self.performance_recorder = performance_recorder or SQLitePerformanceRecorder()
+        if performance_recorder:
+            self.performance_recorder = performance_recorder
+        else:
+            if db_connection_str.startswith("postgresql://"):
+                from .performance_recorder.postgres import PostgreSQLPerformanceRecorder
+                self.performance_recorder = PostgreSQLPerformanceRecorder(connection_str=db_connection_str)
+            else:
+                self.performance_recorder = SQLitePerformanceRecorder(db_path=db_connection_str)
 
         # Voice recorder
         self.voice_recorder = voice_recorder or FileVoiceRecorder(

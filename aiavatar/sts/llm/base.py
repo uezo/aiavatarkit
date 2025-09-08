@@ -108,6 +108,7 @@ class LLMService(ABC):
         voice_text_tag: str = None,
         use_dynamic_tools: bool = False,
         context_manager: ContextManager = None,
+        db_connection_str: str = "aiavatar.db",
         debug: bool = False
     ):
         self.system_prompt = system_prompt
@@ -161,7 +162,14 @@ The list of tools is as follows:
 """
         self._get_dynamic_tools = self.get_dynamic_tools_default
         self._on_before_tool_calls = self.on_before_tool_calls_default
-        self.context_manager = context_manager or SQLiteContextManager()
+        if context_manager:
+            self.context_manager = context_manager
+        else:
+            if db_connection_str.startswith("postgresql://"):
+                from .context_manager.postgres import PostgreSQLContextManager
+                self.context_manager = PostgreSQLContextManager(connection_str=db_connection_str)
+            else:
+                self.context_manager = SQLiteContextManager(db_path=db_connection_str)
         self.debug = debug
 
     # Decorators

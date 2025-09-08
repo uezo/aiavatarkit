@@ -18,6 +18,7 @@ class PostgreSQLContextManager(ContextManager):
         dbname: str = "aiavatar",
         user: str = "postgres",
         password: str = None,
+        connection_str: str = None,
         context_timeout: int = 3600
     ):
         self.connection_params = {
@@ -27,11 +28,15 @@ class PostgreSQLContextManager(ContextManager):
             "user": user,
             "password": password,
         }
+        self.connection_str = connection_str
         self.context_timeout = context_timeout
         self.init_db()
 
     def connect_db(self):
-        return psycopg2.connect(**self.connection_params)
+        if self.connection_str:
+            return psycopg2.connect(self.connection_str)
+        else:
+            return psycopg2.connect(**self.connection_params)
 
     def init_db(self):
         conn = self.connect_db()

@@ -19,6 +19,7 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
         dbname: str = "aiavatar",
         user: str = "postgres",
         password: str = None,
+        connection_str: str = None
     ):
         self.connection_params = {
             "host": host,
@@ -27,6 +28,7 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
             "user": user,
             "password": password,
         }
+        self.connection_str = connection_str
         self.record_queue = queue.Queue()
         self.stop_event = threading.Event()
 
@@ -36,7 +38,10 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
         self.worker_thread.start()
 
     def connect_db(self):
-        return psycopg2.connect(**self.connection_params)
+        if self.connection_str:
+            return psycopg2.connect(self.connection_str)
+        else:
+            return psycopg2.connect(**self.connection_params)
 
     def add_column_if_not_exist(self, cur, column_name):
         cur.execute(
