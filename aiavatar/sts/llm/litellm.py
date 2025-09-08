@@ -25,6 +25,7 @@ class LiteLLMService(LLMService):
         voice_text_tag: str = None,
         use_dynamic_tools: bool = False,
         context_manager: ContextManager = None,
+        db_connection_str: str = "aiavatar.db",
         debug: bool = False
     ):
         super().__init__(
@@ -37,6 +38,7 @@ class LiteLLMService(LLMService):
             voice_text_tag=voice_text_tag,
             use_dynamic_tools=use_dynamic_tools,
             context_manager=context_manager,
+            db_connection_str=db_connection_str,
             debug=debug
         )
         self.api_key = api_key

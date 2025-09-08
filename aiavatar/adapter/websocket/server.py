@@ -48,6 +48,7 @@ class AIAvatarWebSocketServer(Adapter):
         voicevox_speaker: int = 46,
         wakewords: List[str] = None,
         wakeword_timeout: float = 60.0,
+        db_connection_str: str = "aiavatar.db",
         performance_recorder: PerformanceRecorder = None,
         # WebSocket processing
         response_audio_chunk_size: int = 0, # 0 = Send whole audio data at once
@@ -74,6 +75,7 @@ class AIAvatarWebSocketServer(Adapter):
             tts_voicevox_speaker=voicevox_speaker,
             wakewords=wakewords,
             wakeword_timeout=wakeword_timeout,
+            db_connection_str=db_connection_str,
             performance_recorder=performance_recorder,
             debug=debug
         )

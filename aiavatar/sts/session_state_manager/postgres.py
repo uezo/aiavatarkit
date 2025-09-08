@@ -18,6 +18,7 @@ class PostgreSQLSessionStateManager(SessionStateManager):
         dbname: str = "aiavatar",
         user: str = "postgres",
         password: str = None,
+        connection_str: str = None,
         session_timeout: int = 3600,
         cache_ttl: int = 60
     ):
@@ -28,13 +29,17 @@ class PostgreSQLSessionStateManager(SessionStateManager):
             "user": user,
             "password": password,
         }
+        self.connection_str = connection_str
         self.session_timeout = session_timeout
         self.cache_ttl = cache_ttl  # Cache TTL in seconds
         self.cache: Dict[str, SessionState] = {}  # In-memory cache
         self.init_db()
 
     def connect_db(self):
-        return psycopg2.connect(**self.connection_params)
+        if self.connection_str:
+            return psycopg2.connect(self.connection_str)
+        else:
+            return psycopg2.connect(**self.connection_params)
 
     def init_db(self):
         conn = self.connect_db()

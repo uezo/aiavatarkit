@@ -3,7 +3,7 @@ import asyncio
 import os
 from uuid import uuid4
 import pytest
-from aiavatar.sts.session_state_manager import PostgreSQLSessionStateManager
+from aiavatar.sts.session_state_manager.postgres import PostgreSQLSessionStateManager
 
 # Environment variables for PostgreSQL connection
 AIAVATAR_DB_HOST = os.getenv("AIAVATAR_DB_HOST", "localhost")
