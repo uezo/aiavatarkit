@@ -1,11 +1,19 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 import io
 import wave
-from typing import List
+from typing import List, Tuple, Union
 import httpx
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SpeechRecognitionResult:
+    text: str = None
+    preprocess_metadata: dict = None
+    postprocess_metadata: dict = None
 
 
 class SpeechRecognizer(ABC):
@@ -32,9 +40,48 @@ class SpeechRecognizer(ABC):
 
         self.debug = debug
 
+    def preprocess(self, func) -> dict:
+        self._preprocess = func
+        return func
+
+    def postprocess(self, func) -> dict:
+        self._postprocess = func
+        return func
+
+    async def recognize(self, session_id: str, data: bytes) -> SpeechRecognitionResult:
+        result = SpeechRecognitionResult()
+
+        # Pre-process
+        preprocess_result = await self._preprocess(session_id, data)
+        if isinstance(preprocess_result, tuple):
+            preprocessed_bytes, result.preprocess_metadata = preprocess_result
+        else:
+            preprocessed_bytes = preprocess_result
+
+        if not preprocessed_bytes:
+            return result
+
+        # Transcribe
+        result.text = await self.transcribe(preprocessed_bytes)
+
+        # Post-process
+        postprocess_result = await self._postprocess(session_id, result.text, preprocessed_bytes, result.preprocess_metadata)
+        if isinstance(postprocess_result, tuple):
+            result.text, result.postprocess_metadata = postprocess_result
+        else:
+            result.text = postprocess_result
+
+        return result
+
+    async def _preprocess(self, session_id: str, data: bytes) -> Union[bytes, Tuple[bytes, dict]]:
+        return data
+
     @abstractmethod
     async def transcribe(self, data: bytes) -> str:
         pass
+
+    async def _postprocess(self, session_id: str, text: str, data: bytes, preprocess_metadata: dict) -> Union[str, Tuple[bytes, dict]]:
+        return text
 
     async def close(self):
         await self.http_client.aclose()

@@ -236,7 +236,7 @@ class STSPipeline:
                 if self.voice_recorder_enabled:
                     await self.voice_recorder.record(RequestVoice(transaction_id, request.audio_data))
                 # Speech-to-Text
-                recognized_text = await self.stt.transcribe(request.audio_data)
+                recognized_text = (await self.stt.recognize(request.session_id, request.audio_data)).text
                 if not recognized_text:
                     if self.debug:
                         logger.info("No speech recognized.")

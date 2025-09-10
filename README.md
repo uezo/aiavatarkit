@@ -423,6 +423,64 @@ aiavatar_app = AIAvatar(
 
 You can also make custom STT components by implementing `SpeechRecognizer` interface.
 
+### Preprocessing and Postprocessing
+
+You can add custom preprocessing and postprocessing to any `SpeechRecognizer` implementation. This is useful for tasks like speaker verification, audio filtering, or text normalization.
+
+```python
+from aiavatar.sts.stt.openai import OpenAISpeechRecognizer
+
+# Create recognizer
+recognizer = OpenAISpeechRecognizer(openai_api_key="your-api-key")
+
+# Add preprocessing - e.g., speaker verification
+@recognizer.preprocess
+async def verify_speaker(session_id: str, audio_data: bytes):
+    # Perform speaker verification
+    is_valid_speaker = await check_speaker_identity(audio_data)
+    
+    if not is_valid_speaker:
+        # Return empty bytes to skip transcription
+        return b"", {"rejected": True, "reason": "speaker_mismatch"}
+    
+    # Return processed audio and metadata
+    filtered_audio = apply_noise_filter(audio_data)
+    return filtered_audio, {"speaker_verified": True, "session_id": session_id}
+
+# Add postprocessing - e.g., text formatting
+@recognizer.postprocess
+async def format_text(session_id: str, text: str, audio_data: bytes, preprocess_metadata: dict):
+    # Format transcribed text
+    formatted_text = text.strip().capitalize()
+    
+    # Add punctuation if missing
+    if formatted_text and formatted_text[-1] not in '.!?':
+        formatted_text += '.'
+    
+    # Return formatted text and metadata
+    return formatted_text, {
+        "original_text": text,
+        "formatting_applied": True,
+        "preprocess_info": preprocess_metadata
+    }
+
+# Use the recognizer with preprocessing and postprocessing
+result = await recognizer.recognize(
+    session_id="user-123",
+    data=audio_bytes
+)
+
+print(f"Text: {result.text}")
+print(f"Preprocess metadata: {result.preprocess_metadata}")
+print(f"Postprocess metadata: {result.postprocess_metadata}")
+```
+
+The preprocessing and postprocessing functions can return either:
+- Just the processed data (bytes for preprocess, string for postprocess)
+- A tuple of (processed_data, metadata_dict) for additional information
+
+If preprocessing returns empty bytes, the transcription is skipped and the result will have `text=None`.
+
 
 ## 🎙️ Speech Detector
 

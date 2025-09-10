@@ -2,7 +2,7 @@ import base64
 import logging
 import re
 from typing import List, Dict, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Request, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, status, Request, File, UploadFile, Form
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sse_starlette.sse import EventSourceResponse   # pip install sse-starlette
@@ -29,6 +29,8 @@ class SynthesizeRequest(BaseModel):
 
 class TranscribeResponse(BaseModel):
     text: str
+    preprocess_metadata: dict
+    postprocess_metadata: dict
 
 
 class AIAvatarHttpServer(Adapter):
@@ -192,6 +194,7 @@ class AIAvatarHttpServer(Adapter):
         @router.post("/transcribe")
         async def post_transcribe(
             audio: UploadFile = File(...),
+            session_id: Optional[str] = Form(None),
             credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
         ):
             if self.api_key:
@@ -205,9 +208,13 @@ class AIAvatarHttpServer(Adapter):
                     content={"error": "audio data is required."}
                 )
 
-            text = await (stt or self.sts.stt).transcribe(data=audio_bytes)
+            result = await (stt or self.sts.stt).recognize(session_id=session_id, data=audio_bytes)
 
-            return TranscribeResponse(text=text)
+            return TranscribeResponse(
+                text=result.text,
+                preprocess_metadata=result.preprocess_metadata,
+                postprocess_metadata=result.postprocess_metadata
+            )
 
         @router.post("/synthesize")
         async def post_synthesize(
