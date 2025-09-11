@@ -98,6 +98,8 @@ This change ensures compatibility with the new internal structure and removes th
     - [Other LLMs](#other-llms)
 - [🗣️ Voice](#️voice)
 - [👂 Speech Listener](#-speech-listener)
+    - [Preprocessing and Postprocessing](#preprocessing-and-postprocessing)
+    - [Speaker Diarization](#speaker-diarization)
 - [🎙️ Speech Detector](#-speech-detector)
 - [🥰 Face Expression](#-face-expression)
 - [💃 Animation](#-animation)
@@ -480,6 +482,49 @@ The preprocessing and postprocessing functions can return either:
 - A tuple of (processed_data, metadata_dict) for additional information
 
 If preprocessing returns empty bytes, the transcription is skipped and the result will have `text=None`.
+
+
+### Speaker Diarization
+
+AIAvatarKit provides speaker diarization functionality to suppress responses to voices other than the main speaker. This prevents interruptions from surrounding conversations or venue announcements at events.
+
+The `MainSpeakerGate` provides the following features:
+
+- Calculates voice embeddings from request audio
+- Registers a voice as the main speaker when similarity exceeds threshold for 2 consecutive requests (per session)
+- Returns `accepted=True` when request audio similarity exceeds threshold after main speaker registration
+- Returns `accepted=True` when no main speaker is registered yet
+
+**NOTE:** While mechanically ignoring non-main speaker voices (Example 1) is simplest, it risks stopping conversation due to misidentification and cannot handle speaker changes. Consider context-aware handling (Example 2) as well.
+
+```python
+from aiavatar.sts.stt.speaker_gate import MainSpeakerGate
+speaker_gate = MainSpeakerGate()
+
+# Example 1: Drop request when the voice is not from main speaker
+@aiavatar_app.sts.stt.preprocess
+async def stt_preprocess(session_id: str, audio_bytes: bytes):
+    # Compare with main speaker's voice embedding
+    gate_response = await speaker_gate.evaluate(session_id, audio_bytes, aiavatar_app.sts.vad.sample_rate)
+    # Branch processing based on similarity with main speaker's voice
+    if not gate_response.accepted:
+        logger.info(f"Ignore other speaker's voice: confidence={gate_response.confidence}")
+        return None, gate_response.to_dict()
+    else:
+        return audio_bytes, gate_response.to_dict()
+
+# Example 2: Add annotation for LLM that the voice is not from main speaker
+@aiavatar_app.sts.stt.postprocess
+async def stt_postprocess(session_id: str, text: str, audio_bytes: bytes, preprocess_metadata: dict):
+    # Compare with main speaker's voice embedding
+    gate_response = await speaker_gate.evaluate(session_id, audio_bytes, aiavatar_app.sts.vad.sample_rate)
+    # Branch processing based on similarity with main speaker's voice
+    if not gate_response.accepted:
+        logger.info(f"Adding note that this may be from a different speaker: confidence={gate_response.confidence}")
+        return f"$The following request may not be from the main speaker (similarity: {gate_response.confidence}). Determine from the content whether to respond. If you should not respond, output just[wait:user] as the answer:\n\n{text}", gate_response.to_dict()
+    else:
+        return text, gate_response.to_dict()
+```
 
 
 ## 🎙️ Speech Detector
