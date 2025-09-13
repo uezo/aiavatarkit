@@ -17,8 +17,9 @@ class ChatGPTService(LLMService):
         openai_api_key: str = None,
         system_prompt: str = None,
         base_url: str = None,
-        model: str = "gpt-4o",
+        model: str = "gpt-4.1",
         temperature: float = 0.5,
+        reasoning_effort: str = "minimal",
         split_chars: List[str] = None,
         option_split_chars: List[str] = None,
         option_split_threshold: int = 50,
@@ -41,6 +42,8 @@ class ChatGPTService(LLMService):
             db_connection_str=db_connection_str,
             debug=debug
         )
+        self.reasoning_effort = reasoning_effort
+
         if "azure" in model:
             api_version = parse_qs(urlparse(base_url).query).get("api-version", [None])[0]
             self.openai_client = openai.AsyncAzureOpenAI(
@@ -150,11 +153,23 @@ class ChatGPTService(LLMService):
             user_content_for_tool = user_content + tool_listing_prompt
 
         # Call LLM to filter tools
-        tool_choice_resp = await self.openai_client.chat.completions.create(
-            messages=messages[:-1] + [{"role": "user", "content": user_content_for_tool}],
-            model=self.model,
-            temperature=0.0
-        )
+        chat_completion_params = {
+            "model": self.model,
+        }
+        if len(messages) > 1 and messages[-1]["role"] == "tool":
+            chat_completion_params["messages"] = messages + [{"role": "user", "content": user_content_for_tool}]
+        else:
+            chat_completion_params["messages"] = messages[:-1] + [{"role": "user", "content": user_content_for_tool}]
+
+        if self.model.startswith("gpt-5"):
+            chat_completion_params["reasoning_effort"] = self.reasoning_effort
+        else:
+            chat_completion_params["temperature"] = self.temperature
+
+        if self.debug:
+            logger.info(f"Request to ChatGPT to get dynamic tools: {chat_completion_params}")
+
+        tool_choice_resp = await self.openai_client.chat.completions.create(**chat_completion_params)
 
         # Parse tools from response
         if match := re.search(r"\[tools:(.*?)\]", tool_choice_resp.choices[0].message.content):
@@ -170,37 +185,51 @@ class ChatGPTService(LLMService):
         return tools
 
     async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[Dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None) -> AsyncGenerator[LLMResponse, None]:
-        # Select tools to use
-        tool_instruction = ""
+        # Prepare all tools list (always include all tools)
+        all_tools = [t.spec for _, t in self.tools.items()]
+        if self.use_dynamic_tools:
+            all_tools.append(self.dynamic_tool_spec)
+
+        # Determine which tools can be used
         if tools:
-            filtered_tools = tools
-            for t in filtered_tools:
-                if ti := self.tools.get(t["function"]["name"]).instruction:
-                    tool_instruction += f"{ti}\n\n"
+            # Specific tools provided
+            allowed_tools = [{"type": "function", "function": {"name": t["function"]["name"]}} for t in tools]
         elif self.use_dynamic_tools:
-            filtered_tools = [self.dynamic_tool_spec]
-            tool_instruction = self.dynamic_tool_instruction.format(
-                dynamic_tool_name=self.dynamic_tool_name
-            )
+            # Dynamic mode: start with detection tool only
+            allowed_tools = [{"type": "function", "function": {"name": self.dynamic_tool_name}}]
         else:
-            filtered_tools = [t.spec for _, t in self.tools.items() if not t.is_dynamic] or None
+            # Normal mode: all non-dynamic tools available
+            non_dynamic_tools = [t.spec for _, t in self.tools.items() if not t.is_dynamic] or None
+            allowed_tools = [{"type": "function", "function": {"name": t["function"]["name"]}} for t in non_dynamic_tools] if non_dynamic_tools else None
 
-        # Update system prompt
-        if tool_instruction and messages[0]["role"] == "system":
-            system_message_for_tool = {"role": "system", "content": messages[0]["content"] + tool_instruction}
+        # Make params
+        chat_completion_params = {
+            "messages": messages,
+            "model": self.model,
+            "stream": True
+        }
+        # Temperature and Reasoning Effort
+        if self.model.startswith("gpt-5"):
+            chat_completion_params["reasoning_effort"] = self.reasoning_effort
         else:
-            system_message_for_tool = messages[0]
+            chat_completion_params["temperature"] = self.temperature
+        # Tools
+        if all_tools:
+            chat_completion_params["tools"] = all_tools
+            if allowed_tools:
+                chat_completion_params["tool_choice"] = {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": allowed_tools}}
+            else:
+                chat_completion_params["tool_choice"] = "none"
 
-        stream_resp = await self.openai_client.chat.completions.create(
-            messages=[system_message_for_tool] + messages[1:],
-            model=self.model,
-            temperature=self.temperature,
-            tools=filtered_tools,
-            stream=True
-        )
+        if self.debug:
+            logger.info(f"Request to ChatGPT: {chat_completion_params}")
+
+        # Send request
+        stream_resp = await self.openai_client.chat.completions.create(**chat_completion_params)
 
         tool_calls: List[ToolCall] = []
         try_dynamic_tools = False
+        filtered_tools = []
         async for chunk in stream_resp:
             if not chunk.choices or not chunk.choices[0].delta: # Azure OpenAI with content filter (streaming mode) returns choices without delta
                 continue
