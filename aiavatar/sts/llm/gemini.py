@@ -18,7 +18,7 @@ class GeminiService(LLMService):
         *,
         gemini_api_key: str = None,
         system_prompt: str = None,
-        model: str = "gemini-2.0-flash",
+        model: str = "gemini-2.5-flash",
         temperature: float = 0.5,
         thinking_budget: int = -1,
         split_chars: List[str] = None,
@@ -242,10 +242,14 @@ class GeminiService(LLMService):
         else:
             filtered_tools = [t.spec for _, t in self.tools.items() if not t.is_dynamic] or None
 
+        system_instruction = self.get_system_prompt(system_prompt_params)
+        if tool_instruction:
+            system_instruction = system_instruction + tool_instruction if system_instruction else tool_instruction
+
         stream_resp = await self.gemini_client.aio.models.generate_content_stream(
             model=self.model,
             config = types.GenerateContentConfig(
-                system_instruction=self.get_system_prompt(system_prompt_params) + tool_instruction,
+                system_instruction=system_instruction,
                 temperature=self.temperature,
                 tools=filtered_tools,
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
