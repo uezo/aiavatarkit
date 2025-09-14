@@ -54,6 +54,7 @@ class STSPipeline:
         performance_recorder: PerformanceRecorder = None,
         voice_recorder: VoiceRecorder = None,
         voice_recorder_enabled: bool = True,
+        voice_recorder_dir: str = "recorded_voices",
         debug: bool = False
     ):
         self.debug = debug
@@ -142,6 +143,7 @@ class STSPipeline:
 
         # Voice recorder
         self.voice_recorder = voice_recorder or FileVoiceRecorder(
+            record_dir=voice_recorder_dir,
             sample_rate=stt_sample_rate
         )
         self.voice_recorder_enabled = voice_recorder_enabled

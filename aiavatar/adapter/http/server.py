@@ -15,6 +15,7 @@ from ...sts.stt.openai import OpenAISpeechRecognizer
 from ...sts.llm import LLMService
 from ...sts.tts import SpeechSynthesizer
 from ...sts.performance_recorder import PerformanceRecorder
+from ...sts.voice_recorder import VoiceRecorder
 from ..models import AvatarControlRequest, AIAvatarRequest, AIAvatarResponse
 from .. import Adapter
 
@@ -54,6 +55,8 @@ class AIAvatarHttpServer(Adapter):
         wakeword_timeout: float = 60.0,
         db_connection_str: str = "aiavatar.db",
         performance_recorder: PerformanceRecorder = None,
+        voice_recorder: VoiceRecorder = None,
+        voice_recorder_dir: str = "recorded_voices",
         api_key: str = None,
         # Debug
         debug: bool = False            
@@ -77,6 +80,8 @@ class AIAvatarHttpServer(Adapter):
             wakeword_timeout=wakeword_timeout,
             db_connection_str=db_connection_str,
             performance_recorder=performance_recorder,
+            voice_recorder=voice_recorder,
+            voice_recorder_dir=voice_recorder_dir,
             debug=debug
         )
 

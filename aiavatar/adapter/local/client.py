@@ -9,6 +9,7 @@ from ...sts.stt.openai import OpenAISpeechRecognizer
 from ...sts.llm import LLMService
 from ...sts.tts import SpeechSynthesizer
 from ...sts.performance_recorder import PerformanceRecorder
+from ...sts.voice_recorder import VoiceRecorder
 from ...device import NoiseLevelDetector
 from ..models import AvatarControlRequest, AIAvatarResponse, AIAvatarException
 from ..client import AIAvatarClientBase
@@ -39,6 +40,8 @@ class AIAvatar(AIAvatarClientBase):
         wakeword_timeout: float = 60.0,
         db_connection_str: str = "aiavatar.db",
         performance_recorder: PerformanceRecorder = None,
+        voice_recorder: VoiceRecorder = None,
+        voice_recorder_dir: str = "recorded_voices",
         # Noise filter
         auto_noise_filter_threshold: bool = True,
         noise_margin: float = 20.0,
@@ -92,6 +95,8 @@ class AIAvatar(AIAvatarClientBase):
             wakeword_timeout=wakeword_timeout,
             db_connection_str=db_connection_str,
             performance_recorder=performance_recorder,
+            voice_recorder=voice_recorder,
+            voice_recorder_dir=voice_recorder_dir,
             debug=debug
         )
         self.sts.handle_response = self.handle_response
