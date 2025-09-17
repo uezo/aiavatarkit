@@ -189,6 +189,52 @@ async def test_gemini_service_cot():
 
 
 @pytest.mark.asyncio
+async def test_gemini_service_with_initial_messages():
+    """
+    Test GeminiService with initial messages (few-shot examples).
+    This test actually calls Gemini API, so it may cost tokens.
+    """
+    # Note: Gemini uses 'model' role instead of 'assistant'
+    initial_messages = [
+        {"role": "user", "parts": [{"text": "今日のランチ、寿司かラーメンかで悩んでる。"}]},
+        {"role": "model", "parts": [{"text": "どちらも美味しいですね。"}]},
+    ]
+
+    service = GeminiService(
+        gemini_api_key=GEMINI_API_KEY,
+        system_prompt="グルメアドバイザーとして振る舞ってください。",
+        model=MODEL,
+        temperature=0.5,
+        initial_messages=initial_messages
+    )
+    context_id = f"test_initial_context_{uuid4()}"
+
+    # Ask the recommendation for lunch
+    user_message = "おすすめは？"
+
+    collected_text = []
+
+    async for resp in service.chat_stream(context_id, "test_user", user_message):
+        collected_text.append(resp.text)
+
+    full_text = "".join(collected_text)
+    assert len(full_text) > 0, "No text was returned from the LLM."
+
+    # Check if the response contains sushi or ramen
+    assert "寿司" in full_text or "ラーメン" in full_text, "Food name from initial messages not found in response."
+
+    # Check the context - should have initial messages + new exchange
+    messages = await service.context_manager.get_histories(context_id)
+    assert len(messages) == 2, "Expected 2 messages (1 user + 1 assistant, without system and initial 2 messages)"
+
+    # Verify messages
+    assert messages[0]["role"] == "user"
+    assert messages[0]["parts"][0]["text"] == user_message
+    assert messages[1]["role"] == "model"
+    assert "寿司" in messages[1]["parts"][0]["text"] or "ラーメン" in messages[1]["parts"][0]["text"]
+
+
+@pytest.mark.asyncio
 async def test_gemini_service_tool_calls():
     """
     Test GeminiService with a registered tool.

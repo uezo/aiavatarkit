@@ -192,6 +192,53 @@ async def test_chatgpt_service_cot():
 
 
 @pytest.mark.asyncio
+async def test_chatgpt_service_with_initial_messages():
+    """
+    Test ChatGPTService with initial messages (few-shot examples).
+    This test actually calls OpenAI API, so it may cost tokens.
+    """
+    initial_messages = [
+        {"role": "user", "content": "今日のランチ、寿司かラーメンかで悩んでる。"},
+        {"role": "assistant", "content": "どちらも美味しいですね。"},
+    ]
+
+    service = ChatGPTService(
+        openai_api_key=OPENAI_API_KEY,
+        system_prompt="グルメアドバイザーとして振る舞ってください。",
+        model=MODEL,
+        temperature=0.5,
+        initial_messages=initial_messages
+    )
+    context_id = f"test_initial_context_{uuid4()}"
+
+    # Ask the recommendation for lunch
+    user_message = "おすすめは？"
+
+    collected_text = []
+
+    async for resp in service.chat_stream(context_id, "test_user", user_message):
+        collected_text.append(resp.text)
+
+    full_text = "".join(collected_text)
+    assert len(full_text) > 0, "No text was returned from the LLM."
+
+    # Check if the response contains sushi or ramen
+    assert "寿司" in full_text or "ラーメン" in full_text, "Food name from initial messages not found in response."
+
+    # Check the context
+    messages = await service.context_manager.get_histories(context_id)
+    assert len(messages) == 2, "Expected 2 messages (1 user + 1 assistant, without system and initial 2 messages)"
+
+    # Verify messages
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"] == user_message
+    assert messages[1]["role"] == "assistant"
+    assert "寿司" in messages[1]["content"] or "ラーメン" in messages[1]["content"]
+
+    await service.openai_client.close()
+
+
+@pytest.mark.asyncio
 async def test_chatgpt_service_tool_calls():
     """
     Test ChatGPTService with a registered tool.

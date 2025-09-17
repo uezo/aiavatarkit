@@ -21,6 +21,7 @@ class GeminiService(LLMService):
         model: str = "gemini-2.5-flash",
         temperature: float = 0.5,
         thinking_budget: int = -1,
+        initial_messages: List[dict] = None,
         split_chars: List[str] = None,
         option_split_chars: List[str] = None,
         option_split_threshold: int = 50,
@@ -34,6 +35,7 @@ class GeminiService(LLMService):
             system_prompt=system_prompt,
             model=model,
             temperature=temperature,
+            initial_messages=initial_messages,
             split_chars=split_chars,
             option_split_chars=option_split_chars,
             option_split_threshold=option_split_threshold,
@@ -81,6 +83,10 @@ class GeminiService(LLMService):
 
     async def compose_messages(self, context_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
         messages = []
+
+        # Add initial messages (e.g. few-shot)
+        if self.initial_messages:
+            messages.extend(self.initial_messages)
 
         # Extract the history starting from the first message where the role is 'user'
         histories = await self.context_manager.get_histories(context_id)
