@@ -19,6 +19,7 @@ class LiteLLMService(LLMService):
         base_url: str = None,
         model: str = None,
         temperature: float = 0.5,
+        initial_messages: List[dict] = None,
         split_chars: List[str] = None,
         option_split_chars: List[str] = None,
         option_split_threshold: int = 50,
@@ -32,6 +33,7 @@ class LiteLLMService(LLMService):
             system_prompt=system_prompt,
             model=model,
             temperature=temperature,
+            initial_messages=initial_messages,
             split_chars=split_chars,
             option_split_chars=option_split_chars,
             option_split_threshold=option_split_threshold,
@@ -80,6 +82,10 @@ class LiteLLMService(LLMService):
                 messages.append({"role": "assistant", "content": "ok"})
             else:
                 messages.append({"role": "system", "content": self.get_system_prompt(system_prompt_params)})
+
+        # Add initial messages (e.g. few-shot)
+        if self.initial_messages:
+            messages.extend(self.initial_messages)
 
         # Extract the history starting from the first message where the role is 'user'
         histories = await self.context_manager.get_histories(context_id)

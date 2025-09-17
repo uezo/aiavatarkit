@@ -19,6 +19,7 @@ class ClaudeService(LLMService):
         model: str = "claude-3-7-sonnet-latest",
         temperature: float = 0.5,
         max_tokens: int = 1024,
+        initial_messages: List[dict] = None,
         split_chars: List[str] = None,
         option_split_chars: List[str] = None,
         option_split_threshold: int = 50,
@@ -32,6 +33,7 @@ class ClaudeService(LLMService):
             system_prompt=system_prompt or "",
             model=model,
             temperature=temperature,
+            initial_messages=initial_messages,
             split_chars=split_chars,
             option_split_chars=option_split_chars,
             option_split_threshold=option_split_threshold,
@@ -72,6 +74,10 @@ class ClaudeService(LLMService):
 
     async def compose_messages(self, context_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
         messages = []
+
+        # Add initial messages (e.g. few-shot)
+        if self.initial_messages:
+            messages.extend(self.initial_messages)
 
         # Extract the history starting from the first message where the role is 'user'
         histories = await self.context_manager.get_histories(context_id)

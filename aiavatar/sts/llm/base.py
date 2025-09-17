@@ -102,6 +102,7 @@ class LLMService(ABC):
         system_prompt: str,
         model: str,
         temperature: float = 0.5,
+        initial_messages: List[dict] = None,
         split_chars: List[str] = None,
         option_split_chars: List[str] = None,
         option_split_threshold: int = 50,
@@ -114,6 +115,7 @@ class LLMService(ABC):
         self.system_prompt = system_prompt
         self.model = model
         self.temperature = temperature
+        self.initial_messages = initial_messages
         self.split_chars = split_chars or ["。", "？", "！", ". ", "?", "!", "\n"]
         self.option_split_chars = option_split_chars or ["、", ", "]
         self.option_split_threshold = option_split_threshold
@@ -124,7 +126,7 @@ class LLMService(ABC):
             else:
                 self.split_patterns.append(f"{re.escape(char)}\s?")
         self.option_split_chars_regex = f"({'|'.join(self.split_patterns)})\s*(?!.*({'|'.join(self.split_patterns)}))"
-        self._request_filter = self.request_filter_default
+        self._request_filter = None
         self._update_context_filter = None
         self.voice_text_tag = voice_text_tag
         self.tools: Dict[str, Tool] = {}
@@ -176,9 +178,6 @@ The list of tools is as follows:
     def request_filter(self, func):
         self._request_filter = func
         return func
-
-    def request_filter_default(self, text: str) -> str:
-        return text
 
     def update_context_filter(self, func):
         self._update_context_filter = func
@@ -266,8 +265,9 @@ The list of tools is as follows:
 
     async def chat_stream(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
         logger.info(f"User: {text}")
-        text = self._request_filter(text)
-        logger.info(f"User(Filtered): {text}")
+        if self._request_filter:
+            text = self._request_filter(text)
+            logger.info(f"User(Filtered): {text}")
 
         if not text and not files:
             return
