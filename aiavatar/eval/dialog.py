@@ -49,6 +49,7 @@ class Turn(BaseModel):
 
 
 class Scenario(BaseModel):
+    name: Optional[str] = None 
     turns: List[Turn] = Field(default_factory=list)
     goal: Optional[str] = None
     scenario_evaluation_result: Optional[EvaluationResult] = None
@@ -88,7 +89,7 @@ class DataValidator:
             try:
                 DataValidator.validate_scenario(scenario)
             except ValidationError as ve:
-                raise ValidationError(f"Scenario {i+1}: {ve}")
+                raise ValidationError(f"Scenario {scenario.name or str(i+1)}: {ve}")
 
 
 # Evaluator
@@ -136,7 +137,7 @@ class DialogEvaluator:
         context_id = str(uuid4())
 
         for i, turn in enumerate(scenario.turns, 1):
-            print(f"\rProcessing turn {i}/{len(scenario.turns)}: {turn.input_text[:50]}...", end="", flush=True)
+            print(f"\rProcessing Scenario {scenario.name} - Turn {i}/{len(scenario.turns)}: {turn.input_text[:50]}...", end="", flush=True)
             try:
                 turn.actual_output_text, tool_call = await self.process_turn(context_id, turn)
                 if tool_call:
@@ -233,7 +234,7 @@ class DialogEvaluator:
                             if turn.evaluation_result is not None and not overwrite_evaluation:
                                 continue  # Skip this turn evaluation
 
-                            print(f"\rEvaluating turn {i+1}/{len(scenario.turns)}: {turn.input_text[:50]}...", end="", flush=True)
+                            print(f"\rEvaluating Scenario {scenario.name} - Turn {i+1}/{len(scenario.turns)}: {turn.input_text[:50]}...", end="", flush=True)
                             try:
                                 turn.evaluation_result = await self.evaluate_turn_output(
                                     output_text=turn.actual_output_text,
@@ -263,7 +264,8 @@ class DialogEvaluator:
 
     def print_results(self, scenarios: List[Scenario], detailed: bool = True):
         for i, scenario in enumerate(scenarios):
-            print(f"\n=== Scenario {i+1} ===")
+            scenario_name = scenario.name or str(i+1)
+            print(f"\n=== Scenario {scenario_name} ===")
             print(f"Goal: {scenario.goal}")
             
             if detailed:
