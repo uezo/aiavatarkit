@@ -1595,7 +1595,8 @@ async def main():
     
     # Define scenario
     scenario = Scenario(
-        goal="Provide helpful customer support",
+        name="Order tracking support",
+        goal="Provide efficient and helpful customer service for order tracking inquiries",
         turns=[
             Turn(
                 input_text="Hello, I need help with my order",
