@@ -1,7 +1,7 @@
 import base64
 import logging
 import re
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Request, File, UploadFile, Form
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -12,6 +12,7 @@ from ...sts.models import STSRequest, STSResponse
 from ...sts.vad import SpeechDetectorDummy
 from ...sts.stt import SpeechRecognizer
 from ...sts.stt.openai import OpenAISpeechRecognizer
+from ...sts.stt.speaker_registry import SpeakerRegistry, MatchTopKResult
 from ...sts.llm import LLMService
 from ...sts.llm.context_manager import ContextManager
 from ...sts.tts import SpeechSynthesizer
@@ -30,10 +31,48 @@ class SynthesizeRequest(BaseModel):
     language: Optional[str] = None
 
 
+class Candidate(BaseModel):
+    speaker_id: str
+    similarity: float
+    metadata: Dict[str, Any]
+    is_new: bool = False
+
+
+class MatchTopKResultModel(BaseModel):
+    chosen: Candidate
+    candidates: List[Candidate]
+
+    @classmethod
+    def parse(cls, match_result: MatchTopKResult) -> "MatchTopKResultModel":
+        """Parse MatchTopKResult from speaker_registry to MatchTopKResultModel"""
+        return cls(
+            chosen=Candidate(
+                speaker_id=match_result.chosen.speaker_id,
+                similarity=match_result.chosen.similarity,
+                metadata=match_result.chosen.metadata,
+                is_new=match_result.chosen.is_new
+            ),
+            candidates=[
+                Candidate(
+                    speaker_id=c.speaker_id,
+                    similarity=c.similarity,
+                    metadata=c.metadata,
+                    is_new=c.is_new
+                ) for c in match_result.candidates
+            ]
+        )
+
+
 class TranscribeResponse(BaseModel):
     text: str
-    preprocess_metadata: dict
-    postprocess_metadata: dict
+    preprocess_metadata: Optional[dict] = None
+    postprocess_metadata: Optional[dict] = None
+    speakers: Optional[MatchTopKResultModel] = None
+
+
+class PostSpeakerNameRequest(BaseModel):
+    speaker_id: str
+    name: str
 
 
 class AIAvatarHttpServer(Adapter):
@@ -74,6 +113,9 @@ class AIAvatarHttpServer(Adapter):
         voice_recorder: VoiceRecorder = None,
         voice_recorder_enabled: bool = True,
         voice_recorder_dir: str = "recorded_voices",
+
+        # Optional component
+        speaker_registry: SpeakerRegistry = None,
 
         # API server auth
         api_key: str = None,
@@ -116,6 +158,9 @@ class AIAvatarHttpServer(Adapter):
 
         # Call base after self.sts is set
         super().__init__(self.sts)
+
+        # Optional components
+        self.speaker_registry = speaker_registry
 
         # Debug
         self.debug = debug
@@ -244,11 +289,35 @@ class AIAvatarHttpServer(Adapter):
 
             result = await (stt or self.sts.stt).recognize(session_id=session_id, data=audio_bytes)
 
+            speakers = None
+            if self.speaker_registry:
+                try:
+                    match_result = self.speaker_registry.match_topk_from_pcm(audio_bytes=audio_bytes, sample_rate=(stt or self.sts.stt).sample_rate)
+                    if match_result:
+                        speakers = MatchTopKResultModel.parse(match_result)
+                except Exception as ex:
+                    logger.warning(f"Error at speaker matching: {ex}")
+
             return TranscribeResponse(
                 text=result.text,
                 preprocess_metadata=result.preprocess_metadata,
-                postprocess_metadata=result.postprocess_metadata
+                postprocess_metadata=result.postprocess_metadata,
+                speakers=speakers
             )
+
+        @router.post("/transcribe/speaker")
+        async def post_transcribe_speaker(
+            request: PostSpeakerNameRequest,
+            credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
+        ):
+            if self.api_key:
+                self.api_key_auth(credentials)
+
+            if self.speaker_registry:
+                self.speaker_registry.set_metadata(request.speaker_id, "name", request.name)
+                return JSONResponse(content={"speaker_id": request.speaker_id, "name": request.name})
+            else:
+                return JSONResponse(content={})
 
         @router.post("/synthesize")
         async def post_synthesize(
