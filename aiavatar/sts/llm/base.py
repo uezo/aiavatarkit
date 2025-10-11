@@ -94,6 +94,13 @@ class Tool:
         tool.spec = self.build_spec(llm_service_name, n, d, p)
         return tool
 
+    def add_to_mcp_server(self, mcp_server):
+        mcp_server.add_tool(
+            fn=self.func,
+            name=self.name,
+            description=self.spec["function"]["description"],
+        )
+
 
 class LLMService(ABC):
     def __init__(
