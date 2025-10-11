@@ -41,12 +41,12 @@ class MCPBase:
 
         for mcp_tool in mcp_tools:
             async def call_tool(tool_name=mcp_tool.name, **kwargs):
-                print(f"name: {tool_name} / kw: {kwargs}")
                 results = await self.client.call_tool(tool_name, kwargs)
+                dumped_results = [r.text if r.type == "text" else r.model_dump() for r in results]
                 if len(results) == 1:
-                    return results[0].model_dump()
+                    return dumped_results[0]
                 else:
-                    return [r.model_dump() for r in results]
+                    return dumped_results
 
             self.tools.append(Tool(
                 name=mcp_tool.name,
