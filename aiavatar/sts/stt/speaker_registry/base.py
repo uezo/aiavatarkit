@@ -1,11 +1,17 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict
 import json
+import logging
 import os
 from typing import Dict, Optional, Any, Tuple, Iterable, List
 import uuid
 import numpy as np
-from resemblyzer import VoiceEncoder, preprocess_wav  # pip install resemblyzer
+try:
+    from resemblyzer import VoiceEncoder, preprocess_wav  # pip install resemblyzer
+except:
+    pass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -227,7 +233,11 @@ class InMemoryStore(BaseSpeakerStore):
 class SpeakerRegistry:
     def __init__(self, match_threshold: float = 0.72, store: Optional[BaseSpeakerStore] = None, data_path: Optional[str] = None):
         self.match_threshold = float(match_threshold)
-        self._enc = VoiceEncoder()
+        try:
+            self._enc = VoiceEncoder()
+        except:
+            self._enc = None
+            logger.warning("SpeakerRegistry doesn't work because resemblyzer is not installed.")
         self._store: BaseSpeakerStore = store or InMemoryStore(data_path=data_path)
 
     def match_topk_from_embedding(
