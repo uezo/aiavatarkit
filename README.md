@@ -112,6 +112,7 @@ This change ensures compatibility with the new internal structure and removes th
     - [⚡️ Tool Call](#️-tool-call)
     - [⌛️ Stream Response](#-stream-response)
     - [🪄 Dynamic Tool Call](#-dynamic-tool-call)
+    - [🔌 MCP](#-mcp)
 
 - [🌎 Platform Guide](#-platform-guide)
     - [🐈 VRChat](#-vrchat)
@@ -1561,6 +1562,42 @@ async def my_get_dynamic_tools(messages: list, metadata: dict) -> list:
     tools = await search_tools_from_vector_db(messages, metadata)
     # Extract and return the spec objects (not the implementations)
     return [t.spec for t in tools]
+```
+
+### 🔌 MCP
+
+AIAvatarKit supports tools provided as MCP.
+
+First, install the required `FastMCP` dependency.
+
+```sh
+pip install fastmcp
+```
+
+The following steps show how to retrieve tools from MCP servers and register them to `LLMService`.
+
+Both Streamable HTTP and standard I/O are supported. The simplest approach is shown in `mcp1` and `mcp3`, but you can also add authentication headers as in `mcp2`, filter tools to only what you need, or customize parts of the schema or execution logic.
+
+```python
+from aiavatar.sts.llm.chatgpt import ChatGPTService
+llm = ChatGPTService(openai_api_key=OPENAI_API_KEY)
+
+from aiavatar.sts.llm.tools.mcp import StreamableHttpMCP, StdioMCP
+
+# MCP Server
+mcp1 = StreamableHttpMCP(url=MCP1_URL)
+mcp1.for_each_tool = llm.add_tool
+
+# MCP Server with Auth
+mcp2 = StreamableHttpMCP(url=MCP2_URL, headers={"Authorization": f"Bearer {MCP_JWT}"})
+@mcp2.for_each_tool
+def mcp2_tools(tool: Tool):
+    # Do something here (e.g. edit schema or func)
+    llm.add_tool(tool)
+
+# MCP Server (Std I/O)
+mcp3 = StdioMCP(server_script="weather.py") # supports .py and .js
+mcp3.for_each_tool = llm.add_tool
 ```
 
 
