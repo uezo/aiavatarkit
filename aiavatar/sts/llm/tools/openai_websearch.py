@@ -13,7 +13,7 @@ class OpenAIWebSearch:
         openai_api_key: str,
         system_prompt: str = None,
         base_url: str = None,
-        model: str = "gpt-4o-search-preview",
+        model: str = "gpt-5-search-api",
         temperature: float = 0.5,
         search_context_size: str = "medium",
         country: str = None,

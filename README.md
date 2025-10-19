@@ -1600,6 +1600,49 @@ mcp3 = StdioMCP(server_script="weather.py") # supports .py and .js
 mcp3.for_each_tool = llm.add_tool
 ```
 
+### 🛠️ Built-in Tools
+
+You can use the following tools out of the box 📦.
+
+- 🔍 Web Search
+    - Gemini Search
+    - OpenAI Search
+    - Grok Search
+- 🌏 Web Scraper
+- 🖼️ Image Generation
+    - 🍌 Nano Banana
+    - 🐓 Selfie
+
+```python
+# Web Search
+from aiavatar.sts.llm.tools.gemini_websearch import GeminiWebSearchTool
+google_search_tool = GeminiWebSearchTool(gemini_api_key=GEMINI_API_KEY)
+llm.add_tool(google_search_tool)
+
+from aiavatar.sts.llm.tools.openai_websearch import OpenAIWebSearchTool
+web_search_tool = OpenAIWebSearchTool(openai_api_key=OPENAI_API_KEY)
+llm.add_tool(web_search_tool)
+
+from aiavatar.sts.llm.tools.grok_search import GrokSearchTool
+grok_web_search_tool = GrokSearchTool(xai_api_key=XAI_API_KEY)
+llm.add_tool(grok_web_search_tool)
+
+# Web Scraper
+from aiavatar.sts.llm.tools.webscraper import WebScraperTool
+webscraper_tool = WebScraperTool()
+# webscraper_tool = WebScraperTool(openai_api_key=OPENAI_API_KEY, return_summary=True)  # Provides summary instead of full innerText (recommended)
+llm.add_tool(webscraper_tool)
+
+# Image Generation
+from aiavatar.sts.llm.tools.nanobanana import NanoBananaTool
+nanobanana_tool = NanoBananaTool(gemini_api_key=GEMINI_API_KEY)
+llm.add_tool(nanobanana_tool)
+
+from aiavatar.sts.llm.tools.nanobanana import NanoBananaSelfieTool
+selfie_tool = NanoBananaSelfieTool(gemini_api_key=GEMINI_API_KEY, reference_image=image_bytes_or_image_url_of_file_api)
+llm.add_tool(selfie_tool)
+```
+
 
 ## 🧪 Evaluation
 
