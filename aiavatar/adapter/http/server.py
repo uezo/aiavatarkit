@@ -162,12 +162,19 @@ class AIAvatarHttpServer(Adapter):
         # Optional components
         self.speaker_registry = speaker_registry
 
+        # Custom logic
+        self._on_response_chunk = None
+
         # Debug
         self.debug = debug
 
         # API Key
         self.api_key = api_key
         self._bearer_scheme = HTTPBearer(auto_error=False)
+
+    def on_response_chunk(self, func):
+        self._on_response_chunk = func
+        return func
 
     def api_key_auth(self, credentials: HTTPAuthorizationCredentials):
         if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != self.api_key:
@@ -241,6 +248,9 @@ class AIAvatarHttpServer(Adapter):
                         audio_data=response.audio_data,
                         metadata=response.metadata or {}
                     )
+
+                    if self._on_response_chunk:
+                        await self._on_response_chunk(aiavatar_response)
 
                     if response.type == "chunk":
                         # Language
