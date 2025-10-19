@@ -210,15 +210,18 @@ class AudioPlayer:
 
     def process_queue(self):
         while True:
-            data = self.queue.get()
+            data, has_wave_header = self.queue.get()
             if data is None:
                 break
             self.is_playing = True
-            self.play_stream.write(data)
+            if has_wave_header:
+                self.play(data)
+            else:
+                self.play_stream.write(data)
             self.is_playing = False
 
-    def add(self, audio_bytes: bytes):
-        self.queue.put(audio_bytes)
+    def add(self, audio_bytes: bytes, has_wave_header: bool = False):
+        self.queue.put((audio_bytes, has_wave_header))
 
     def stop(self):
         while not self.queue.empty():
