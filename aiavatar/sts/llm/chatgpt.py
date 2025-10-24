@@ -31,6 +31,7 @@ class ChatGPTService(LLMService):
         voice_text_tag: str = None,
         use_dynamic_tools: bool = False,
         context_manager: ContextManager = None,
+        shared_context_ids: List[str] = None,
         db_connection_str: str = "aiavatar.db",
         custom_openai_module: OpenAICompatibleModule = None,
         debug: bool = False
@@ -46,6 +47,7 @@ class ChatGPTService(LLMService):
             voice_text_tag=voice_text_tag,
             use_dynamic_tools=use_dynamic_tools,
             context_manager=context_manager,
+            shared_context_ids=shared_context_ids,
             db_connection_str=db_connection_str,
             debug=debug
         )
@@ -98,7 +100,9 @@ class ChatGPTService(LLMService):
             messages.extend(self.initial_messages)
 
         # Extract the history starting from the first message where the role is 'user'
-        histories = await self.context_manager.get_histories(context_id)
+        histories = await self.context_manager.get_histories(
+            context_id=[context_id] + self.shared_context_ids if self.shared_context_ids else context_id
+        )
         while histories and histories[0]["role"] != "user":
             histories.pop(0)
         messages.extend(histories)

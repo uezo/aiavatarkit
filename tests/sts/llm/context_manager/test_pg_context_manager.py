@@ -47,6 +47,36 @@ async def test_add_and_get_histories(context_manager):
 
 
 @pytest.mark.asyncio
+async def test_add_and_get_histories_with_shared(context_manager):
+    test_id = str(uuid4())
+    context_id = f"test_specific_context_{test_id}"
+    data_list = [
+        {"message": "Hello, world!", "role": "user"},
+        {"message": "Hi! How can I help you today?", "role": "assistant"}
+    ]
+    await context_manager.add_histories(context_id, data_list)
+
+    shared_context_id = f"test_shared_context_{test_id}"
+    shared_data_list = [
+        {"message": "Shared Request", "role": "user"},
+        {"message": "Shared Answer", "role": "assistant"}
+    ]
+    await context_manager.add_histories(shared_context_id, shared_data_list)
+
+    histories = await context_manager.get_histories(context_id=[context_id, shared_context_id])
+    assert len(histories) == 4
+
+    assert histories[0]["message"] == "Hello, world!"
+    assert histories[0]["role"] == "user"
+    assert histories[1]["message"] == "Hi! How can I help you today?"
+    assert histories[1]["role"] == "assistant"
+    assert histories[2]["message"] == "Shared Request"
+    assert histories[2]["role"] == "user"
+    assert histories[3]["message"] == "Shared Answer"
+    assert histories[3]["role"] == "assistant"
+
+
+@pytest.mark.asyncio
 async def test_get_histories_limit(context_manager):
     context_id = f"test_context_limit_{uuid4()}"
     data_list = [
