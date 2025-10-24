@@ -116,6 +116,7 @@ class LLMService(ABC):
         voice_text_tag: str = None,
         use_dynamic_tools: bool = False,
         context_manager: ContextManager = None,
+        shared_context_ids: List[str] = None,
         db_connection_str: str = "aiavatar.db",
         debug: bool = False
     ):
@@ -179,6 +180,7 @@ The list of tools is as follows:
                 self.context_manager = PostgreSQLContextManager(connection_str=db_connection_str)
             else:
                 self.context_manager = SQLiteContextManager(db_path=db_connection_str)
+        self.shared_context_ids = shared_context_ids
         self.debug = debug
 
     # Decorators

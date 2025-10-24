@@ -3,14 +3,14 @@ import json
 import logging
 from datetime import datetime, timezone, timedelta
 from abc import ABC, abstractmethod
-from typing import List, Dict
+from typing import List, Dict, Union
 
 logger = logging.getLogger(__name__)
 
 
 class ContextManager(ABC):
     @abstractmethod
-    async def get_histories(self, context_id: str, limit: int = 100) -> List[Dict]:
+    async def get_histories(self, context_id: Union[str, List[str]], limit: int = 100) -> List[Dict]:
         pass
 
     @abstractmethod
@@ -55,31 +55,42 @@ class SQLiteContextManager(ContextManager):
                 )
 
         except Exception as ex:
-            logger.error(f"Error at init_db: {ex}")
+            logger.exception(f"Error at init_db: {ex}")
         finally:
             conn.close()
 
-    async def get_histories(self, context_id: str, limit: int = 100) -> List[Dict]:
+    async def get_histories(self, context_id: Union[str, List[str]], limit: int = 100) -> List[Dict]:
         conn = sqlite3.connect(self.db_path)
         try:
-            sql = """
-            SELECT serialized_data
-            FROM chat_histories
-            WHERE context_id = ?
-            """
-            params = [context_id]
+            if not context_id:
+                raise ValueError("context_id is required")
+
+            where_clauses = []
+            params = []
+
+            if isinstance(context_id, (list, tuple)):
+                placeholders = ",".join(["?"] * len(context_id))
+                where_clauses.append(f"context_id IN ({placeholders})")
+                params.extend(context_id)
+            else:
+                where_clauses.append("context_id = ?")
+                params.append(context_id)
 
             if self.context_timeout > 0:
                 # Cutoff time to exclude old records
-                sql += " AND created_at >= ?"
+                where_clauses.append("created_at >= ?")
                 cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=self.context_timeout)
                 params.append(cutoff_time)
 
-            sql += " ORDER BY id DESC"
+            params.append(limit)
 
-            if limit > 0:
-                sql += " LIMIT ?"
-                params.append(limit)
+            sql = f"""
+            SELECT serialized_data
+            FROM chat_histories
+            WHERE {' AND '.join(where_clauses)}
+            ORDER BY id DESC
+            LIMIT ?
+            """
 
             cursor = conn.cursor()
             cursor.execute(sql, tuple(params))
@@ -91,7 +102,7 @@ class SQLiteContextManager(ContextManager):
             return results
 
         except Exception as ex:
-            logger.error(f"Error at get_histories: {ex}")
+            logger.exception(f"Error at get_histories: {ex}")
             return []
 
         finally:
@@ -128,7 +139,7 @@ class SQLiteContextManager(ContextManager):
             conn.commit()
 
         except Exception as ex:
-            logger.error(f"Error at add_histories: {ex}")
+            logger.exception(f"Error at add_histories: {ex}")
             conn.rollback()
 
         finally:
@@ -155,7 +166,7 @@ class SQLiteContextManager(ContextManager):
             return last_created_at.replace(tzinfo=timezone.utc)
 
         except Exception as ex:
-            logger.error(f"Error at get_last_created_at: {ex}")
+            logger.exception(f"Error at get_last_created_at: {ex}")
             return datetime.min.replace(tzinfo=timezone.utc)
 
         finally:

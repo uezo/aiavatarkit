@@ -1,7 +1,7 @@
 from datetime import datetime, timezone, timedelta
 import json
 import logging
-from typing import List, Dict
+from typing import List, Dict, Union
 import psycopg2
 import psycopg2.extras
 from ..base import ContextManager
@@ -63,34 +63,46 @@ class PostgreSQLContextManager(ContextManager):
                 )
             conn.commit()
         except Exception as ex:
-            logger.error(f"Error at init_db: {ex}")
+            logger.exception(f"Error at init_db: {ex}")
             conn.rollback()
         finally:
             conn.close()
 
-    async def get_histories(self, context_id: str, limit: int = 100) -> List[Dict]:
+    async def get_histories(self, context_id: Union[str, List[str]], limit: int = 100) -> List[Dict]:
         conn = self.connect_db()
         try:
-            sql_query = """
-            SELECT serialized_data
-            FROM chat_histories
-            WHERE context_id = %s
-            """
-            params = [context_id]
+            if not context_id:
+                raise ValueError("context_id is required")
+
+            where_clauses = []
+            params = []
+
+            if isinstance(context_id, (list, tuple)):
+                placeholders = ",".join(["%s"] * len(context_id))
+                where_clauses.append(f"context_id IN ({placeholders})")
+                params.extend(context_id)
+            else:
+                where_clauses.append("context_id = %s")
+                params.append(context_id)
 
             if self.context_timeout > 0:
-                sql_query += " AND created_at >= %s"
+                # Cutoff time to exclude old records
+                where_clauses.append("created_at >= %s")
                 cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=self.context_timeout)
                 params.append(cutoff_time)
 
-            sql_query += " ORDER BY id DESC"
+            params.append(limit)
 
-            if limit > 0:
-                sql_query += " LIMIT %s"
-                params.append(limit)
+            sql = f"""
+            SELECT serialized_data
+            FROM chat_histories
+            WHERE {' AND '.join(where_clauses)}
+            ORDER BY id DESC
+            LIMIT %s
+            """
 
             with conn.cursor() as cur:
-                cur.execute(sql_query, tuple(params))
+                cur.execute(sql, tuple(params))
                 rows = cur.fetchall()
 
             rows.reverse()
@@ -98,7 +110,7 @@ class PostgreSQLContextManager(ContextManager):
             return results
 
         except Exception as ex:
-            logger.error(f"Error at get_histories: {ex}")
+            logger.exception(f"Error at get_histories: {ex}")
             return []
 
         finally:
@@ -133,7 +145,7 @@ class PostgreSQLContextManager(ContextManager):
             conn.commit()
 
         except Exception as ex:
-            logger.error(f"Error at add_histories: {ex}")
+            logger.exception(f"Error at add_histories: {ex}")
             conn.rollback()
 
         finally:
@@ -165,7 +177,7 @@ class PostgreSQLContextManager(ContextManager):
                 return last_created_at
 
         except Exception as ex:
-            logger.error(f"Error at get_last_created_at: {ex}")
+            logger.exception(f"Error at get_last_created_at: {ex}")
             return datetime.min.replace(tzinfo=timezone.utc)
 
         finally:
