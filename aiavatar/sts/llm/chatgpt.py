@@ -1,11 +1,15 @@
 import json
 from logging import getLogger
 import re
-from typing import AsyncGenerator, Dict, List
+from typing import AsyncGenerator, Dict, List, Protocol, Type
 from urllib.parse import urlparse, parse_qs
-import openai
+import openai as openai_module
 from . import LLMService, LLMResponse, ToolCall, Tool
 from .context_manager import ContextManager
+
+class OpenAICompatibleModule(Protocol):
+    AsyncClient: Type[openai_module.AsyncClient]
+    AsyncAzureOpenAI: Type[openai_module.AsyncAzureOpenAI]
 
 logger = getLogger(__name__)
 
@@ -28,6 +32,7 @@ class ChatGPTService(LLMService):
         use_dynamic_tools: bool = False,
         context_manager: ContextManager = None,
         db_connection_str: str = "aiavatar.db",
+        custom_openai_module: OpenAICompatibleModule = None,
         debug: bool = False
     ):
         super().__init__(
@@ -46,15 +51,16 @@ class ChatGPTService(LLMService):
         )
         self.reasoning_effort = reasoning_effort
 
+        client_module = custom_openai_module or openai_module
         if "azure" in model:
             api_version = parse_qs(urlparse(base_url).query).get("api-version", [None])[0]
-            self.openai_client = openai.AsyncAzureOpenAI(
+            self.openai_client = client_module.AsyncAzureOpenAI(
                 api_key=openai_api_key,
                 api_version=api_version,
                 base_url=base_url
             )
         else:
-            self.openai_client = openai.AsyncClient(api_key=openai_api_key, base_url=base_url)
+            self.openai_client = client_module.AsyncClient(api_key=openai_api_key, base_url=base_url)
 
         self.dynamic_tool_spec = {
             "type": "function",
