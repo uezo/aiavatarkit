@@ -122,7 +122,7 @@ This change ensures compatibility with the new internal structure and removes th
     - [🎛️ Configuration API](#️-configuration-api)
     - [🎮 Control API](#-control-api)
     - [🔐 Authorization](#-authorization)
-    - [🧵 Request merging](#-request-merging)
+    - [📈 Observability](#️-observability)
 
 - [🧪 Evaluation](#-evaluation)
 
@@ -130,6 +130,7 @@ This change ensures compatibility with the new internal structure and removes th
     - [👀 Vision](#-vision)
     - [💾 Long-term Memory](#-long-term-memory)
     - [🐓 Wakeword](#-wakeword-listener)
+    - [🧵 Request merging](#-request-merging)
     - [🔈 Audio Device](#-audio-device)
     - [🎭 Custom Behavior](#-custom-behavior)
     - [🎚️ Noise Filter](#-noise-filter)
@@ -1310,6 +1311,22 @@ curl -X POST "http://localhost:8000/admin/llm/config" \
     }'
 ```
 
+### 📈 Observability
+
+You can monitor the entire sequence - what requests are sent to the LLM, how they are interpreted, which tools are invoked, and what responses are generated from specific results or data - to support AIAvatar quality improvements and governance.
+
+Since AIAvatarKit lets you replace the OpenAI client module with an alternative, you can leverage that capability to integrate with [Langfuse](https://langfuse.com).
+
+```python
+from langfuse.openai import openai as langfuse_openai
+llm = ChatGPTService(
+    openai_api_key=OPENAI_API_KEY,
+    system_prompt="You are a helpful assistant.",
+    model="gpt-4.1",
+    custom_openai_module=langfuse_openai,   # Set langfuse OpenAI compatible client module
+)
+```
+
 
 ## 🦜 AI Agent
 
@@ -2018,6 +2035,45 @@ aiavatar_app.sts.merge_request_prefix = "$直前のユーザーの要求とあ�
 ```
 
 NOTE: Files from the previous request are preserved in the merged request
+
+
+### 🧺 Shared Context
+
+通常、コンテキストは特定ユーザーとAIキャラクターとの間でのみ共有されます。AIAvatarKitでは、全ユーザーに共通等、スコープに応じたコンテキストの共有範囲を設定した履歴を管理することができます。
+これはニュースなど世の中一般の出来事やAIキャラクター自身の行動など、特定ユーザーとのやり取りに依存しない一般的な事象をコンテキストに注入するのに役立ちます。
+
+Context is typically shared only between an individual user and the AI character. With AIAvatarKit, you can manage histories that define how broadly the context is shared, for example, making it common to every user.
+
+This lets you inject context with general events that are independent of any single user interaction, such as public news or actions the AI character has taken.
+
+```python
+# Add character-wide shared messages identified by context_id="shared_context_id"
+now = datetime.now(ZoneInfo(self.timezone))
+await self.llm.context_manager.add_histories(
+    context_id="shared_context_id",
+    data_list=[
+        {
+            "role": "user",
+            "content": f"$Current datetime: {now.strftime('%Y/%m/%d %H:%M:%S')}\nToday's news: {news}"
+        },
+        {
+            "role": "assistant",
+            "content": "I recognized current datetime and today's news."
+        },
+    ],
+    context_schema="chatgpt"
+)
+```
+
+```python
+# Pass "shared_context_id" via `shared_context_ids` to load the shared history
+llm = ChatGPTService(
+    openai_api_key=OPENAI_API_KEY,
+    system_prompt="You are a helpful virtual assistant.",
+    model="gpt-4.1",
+    shared_context_id=["shared_context_id"]
+)
+```
 
 
 ### 🔈 Audio device
