@@ -131,6 +131,7 @@ This change ensures compatibility with the new internal structure and removes th
     - [💾 Long-term Memory](#-long-term-memory)
     - [🐓 Wakeword](#-wakeword-listener)
     - [🧵 Request merging](#-request-merging)
+    - [🧺 Shared Context](#-shared-context)
     - [🔈 Audio Device](#-audio-device)
     - [🎭 Custom Behavior](#-custom-behavior)
     - [🎚️ Noise Filter](#-noise-filter)
@@ -2038,9 +2039,6 @@ NOTE: Files from the previous request are preserved in the merged request
 
 
 ### 🧺 Shared Context
-
-通常、コンテキストは特定ユーザーとAIキャラクターとの間でのみ共有されます。AIAvatarKitでは、全ユーザーに共通等、スコープに応じたコンテキストの共有範囲を設定した履歴を管理することができます。
-これはニュースなど世の中一般の出来事やAIキャラクター自身の行動など、特定ユーザーとのやり取りに依存しない一般的な事象をコンテキストに注入するのに役立ちます。
 
 Context is typically shared only between an individual user and the AI character. With AIAvatarKit, you can manage histories that define how broadly the context is shared, for example, making it common to every user.
 
