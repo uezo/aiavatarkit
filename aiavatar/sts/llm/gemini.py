@@ -83,7 +83,7 @@ class GeminiService(LLMService):
     def dynamic_tool_name(self) -> str:
         return self.dynamic_tool_spec["functionDeclarations"][0]["name"]
 
-    async def compose_messages(self, context_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
+    async def compose_messages(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
         messages = []
 
         # Add initial messages (e.g. few-shot)
@@ -118,7 +118,7 @@ class GeminiService(LLMService):
         messages.append(types.Content(role="user", parts=parts))
         return messages
 
-    async def update_context(self, context_id: str, messages: List[Dict], response_text: str):
+    async def update_context(self, context_id: str, user_id: str, messages: List[Dict], response_text: str):
         messages.append(types.Content(role="model", parts=[types.Part.from_text(text=response_text)]))
         dict_messages = []
         for m in messages:
@@ -252,7 +252,7 @@ class GeminiService(LLMService):
         else:
             filtered_tools = [t.spec for _, t in self.tools.items() if not t.is_dynamic] or None
 
-        system_instruction = self.get_system_prompt(system_prompt_params)
+        system_instruction = self.get_system_prompt(context_id, user_id, system_prompt_params)
         if tool_instruction:
             system_instruction = system_instruction + tool_instruction if system_instruction else tool_instruction
 
@@ -292,7 +292,7 @@ class GeminiService(LLMService):
                         logger.info("Get dynamic tool")
                         filtered_tools = await self._get_dynamic_tools(
                             messages,
-                            {"system_prompt": self.get_system_prompt(system_prompt_params)}
+                            {"system_prompt": self.get_system_prompt(context_id, user_id, system_prompt_params)}
                         )
                         logger.info(f"Dynamic tools: {filtered_tools}")
                         try_dynamic_tools = True

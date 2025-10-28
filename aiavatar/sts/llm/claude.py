@@ -74,7 +74,7 @@ class ClaudeService(LLMService):
     def dynamic_tool_name(self) -> str:
         return self.dynamic_tool_spec["name"]
 
-    async def compose_messages(self, context_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
+    async def compose_messages(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
         messages = []
 
         # Add initial messages (e.g. few-shot)
@@ -100,7 +100,7 @@ class ClaudeService(LLMService):
 
         return messages
 
-    async def update_context(self, context_id: str, messages: List[Dict], response_text: str):
+    async def update_context(self, context_id: str, user_id: str, messages: List[Dict], response_text: str):
         if self._update_context_filter:
             if "text" in messages[0]["content"][-1]:
                 messages[0]["content"][-1]["text"] = self._update_context_filter(messages[0]["content"][-1]["text"])
@@ -185,7 +185,7 @@ class ClaudeService(LLMService):
 
         async with self.anthropic_client.messages.stream(
             messages=messages,
-            system=self.get_system_prompt(system_prompt_params) + tool_instruction,
+            system=self.get_system_prompt(context_id, user_id, system_prompt_params) + tool_instruction,
             model=self.model,
             temperature=self.temperature,
             tools=filtered_tools,

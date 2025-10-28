@@ -219,7 +219,7 @@ The list of tools is as follows:
     def replace_last_option_split_char(self, original):
         return re.sub(self.option_split_chars_regex, r"\1|", original)
 
-    def get_system_prompt(self, system_prompt_params: Dict[str, any]):
+    def get_system_prompt(self, context_id: str, user_id: str, system_prompt_params: Dict[str, any]):
         if not system_prompt_params:
             return self.system_prompt
         else:
@@ -231,11 +231,11 @@ The list of tools is as follows:
         pass
 
     @abstractmethod
-    async def compose_messages(self, context_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
+    async def compose_messages(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
         pass
 
     @abstractmethod
-    async def update_context(self, context_id: str, messages: List[Dict], response_text: str):
+    async def update_context(self, context_id: str, user_id: str, messages: List[Dict], response_text: str):
         pass
 
     async def get_dynamic_tools_default(self, messages: List[dict], metadata: Dict[str, any] = None) -> List[Dict[str, any]]:
@@ -281,7 +281,7 @@ The list of tools is as follows:
         if not text and not files:
             return
 
-        messages = await self.compose_messages(context_id, text, files, system_prompt_params)
+        messages = await self.compose_messages(context_id, user_id, text, files, system_prompt_params)
         message_length_at_start = len(messages) - 1
 
         stream_buffer = ""
@@ -366,6 +366,7 @@ The list of tools is as follows:
         if len(messages) > message_length_at_start:
             await self.update_context(
                 context_id,
+                user_id,
                 messages[message_length_at_start - len(messages):],
                 response_text.strip(),
             )
