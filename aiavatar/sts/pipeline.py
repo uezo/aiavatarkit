@@ -84,7 +84,8 @@ class STSPipeline:
                 user_id=self.vad.get_session_data(session_id, "user_id"),
                 context_id=self.vad.get_session_data(session_id, "context_id"),
                 audio_data=data,
-                audio_duration=recorded_duration
+                audio_duration=recorded_duration,
+                system_prompt_params=self.vad.get_session_data(session_id, "system_prompt_params")
             )):
                 if response.type == "start":
                     self.vad.set_session_data(session_id, "context_id", response.context_id)

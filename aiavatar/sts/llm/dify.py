@@ -52,7 +52,7 @@ class DifyService(LLMService):
     def dynamic_tool_name(self) -> str:
         pass
 
-    async def compose_messages(self, context_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
+    async def compose_messages(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
         if self.make_inputs:
             inputs = self.make_inputs(context_id, text, files, system_prompt_params)
         else:
@@ -74,7 +74,7 @@ class DifyService(LLMService):
         
         return [message]
 
-    async def update_context(self, context_id: str, messages: List[Dict], response_text: str):
+    async def update_context(self, context_id: str, user_id: str, messages: List[Dict], response_text: str):
         # Context is managed at Dify server
         pass
 

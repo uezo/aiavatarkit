@@ -90,10 +90,10 @@ class ChatGPTService(LLMService):
     def dynamic_tool_name(self) -> str:
         return self.dynamic_tool_spec["function"]["name"]
 
-    async def compose_messages(self, context_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
+    async def compose_messages(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
         messages = []
         if self.system_prompt:
-            messages.append({"role": "system", "content": self.get_system_prompt(system_prompt_params)})
+            messages.append({"role": "system", "content": self.get_system_prompt(context_id, user_id, system_prompt_params)})
 
         # Add initial messages (e.g. few-shot)
         if self.initial_messages:
@@ -120,7 +120,7 @@ class ChatGPTService(LLMService):
 
         return messages
 
-    async def update_context(self, context_id: str, messages: List[Dict], response_text: str):
+    async def update_context(self, context_id: str, user_id: str, messages: List[Dict], response_text: str):
         if self._update_context_filter:
             if isinstance(messages[0]["content"], list):
                 if "text" in messages[0]["content"][-1]:
