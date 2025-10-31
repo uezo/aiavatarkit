@@ -127,13 +127,19 @@ class LLMService(ABC):
         self.split_chars = split_chars or ["。", "？", "！", ". ", "?", "!", "\n"]
         self.option_split_chars = option_split_chars or ["、", ", "]
         self.option_split_threshold = option_split_threshold
-        self.split_patterns = []
-        for char in self.option_split_chars:
-            if char.endswith(" "):
-                self.split_patterns.append(f"{re.escape(char)}")
-            else:
-                self.split_patterns.append(f"{re.escape(char)}\s?")
-        self.option_split_chars_regex = f"({'|'.join(self.split_patterns)})\s*(?!.*({'|'.join(self.split_patterns)}))"
+
+        self.split_chars_pattern = "|".join(
+            re.escape(char) for char in sorted(self.split_chars, key=len, reverse=True)
+        )
+        # option_split_patterns is built with \s? for delimiters that don’t already end in a space so we can consume an optional trailing space when we perform the fallback split.
+        self.option_split_patterns = [
+            re.escape(char) if char.endswith(" ") else f"{re.escape(char)}\\s?"
+            for char in sorted(self.option_split_chars, key=len, reverse=True)
+        ]
+        self.option_split_chars_regex = (
+            f"({'|'.join(self.option_split_patterns)})\\s*(?!.*({'|'.join(self.option_split_patterns)}))"
+        )
+
         self._request_filter = None
         self._update_context_filter = None
         self.voice_text_tag = voice_text_tag
@@ -340,8 +346,7 @@ The list of tools is as follows:
             stream_buffer += chunk.text
 
             # Replace consecutive punctuation with the same punctuation followed by delimiter
-            split_chars_escaped = [re.escape(char) for char in self.split_chars]
-            stream_buffer = re.sub("([" + "".join(split_chars_escaped) + "]+)", r"\1|", stream_buffer)
+            stream_buffer = re.sub(f"(({self.split_chars_pattern})+)", r"\1|", stream_buffer)
 
             if len(stream_buffer) > self.option_split_threshold:
                 stream_buffer = self.replace_last_option_split_char(stream_buffer)
