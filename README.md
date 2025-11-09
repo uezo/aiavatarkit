@@ -106,6 +106,7 @@ This change ensures compatibility with the new internal structure and removes th
 
 - [🧩 API](#-api)
     - [💫 RESTful API (SSE)](#-restful-api-sse)
+    - [🔵 Dify-compatible API](#-dify-compatible-api)
     - [🔌 WebSocket](#-websocket)
 
 - [🦜 AI Agent](#️-ai-agent)
@@ -794,6 +795,15 @@ To continue the conversation, include the `context_id` provided in the `start` r
 **NOTE:** When using the RESTful API, voice activity detection (VAD) must be performed client-side.
 
 **NOTE:** To protect API with API Key, set `api_key=API_KEY_YOU_MAKE` to AIAvatarHttpServer and send `Authorization: Bearer {API_KEY_YOU_MAKE}` as HTTP header from client.
+
+
+### 🔵 Dify-compatible API
+
+`AIAvatarHttpServer` provides a Dify-compatible `/chat-messages` endpoint (SSE streaming only).
+This allows you to connect frontend applications that use Dify as their backend.
+
+For more details, refer to the [Dify API Guide](https://docs.dify.ai/en/guides/application-publishing/developing-with-apis)
+or the API documentation of your self-hosted Dify application.
 
 
 ### 🔌 WebSocket
