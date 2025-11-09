@@ -7,7 +7,7 @@ import pytest
 from aiavatar.sts.llm.litellm import LiteLLMService, ToolCall, Tool
 
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
-MODEL = "anthropic/claude-3-5-sonnet-latest"
+MODEL = "anthropic/claude-haiku-4-5"
 IMAGE_URL = os.getenv("IMAGE_URL")
 
 SYSTEM_PROMPT = """
