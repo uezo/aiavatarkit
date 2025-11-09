@@ -16,7 +16,7 @@ class ClaudeService(LLMService):
         anthropic_api_key: str = None,
         system_prompt: str = None,
         base_url: str = None,
-        model: str = "claude-3-7-sonnet-latest",
+        model: str = "claude-haiku-4-5",
         temperature: float = 0.5,
         max_tokens: int = 1024,
         initial_messages: List[dict] = None,

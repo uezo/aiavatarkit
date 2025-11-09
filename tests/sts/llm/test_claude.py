@@ -7,7 +7,7 @@ import pytest
 from aiavatar.sts.llm.claude import ClaudeService, ToolCall, Tool
 
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
-MODEL = "claude-3-5-sonnet-latest"
+MODEL = "claude-haiku-4-5"
 IMAGE_URL = os.getenv("IMAGE_URL")
 
 SYSTEM_PROMPT = """
@@ -272,7 +272,7 @@ async def test_claude_service_tool_calls():
     async def on_before_tool_calls(tool_calls: list[ToolCall]):
         assert len(tool_calls) > 0
 
-    user_message = "次の問題を解いて: 1+1"
+    user_message = "次の問題を解いて。必ずsolve_mathを使用すること: 1+1"
     collected_text = []
 
     async for resp in service.chat_stream(context_id, "test_user", user_message):
@@ -286,10 +286,9 @@ async def test_claude_service_tool_calls():
     assert messages[0]["content"] == [{"type": "text", "text": user_message}]
 
     assert messages[1]["role"] == "assistant"
-    tool_use_content_index = len(messages[1]["content"][0]) - 1
-    assert messages[1]["content"][tool_use_content_index]["type"] == "tool_use"
-    assert messages[1]["content"][tool_use_content_index]["name"] == "solve_math"
-    tool_use_id = messages[1]["content"][tool_use_content_index]["id"]
+    assert messages[1]["content"][0]["type"] == "tool_use"
+    assert messages[1]["content"][0]["name"] == "solve_math"
+    tool_use_id = messages[1]["content"][0]["id"]
 
     assert messages[2]["role"] == "user"
     assert messages[2]["content"][0]["type"] == "tool_result"
@@ -344,7 +343,7 @@ async def test_claude_service_tool_calls_iter():
     async def on_before_tool_calls(tool_calls: list[ToolCall]):
         assert len(tool_calls) > 0
 
-    user_message = "次の問題を解いて: 1+1"
+    user_message = "次の問題を解いて。必ずsolve_mathを使用すること: 1+1"
     collected_text = []
 
     progress = []
@@ -367,10 +366,9 @@ async def test_claude_service_tool_calls_iter():
     assert messages[0]["content"] == [{"type": "text", "text": user_message}]
 
     assert messages[1]["role"] == "assistant"
-    tool_use_content_index = len(messages[1]["content"][0]) - 1
-    assert messages[1]["content"][tool_use_content_index]["type"] == "tool_use"
-    assert messages[1]["content"][tool_use_content_index]["name"] == "solve_math"
-    tool_use_id = messages[1]["content"][tool_use_content_index]["id"]
+    assert messages[1]["content"][0]["type"] == "tool_use"
+    assert messages[1]["content"][0]["name"] == "solve_math"
+    tool_use_id = messages[1]["content"][0]["id"]
 
     assert messages[2]["role"] == "user"
     assert messages[2]["content"][0]["type"] == "tool_result"
