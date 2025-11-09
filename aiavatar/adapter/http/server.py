@@ -1,12 +1,14 @@
 import base64
 import logging
 import re
+import time
 from typing import List, Dict, Optional, Any
+from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, status, Request, File, UploadFile, Form
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sse_starlette.sse import EventSourceResponse   # pip install sse-starlette
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from ...sts import STSPipeline
 from ...sts.models import STSRequest, STSResponse
 from ...sts.vad import SpeechDetectorDummy
@@ -64,7 +66,7 @@ class MatchTopKResultModel(BaseModel):
 
 
 class TranscribeResponse(BaseModel):
-    text: str
+    text: Optional[str] = None
     preprocess_metadata: Optional[dict] = None
     postprocess_metadata: Optional[dict] = None
     speakers: Optional[MatchTopKResultModel] = None
@@ -73,6 +75,27 @@ class TranscribeResponse(BaseModel):
 class PostSpeakerNameRequest(BaseModel):
     speaker_id: str
     name: str
+
+
+class PostChatMessagesRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    query: Optional[str] = None
+    inputs: Optional[Dict[str, str]] = None
+    user: str
+    conversation_id: Optional[str] = None
+    files: Optional[List[Dict[str, str]]] = None
+
+
+class PostChatMessagesResponse(BaseModel):
+    event: str
+    message_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    answer: Optional[str] = None
+    created_at: Optional[int] = None
+
+    class Config:
+        exclude_none = True
 
 
 class AIAvatarHttpServer(Adapter):
@@ -277,6 +300,55 @@ class AIAvatarHttpServer(Adapter):
                         await self.stop_response(response)
 
                     yield aiavatar_response.model_dump_json()
+
+            return EventSourceResponse(stream_response())
+
+        @router.post("/chat-messages", response_model=PostChatMessagesResponse, summary="Dify-compatible endpoint")
+        async def post_chat(
+            request: PostChatMessagesRequest,
+            credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
+        ):
+            if self.api_key:
+                self.api_key_auth(credentials)
+
+            message_id = f"message_{uuid4()}"
+            async def stream_response():
+                created_at_int = None
+                async for response in self.sts.invoke(STSRequest(
+                    type="start",
+                    session_id=request.conversation_id or f"sess_temp_{message_id}",
+                    user_id=request.user,
+                    context_id=request.conversation_id,
+                    text=request.query,
+                    files=request.files,
+                    system_prompt_params=request.inputs
+                )):
+                    if not created_at_int:
+                        created_at_int = int(time.time())
+
+                    if self._on_response_chunk:
+                        await self._on_response_chunk(response) # Handle STSResponse instead
+
+                    if response.type == "chunk":
+                        chat_messages_response = PostChatMessagesResponse(
+                            event="message",
+                            message_id=message_id,
+                            conversation_id=response.context_id,
+                            answer=response.text,
+                            created_at=created_at_int
+                        )
+                        yield chat_messages_response.model_dump_json()
+
+                    elif response.type == "final":
+                        chat_messages_response = PostChatMessagesResponse(
+                            event="message_end",
+                            message_id=message_id,
+                            conversation_id=response.context_id,
+                        )
+                        yield chat_messages_response.model_dump_json()
+
+                    elif response.type == "stop":
+                        await self.stop_response(response)
 
             return EventSourceResponse(stream_response())
 
