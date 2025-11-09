@@ -172,14 +172,14 @@ aiavatar_app = AIAvatar(
 
 ### Claude
 
-Create instance of `ClaudeService` with custom parameters and set it to `AIAvatar`. The default model is `claude-3-5-sonnet-latest`.
+Create instance of `ClaudeService` with custom parameters and set it to `AIAvatar`. The default model is `claude-sonnet-4-5`.
 
 ```python
 # Create ClaudeService
 from aiavatar.sts.llm.claude import ClaudeService
 llm = ClaudeService(
     anthropic_api_key=ANTHROPIC_API_KEY,
-    model="claude-3-7-sonnet-20250219",
+    model="claude-sonnet-4-5",
     temperature=0.0,
     system_prompt="You are my cat."
 )
@@ -1085,7 +1085,7 @@ from aiavatar.sts.llm.chatgpt import ChatGPTService
 from aiavatar.sts.llm.claude import ClaudeService
 
 chatgpt_service = ChatGPTService(openai_api_key=OPENAI_API_KEY, model="gpt-4o")
-claude_service = ClaudeService(anthropic_api_key=ANTHROPIC_API_KEY, model="claude-3-5-sonnet-latest")
+claude_service = ClaudeService(anthropic_api_key=ANTHROPIC_API_KEY, model="claude-sonnet-4-5")
 
 # Setup Configuration API
 config_api = ConfigAPI(
