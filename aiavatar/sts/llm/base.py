@@ -367,6 +367,11 @@ The list of tools is as follows:
             yield LLMResponse(context_id, stream_buffer, voice_text)
             response_text += stream_buffer
 
+        if self.voice_text_tag and self.voice_text_tag not in response_text:
+            # Fallback for the case when no voice text tags
+            if voice_text := self.remove_control_tags(response_text):
+                yield LLMResponse(context_id, "", voice_text)
+
         logger.info(f"AI: {response_text}")
         if len(messages) > message_length_at_start:
             await self.update_context(
