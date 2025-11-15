@@ -25,6 +25,7 @@ class SpeechRecognizer(ABC):
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
+        max_retries: int = 2,
         debug: bool = False
     ):
         self.language = language
@@ -37,6 +38,7 @@ class SpeechRecognizer(ABC):
                 max_keepalive_connections=max_keepalive_connections
             )
         )
+        self.max_retries = max_retries
 
         self.debug = debug
 
@@ -134,6 +136,39 @@ class SpeechRecognizer(ABC):
             wf.writeframes(audio_bytes)
         buffer.seek(0)
         return buffer
+
+    async def http_request_with_retry(
+        self,
+        method: str,
+        url: str,
+        **kwargs,
+    ) -> httpx.Response | None:
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                resp = await self.http_client.request(method, url, **kwargs)
+                resp.raise_for_status()
+                return resp
+
+            except httpx.HTTPStatusError as hserr:
+                if hserr.response.status_code < 500:
+                    logger.error(
+                        f"Failed in recognition: Non-retriable HTTP error {hserr.response.status_code}, body={hserr.response.text}"
+                    )
+                    return None
+                logger.warning(
+                    f"HTTP {hserr.response.status_code} (attempt {attempt}/{self.max_retries}), retrying..."
+                )
+
+            except httpx.RequestError as hrerr:
+                logger.warning(
+                    f"Request error '{hrerr}' (attempt {attempt}/{self.max_retries}), retrying..."
+                )
+                continue
+
+        logger.error(
+            f"Failed in recognition: Retry attempts exceeded ({self.max_retries} attempts)."
+        )
+        return None
 
 
 class SpeechRecognizerDummy(SpeechRecognizer):

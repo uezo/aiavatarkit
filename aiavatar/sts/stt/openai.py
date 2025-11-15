@@ -57,20 +57,18 @@ class OpenAISpeechRecognizer(SpeechRecognizer):
             "file": ("voice.wav", self.to_wave_file(data), "audio/wav"),
         }
 
-        resp = await self.http_client.post(
-            "https://api.openai.com/v1/audio/transcriptions",
+        resp = await self.http_request_with_retry(
+            method="POST",
+            url="https://api.openai.com/v1/audio/transcriptions",
             headers=headers,
             data=form_data,
             files=files
         )
 
         try:
-            resp_json = resp.json()
+            recognized_text = resp.json()["text"]
+            if self.debug:
+                logger.info(f"Recognized: {recognized_text}")
+            return recognized_text
         except:
-            resp_json = {}
             return None
-
-        if resp.status_code != 200:
-            logger.error(f"Failed in recognition: {resp.status_code}\n{resp_json}")
-
-        return resp_json.get("text")

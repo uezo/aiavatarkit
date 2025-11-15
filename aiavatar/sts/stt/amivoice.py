@@ -48,20 +48,17 @@ class AmiVoiceSpeechRecognizer(SpeechRecognizer):
             "a": ("audio.wav", self.to_wave_file(samples, sample_rate), "audio/wav"),
         }
 
-        resp = await self.http_client.post(
+        resp = await self.http_request_with_retry(
+            method="POST",
             url=self.url,
             data=form_data,
             files=files
         )
 
         try:
-            resp_json = resp.json()
+            recognized_text = resp.json()["text"]
+            if self.debug:
+                logger.info(f"Recognized: {recognized_text}")
+            return recognized_text
         except:
-            resp_json = {}
             return None
-
-        if resp.status_code != 200:
-            logger.error(f"Failed in recognition: {resp.status_code}\n{resp_json}")
-            return None
-
-        return resp_json.get("text")

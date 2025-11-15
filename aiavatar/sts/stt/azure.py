@@ -20,7 +20,8 @@ class AzureSpeechRecognizer(SpeechRecognizer):
         *,
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
-        timeout: float = 10.0,
+        timeout: float = 5.0,
+        max_retries: int = 2,
         debug: bool = False
     ):
         super().__init__(
@@ -29,6 +30,7 @@ class AzureSpeechRecognizer(SpeechRecognizer):
             max_connections=max_connections,
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
+            max_retries=max_retries,
             debug=debug
         )
         self.azure_api_key = azure_api_key
@@ -49,24 +51,20 @@ class AzureSpeechRecognizer(SpeechRecognizer):
             "Ocp-Apim-Subscription-Key": self.azure_api_key
         }
 
-        resp = await self.http_client.post(
-            f"https://{self.azure_region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language={self.language}",
+        resp = await self.http_request_with_retry(
+            method="POST",
+            url=f"https://{self.azure_region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language={self.language}",
             headers=headers,
             content=data
         )
 
         try:
-            resp_json = resp.json()
-        except:
-            resp_json = {}
-
-        if resp.status_code != 200:
-            logger.error(f"Failed in recognition: {resp.status_code}\n{resp_json}")
-
-        if recognized_text := resp_json.get("DisplayText"):
+            recognized_text = resp.json()["DisplayText"]
             if self.debug:
                 logger.info(f"Recognized: {recognized_text}")
             return recognized_text
+        except:
+            return None
 
     def to_wave_file(self, raw_audio: bytes):
         buffer = io.BytesIO()
@@ -92,20 +90,17 @@ class AzureSpeechRecognizer(SpeechRecognizer):
             "definition": (None, json.dumps({"locales": locales, "channels": [0,1]}), "application/json"),
         }
 
-        resp = await self.http_client.post(
-            f"https://{self.azure_region}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe?api-version=2024-11-15",
+        resp = await self.http_request_with_retry(
+            method="POST",
+            url=f"https://{self.azure_region}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe?api-version=2024-11-15",
             headers=headers,
             files=files
         )
 
         try:
-            resp.raise_for_status()
-            resp_json = resp.json()
-        except:
-            logger.error(f"Failed in recognition: {resp.status_code}\n{resp.content}")
-            return None
-
-        if recognized_text := resp_json["combinedPhrases"][0]["text"]:
+            recognized_text = resp.json()["combinedPhrases"][0]["text"]
             if self.debug:
                 logger.info(f"Recognized: {recognized_text}")
             return recognized_text
+        except:
+            return None

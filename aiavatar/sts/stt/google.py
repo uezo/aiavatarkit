@@ -44,21 +44,16 @@ class GoogleSpeechRecognizer(SpeechRecognizer):
         if self.alternative_languages:
             request_body["config"]["alternativeLanguageCodes"] = self.alternative_languages
 
-        resp = await self.http_client.post(
-            f"https://speech.googleapis.com/v1/speech:recognize?key={self.google_api_key}",
+        resp = await self.http_request_with_retry(
+            method="POST",
+            url=f"https://speech.googleapis.com/v1/speech:recognize?key={self.google_api_key}",
             json=request_body
         )
 
         try:
-            resp_json = resp.json()
+            recognized_text = resp.json()["results"][0]["alternatives"][0].get("transcript")
+            if self.debug:
+                logger.info(f"Recognized: {recognized_text}")
+            return recognized_text
         except:
-            resp_json = {}
-
-        if resp.status_code != 200:
-            logger.error(f"Failed in recognition: {resp.status_code}\n{resp_json}")
-
-        if resp_json.get("results"):
-            if recognized_text := resp_json["results"][0]["alternatives"][0].get("transcript"):
-                if self.debug:
-                    logger.info(f"Recognized: {recognized_text}")
-                return recognized_text
+            return None
