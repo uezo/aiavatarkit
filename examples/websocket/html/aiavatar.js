@@ -58,9 +58,12 @@ class AIAvatarClient {
             console.error("WebSocket error:", error);
         };
 
-        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-            sampleRate: this.sampleRate
-        });
+        // Create new AudioContext if needed
+        if (!this.audioContext || this.audioContext.state === "closed") {
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: this.sampleRate
+            });
+        }
         await this.audioContext.resume();
         console.log("AudioContext state:", this.audioContext.state);
 
@@ -186,7 +189,7 @@ class AIAvatarClient {
         if (this.faceTimeout) clearTimeout(this.faceTimeout);
         this.faceTimeout = setTimeout(() => {
             if (this.latestFaceUpdate === currentUpdate) {
-                this.faceImage.src = "images/neutral.png";
+                this.faceImage.src = this.faceImagePaths["neutral"];
             }
         }, (faceDuration || 2) * 1000);
     }
@@ -215,11 +218,13 @@ class AIAvatarClient {
     }
 
     async stopListening(sessionId) {
+        this.processingQueue = false;
         if (this.scriptNode) {
             this.scriptNode.disconnect();
         }
         if (this.audioContext) {
             await this.audioContext.close();
+            this.isAudioPlaying = false;
         }
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify({ type: "stop", session_id: sessionId }));

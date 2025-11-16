@@ -3,18 +3,24 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>AIAvatarKit WebClient Example</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIAvatarKit WebSocket Example</title>
     <style>
         body {
             background-color: #121212;
             color: #E0E0E0;
             font-family: Arial, sans-serif;
-            margin: 20px;
+            margin: 0;
+            padding: 20px;
             text-align: center;
+            min-height: 100vh;
+            box-sizing: border-box;
         }
 
         h1 {
             color: #FFFFFF;
+            font-size: clamp(1.5rem, 4vw, 2rem);
+            margin: 0 0 20px 0;
         }
 
         .avatar-frame {
@@ -24,13 +30,18 @@
             padding: 4px;
             transition: background 0.3s ease;
             margin: 20px auto;
+            max-width: 90vw;
+            max-height: 90vw;
         }
 
         .avatar-container {
             background: #000;
             border-radius: 50%;
-            width: 480px;
-            height: 480px;
+            width: 100%;
+            height: 100%;
+            max-width: 480px;
+            max-height: 480px;
+            aspect-ratio: 1;
             overflow: hidden;
         }
 
@@ -40,16 +51,21 @@
             object-fit: cover;
         }
 
+        .button-container {
+            margin: 20px 0;
+        }
+
         button {
             background-color: #1E1E1E;
             border: none;
-            padding: 10px 20px;
+            padding: 12px 24px;
             color: #E0E0E0;
             font-size: 16px;
             cursor: pointer;
             margin: 5px;
             border-radius: 4px;
             transition: background-color 0.3s ease;
+            min-height: 44px;
         }
 
         button:hover {
@@ -59,46 +75,74 @@
 </head>
 
 <body>
-    <h1>AIAvatarKit WebClient Example</h1>
+    <h1>AIAvatarKit WebSocket Example</h1>
 
     <div class="avatar-frame" id="avatarFrame">
         <div class="avatar-container">
-            <img id="faceImage" src="images/neutral.png" alt="Avatar Face">
+            <img id="faceImage" src="img/neutral.png" alt="Avatar Face">
         </div>
     </div>
 
-    <div>
+    <div class="button-container">
         <button id="startBtn">Start</button>
         <button id="stopBtn">Stop</button>
+        <button id="interruptToggleBtn">Interrupt Speech: OFF</button>
+    </div>
+    
+    <div class="input-level">
+        <span style="color: #E0E0E0;">Input: </span>
+        <span id="inputLevel">0.0 dB</span>
     </div>
 
     <script src="aiavatar.js"></script>
     <script>
-        const sessionId = crypto.randomUUID();  // New session
+        const sessionId = crypto.randomUUID(); 
         const userId = "user01";
 
         // Create AIAvatar
         const aiavatar = new AIAvatarClient({
-            webSocketUrl: "/ws",
+            webSocketUrl: "../ws",
             faceImage: document.getElementById("faceImage"),
             faceImagePaths: {
-                neutral: "images/neutral.png",
-                joy: "images/joy.png",
-                angry: "images/angry.png",
-                sorrow: "images/sorrow.png",
-                fun: "images/fun.png",
-                surprised: "images/surprised.png",
-                think: "images/think.png"
-            },
+                neutral: "img/neutral.png",
+                joy: "img/joy.png",
+                angry: "img/angry.png",
+                sorrow: "img/sorrow.png",
+                fun: "img/fun.png",
+                surprised: "img/surprised.png",
+                think: "img/think.png"
+            }
         });
 
-        // Example: Show microphone effect
+        // Example: Show microphone effect and input level
         const avatarFrame = document.getElementById("avatarFrame");
+        const inputLevelElement = document.getElementById("inputLevel");
+        let rmsSum = 0;
+        let rmsCount = 0;
+        let lastUpdateTime = Date.now();
+        
         aiavatar.onMicrophoneDataSend = (rms) => {
             if (rms > 0.01) {
                 avatarFrame.style.background = "linear-gradient(45deg, #FF0000, #FF7F00)";
             } else {
                 avatarFrame.style.background = "linear-gradient(45deg, #FF007F, #7F00FF)";
+            }
+            
+            // Accumulate RMS values for averaging
+            rmsSum += rms;
+            rmsCount++;
+            
+            // Update display every 0.5 seconds with average
+            const currentTime = Date.now();
+            if (currentTime - lastUpdateTime >= 500) {
+                const avgRms = rmsSum / rmsCount;
+                const dbLevel = avgRms > 0 ? 20 * Math.log10(avgRms) : -80;
+                inputLevelElement.textContent = `${dbLevel.toFixed(1)} dB`;
+                
+                // Reset for next interval
+                rmsSum = 0;
+                rmsCount = 0;
+                lastUpdateTime = currentTime;
             }
         }
 
@@ -110,7 +154,7 @@
                     type: "config",
                     session_id: sessionId,
                     user_id: userId,
-                    metadata: {"volume_db_threshold": -20}  // Detect voice over -20 dB
+                    metadata: {"volume_db_threshold": -50}  // Detect voice over -50 dB
                 };
                 aiavatar.ws.send(JSON.stringify(configMessage));
             }
@@ -120,6 +164,22 @@
                 aiavatar.updateFace("think", 10);
             } else if (response.type == "chunk" && response.metadata.is_first_chunk) {
                 aiavatar.updateFace("neutral", 0);
+            } else if (response.type == "tool_call") {
+                console.log(response.metadata);
+            }
+
+            // Disconnect
+            if (response.text !== null && response.text.indexOf("[operation:hangup]") >= 0) {
+                // Wait for audio playback to finish before stopping
+                const waitForAudioEnd = () => {
+                    if (aiavatar.isAudioPlaying) {
+                        setTimeout(waitForAudioEnd, 100); // Check every 100ms
+                    } else {
+                        aiavatar.stopListening(sessionId);
+                        document.getElementById("inputLevel").textContent = "0.0 dB";
+                    }
+                };
+                setTimeout(waitForAudioEnd, 0);
             }
 
             // Example: Show user and AI's message in UI
@@ -130,6 +190,17 @@
                 // document.getElementById("ai-balloon").innerText = response.voice_text;
             }
         }
+
+        // Interrupt toggle functionality
+        let interruptEnabled = false;
+        const interruptToggleBtn = document.getElementById("interruptToggleBtn");
+        
+        interruptToggleBtn.addEventListener("click", () => {
+            interruptEnabled = !interruptEnabled;
+            aiavatar.cancelEcho = !interruptEnabled;
+            interruptToggleBtn.textContent = interruptEnabled ? "Interrupt Speech: ON" : "Interrupt Speech: OFF";
+            interruptToggleBtn.style.backgroundColor = interruptEnabled ? "#2E7D32" : "#1E1E1E";
+        });
 
         // Start and stop buttons
         document.getElementById("startBtn").addEventListener("click", () => aiavatar.startListening(sessionId, userId));
