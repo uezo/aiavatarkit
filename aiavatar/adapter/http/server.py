@@ -331,7 +331,7 @@ class AIAvatarHttpServer(Adapter):
 
                     if response.type == "chunk":
                         chat_messages_response = PostChatMessagesResponse(
-                            event="message",
+                            event="message_replace" if response.metadata.get("is_guardrail_triggered") is True else "message",
                             message_id=message_id,
                             conversation_id=response.context_id,
                             answer=response.text,
