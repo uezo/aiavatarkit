@@ -249,6 +249,10 @@ class AIAvatarWebSocketServer(Adapter):
         )
 
         if response.type == "chunk":
+            # Stop response if guardrail triggered
+            if response.metadata.get("is_guardrail_triggered"):
+                await self.stop_response(response.session_id, response.context_id)
+
             # Language
             aiavatar_response.language = response.language
 
