@@ -4,7 +4,8 @@ import os
 from typing import Any, Dict, AsyncGenerator, Tuple
 from uuid import uuid4
 import pytest
-from aiavatar.sts.llm.claude import ClaudeService, ToolCall, Tool
+from aiavatar.sts.llm import Guardrail, GuardrailRespose
+from aiavatar.sts.llm.claude import ClaudeService, ToolCall
 
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
 MODEL = "claude-haiku-4-5"
@@ -377,3 +378,83 @@ async def test_claude_service_tool_calls_iter():
 
     assert messages[3]["role"] == "assistant"
     assert "2" in messages[3]["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_claude_service_guardrails():
+    """
+    Test ClaudeService with guardrails.
+    """
+    service = ClaudeService(
+        anthropic_api_key=CLAUDE_API_KEY,
+        system_prompt="ユーザーの指示に従い、入力内容を復唱してください。",
+        model=MODEL,
+        temperature=0.5
+    )
+    context_id = f"test_context_guardrails_{uuid4()}"
+
+    # Define guardrails
+    class RequestGuardrail(Guardrail):
+        async def apply(self, context_id, user_id, text, files = None, system_prompt_params = None):
+            if text == "問題のある入力":
+                return GuardrailRespose(
+                    guardrail_name=self.name,
+                    is_triggered=True,
+                    action="block",
+                    text="問題のある入力を遮断しました"
+                )
+            elif text == "hello":
+                return GuardrailRespose(
+                    guardrail_name=self.name,
+                    is_triggered=True,
+                    action="replace",
+                    text="こんにちは"
+                )
+            else:
+                return GuardrailRespose(
+                    guardrail_name=self.name,
+                    is_triggered=False
+                )
+
+    class ResponseGuardrail(Guardrail):
+        async def apply(self, context_id, user_id, text, files = None, system_prompt_params = None):
+            if "ラーメン" in text:
+                return GuardrailRespose(
+                    guardrail_name=self.name,
+                    is_triggered=True,
+                    action="replace",
+                    text="問題のある出力を遮断しました"
+                )
+            else:
+                return GuardrailRespose(
+                    guardrail_name=self.name,
+                    is_triggered=False
+                )
+
+    service.guardrails.append(RequestGuardrail(applies_to="request"))
+    service.guardrails.append(ResponseGuardrail(applies_to="response"))
+
+    # Doesn't trigger guardrails
+    response_text = ""
+    async for resp in service.chat_stream(context_id, "test_user", "こんにちは"):
+        response_text += resp.text
+    assert "こんにちは" in response_text
+
+    # Trigger RequestGuardrail:block
+    response_text = ""
+    async for resp in service.chat_stream(context_id, "test_user", "問題のある入力"):
+        response_text += resp.text
+    assert response_text == "問題のある入力を遮断しました"
+
+    # Trigger RequestGuardrail:replace
+    response_text = ""
+    async for resp in service.chat_stream(context_id, "test_user", "hello"):
+        response_text += resp.text
+    assert "こんにちは" in response_text
+
+    # Trigger ResponseGuardrail:replace
+    response_text = ""
+    async for resp in service.chat_stream(context_id, "test_user", "ラーメン"):
+        response_text += resp.text
+    assert "ラーメン" in response_text
+    assert "問題のある出力を遮断しました" in response_text

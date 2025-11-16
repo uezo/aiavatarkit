@@ -186,6 +186,10 @@ class AIAvatar(AIAvatarClientBase):
         )
 
         if response.type == "chunk":
+            # Stop response if guardrail triggered
+            if response.metadata.get("is_guardrail_triggered"):
+                await self.stop_response(response.session_id, response.context_id)
+            # Parse avatar control
             aiavatar_response.avatar_control_request = self.parse_avatar_control_request(response.text)
 
         elif response.type == "final":

@@ -4,7 +4,7 @@ import copy
 import inspect
 import logging
 import re
-from typing import AsyncGenerator, List, Dict, Any, Callable, Optional, Tuple
+from typing import AsyncGenerator, List, Dict, Any, Callable, Optional, Tuple, Literal
 from .context_manager import ContextManager, SQLiteContextManager
 
 logger = logging.getLogger(__name__)
@@ -33,12 +33,31 @@ class ToolCall:
         }
 
 
+class GuardrailRespose:
+    def __init__(self, guardrail_name: str, is_triggered: bool, action: Literal["replace", "block"] = "replace", text: str = None):
+        self.guardrail_name = guardrail_name
+        self.is_triggered = is_triggered
+        self.action = action    # 'replace', 'warn', or 'block'(request only)
+        self.text = text
+
+
+class Guardrail(ABC):
+    def __init__(self, applies_to: Literal["request", "response", "both"], name: str = None):
+        self.applies_to = applies_to
+        self.name = name or self.__class__.__name__
+
+    @abstractmethod
+    async def apply(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> GuardrailRespose:
+        pass
+
+
 class LLMResponse:
-    def __init__(self, context_id: str, text: str = None, voice_text: str = None, tool_call: ToolCall = None):
+    def __init__(self, context_id: str, text: str = None, voice_text: str = None, tool_call: ToolCall = None, guradrail_name: str = None):
         self.context_id = context_id
         self.text = text
         self.voice_text = voice_text
         self.tool_call = tool_call
+        self.guradrail_name = guradrail_name
 
 
 class Tool:
@@ -117,6 +136,7 @@ class LLMService(ABC):
         use_dynamic_tools: bool = False,
         context_manager: ContextManager = None,
         shared_context_ids: List[str] = None,
+        guardrails: List[Guardrail] = None,
         db_connection_str: str = "aiavatar.db",
         debug: bool = False
     ):
@@ -187,6 +207,7 @@ The list of tools is as follows:
             else:
                 self.context_manager = SQLiteContextManager(db_path=db_connection_str)
         self.shared_context_ids = shared_context_ids
+        self.guardrails = guardrails or []
         self.debug = debug
 
     # Decorators
@@ -278,6 +299,45 @@ The list of tools is as follows:
         else:
             yield ToolCallResult(data=await tool_result)
 
+    async def apply_guardrails(self, applies_to: Literal["request", "response"], context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> GuardrailRespose:
+        guardrails = [gr for gr in self.guardrails if gr.applies_to in (applies_to, "both")]
+        if guardrails:
+            # Start processing guardrails in parallel
+            tasks = [
+                asyncio.create_task(gr.apply(
+                    context_id=context_id,
+                    user_id=user_id,
+                    text=text,
+                    files=files,
+                    system_prompt_params=system_prompt_params
+                )) for gr in guardrails
+            ]
+            try:
+                # Process responses from completed guardrails
+                for task in asyncio.as_completed(tasks):
+                    grresp = await task
+                    if not grresp.is_triggered:
+                        continue
+                    logger.warning(
+                        f"Guardrail for {applies_to} '{grresp.guardrail_name}' triggered: action={grresp.action}, text={grresp.text}"
+                    )
+                    return grresp
+            finally:
+                # Cancel tasks
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                for task in tasks:
+                    if task.done():
+                        continue
+                    # Await tasks if not done and ignore if error
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+        
+        return None
+
     async def chat_stream(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
         logger.info(f"User: {text}")
         if self._request_filter:
@@ -286,6 +346,26 @@ The list of tools is as follows:
 
         if not text and not files:
             return
+
+        # Request guardrails
+        if request_guardrail_response := await self.apply_guardrails(
+            applies_to="request",
+            context_id=context_id,
+            user_id=user_id,
+            text=text,
+            files=files,
+            system_prompt_params=system_prompt_params
+        ):
+            if request_guardrail_response.action == "replace":
+                text = request_guardrail_response.text
+            elif request_guardrail_response.action == "block":
+                yield LLMResponse(
+                    context_id=context_id,
+                    text=request_guardrail_response.text,
+                    voice_text=self.remove_control_tags(request_guardrail_response.text),
+                    guradrail_name=request_guardrail_response.guardrail_name
+                )
+                return
 
         messages = await self.compose_messages(context_id, user_id, text, files, system_prompt_params)
         message_length_at_start = len(messages) - 1
@@ -371,6 +451,20 @@ The list of tools is as follows:
             # Fallback for the case when no voice text tags
             if voice_text := self.remove_control_tags(response_text):
                 yield LLMResponse(context_id, "", voice_text)
+
+        # Response guardrails
+        if response_guardrail_response := await self.apply_guardrails(
+            applies_to="response",
+            context_id=context_id,
+            user_id=user_id,
+            text=response_text
+        ):
+            yield LLMResponse(
+                context_id=context_id,
+                text=response_guardrail_response.text,
+                voice_text=self.remove_control_tags(response_guardrail_response.text),
+                guradrail_name=response_guardrail_response.guardrail_name
+            )
 
         logger.info(f"AI: {response_text}")
         if len(messages) > message_length_at_start:
