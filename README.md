@@ -115,6 +115,8 @@ This change ensures compatibility with the new internal structure and removes th
     - [🪄 Dynamic Tool Call](#-dynamic-tool-call)
     - [🔌 MCP](#-mcp)
 
+- [🛡️ Guardrail](#-guardrail)
+
 - [🌎 Platform Guide](#-platform-guide)
     - [🐈 VRChat](#-vrchat)
     - [🍓 Raspberry Pi](#-raspberry-pi)
@@ -929,6 +931,65 @@ with open("output.wav", "wb") as f:
 ```
 
 
+## 🛡️ Guardrail
+
+You can apply guardrails to both requests and responses.
+Guardrails are custom implementations created by developers, and can block or replace an incoming request, or replace an outgoing response when certain conditions are met.
+
+Below is the implementation method and how to apply guardrails.
+
+```python
+from aiavatar.sts.llm import Guardrail, GuardrailRespose
+
+# Define guardrails
+class RequestGuardrail(Guardrail):
+    async def apply(self, context_id, user_id, text, files = None, system_prompt_params = None):
+        if text.lower() == "problematic input":
+            return GuardrailRespose(
+                guardrail_name=self.name,
+                is_triggered=True,
+                action="block",
+                text="The problematic input has been blocked."  # Immediately returns this message to the user
+            )
+        elif text.lower() == "hello":
+            return GuardrailRespose(
+                guardrail_name=self.name,
+                is_triggered=True,
+                action="replace",
+                text="こんにちは"   # Replaces the original request text with this value
+            )
+        else:
+            return GuardrailRespose(
+                guardrail_name=self.name,
+                is_triggered=False
+            )
+
+class ResponseGuardrail(Guardrail):
+    async def apply(self, context_id, user_id, text, files = None, system_prompt_params = None):
+        if "ramen" in text.lower():
+            return GuardrailRespose(
+                guardrail_name=self.name,
+                is_triggered=True,
+                action="replace",
+                text="The problematic output has been blocked." # Emits an additional replacement chunk for the response
+            )
+        else:
+            return GuardrailRespose(
+                guardrail_name=self.name,
+                is_triggered=False
+            )
+
+# Apply guardrails
+service.guardrails.append(RequestGuardrail(applies_to="request"))
+service.guardrails.append(ResponseGuardrail(applies_to="response"))
+```
+
+**NOTE:** When multiple guardrails are defined, they run in parallel.
+Processing stops when all guardrails have finished evaluating or when the first guardrail returns a response with `is_triggered=True`.
+
+**NOTE:** Response guardrails are evaluated only after the LLM response stream finishes.
+This means the problematic output may be briefly visible to the user.
+When a response is received with `metadata.is_guardrail_triggered = true`, the client should handle this by replacing or modifying the output accordingly.
 
 
 ## 🌎 Platform Guide
