@@ -17,6 +17,7 @@ class AzureSpeechRecognizer(SpeechRecognizer):
         language: str = "ja-JP",
         alternative_languages: List[str] = None,
         use_classic: bool = False,
+        cid: str = None,
         *,
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
@@ -36,7 +37,11 @@ class AzureSpeechRecognizer(SpeechRecognizer):
         self.azure_api_key = azure_api_key
         self.azure_region = azure_region
         self.sample_rate = sample_rate
+        self.cid = cid
         self.use_classic = use_classic
+        if self.cid and not self.use_classic:
+            self.use_classic = True
+            logger.warning(f"Switch to classic mode to use custom model: cid={self.cid}")
         if self.use_classic and self.alternative_languages:
             logger.warning("Auto language detection is not available in Azure STT v1. Set `use_classic=False` to enable this feature.")
 
@@ -51,10 +56,15 @@ class AzureSpeechRecognizer(SpeechRecognizer):
             "Ocp-Apim-Subscription-Key": self.azure_api_key
         }
 
+        params = {"language": self.language}
+        if self.cid:
+            params["cid"] = self.cid
+
         resp = await self.http_request_with_retry(
             method="POST",
-            url=f"https://{self.azure_region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language={self.language}",
+            url=f"https://{self.azure_region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1",
             headers=headers,
+            params=params,
             content=data
         )
 
