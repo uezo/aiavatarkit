@@ -95,6 +95,7 @@ This change ensures compatibility with the new internal structure and removes th
     - [Claude](#claude)
     - [Gemini](#gemini)
     - [Dify](#dify)
+    - [OpenAI-compatible APIs](#openai-compatible-apis)
     - [Other LLMs](#other-llms)
 - [🗣️ Voice](#️voice)
 - [👂 Speech Listener](#-speech-listener)
@@ -240,6 +241,40 @@ llm = DifyService(
 aiavatar_app = AIAvatar(
     llm=llm,
     openai_api_key=OPENAI_API_KEY   # API Key for STT
+)
+```
+
+
+### OpenAI-compatible APIs
+
+`ChatGPTService` supports OpenAI-compatible APIs, such as Grok, Gemini, and Claude.
+
+By specifying the `model`, `openai_api_key`, and `base_url`, these models can now be used with a non-reasoning configuration out of the box.
+
+```python
+# Grok
+MODEL = "grok-4-1-fast-non-reasoning"
+OPENAI_API_KEY = "YOUR_XAI_API_KEY"
+BASE_URL = "https://api.x.ai/v1"
+
+# Gemini on Google AI Studio
+MODEL = "gemini-2.5-flash"
+OPENAI_API_KEY = "YOUR_GEMINI_API_KEY"
+BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+# Claude on Anthropic
+LLM_MODEL = "claude-haiku-4-5"
+OPENAI_API_KEY = "YOUR_ANTHROPIC_API_KEY"
+BASE_URL = "https://api.anthropic.com/v1/"
+
+# Configure ChatGPTService
+from aiavatar.sts.llm.chatgpt import ChatGPTService
+llm = ChatGPTService(
+    openai_api_key=OPENAI_API_KEY,
+    base_url=BASE_URL,
+    model=MODEL,
+    system_prompt=SYSTEM_PROMPT,
+    # extra_body={"thinking": { "type": "disabled"}},   # Claude
 )
 ```
 
