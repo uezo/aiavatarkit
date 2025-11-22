@@ -21,9 +21,11 @@ class ChatGPTService(LLMService):
         openai_api_key: str = None,
         system_prompt: str = None,
         base_url: str = None,
-        model: str = "gpt-4.1",
+        model: str = "gpt-5-mini",
         temperature: float = 0.5,
-        reasoning_effort: str = "minimal",
+        reasoning_effort: str = None,
+        enable_tool_filtering: bool = True,
+        extra_body: dict = None,
         initial_messages: List[dict] = None,
         split_chars: List[str] = None,
         option_split_chars: List[str] = None,
@@ -52,6 +54,8 @@ class ChatGPTService(LLMService):
             debug=debug
         )
         self.reasoning_effort = reasoning_effort
+        self.enable_tool_filtering = enable_tool_filtering
+        self.extra_body = extra_body
 
         client_module = custom_openai_module or openai_module
         if "azure" in model:
@@ -177,10 +181,17 @@ class ChatGPTService(LLMService):
         else:
             chat_completion_params["messages"] = messages[:-1] + [{"role": "user", "content": user_content_for_tool}]
 
-        if self.model.startswith("gpt-5"):
+        if self.reasoning_effort:
             chat_completion_params["reasoning_effort"] = self.reasoning_effort
+        elif self.model.startswith("gpt-5.1"):
+            chat_completion_params["reasoning_effort"] = "none"
+        elif self.model.startswith("gpt-5"):
+            chat_completion_params["reasoning_effort"] = "minimal"
         else:
             chat_completion_params["temperature"] = self.temperature
+
+        if self.extra_body:
+            chat_completion_params["extra_body"] = self.extra_body
 
         if self.debug:
             logger.info(f"Request to ChatGPT to get dynamic tools: {chat_completion_params}")
@@ -224,18 +235,31 @@ class ChatGPTService(LLMService):
             "model": self.model,
             "stream": True
         }
+
         # Temperature and Reasoning Effort
-        if self.model.startswith("gpt-5"):
+        if self.reasoning_effort:
             chat_completion_params["reasoning_effort"] = self.reasoning_effort
+        elif self.model.startswith("gpt-5.1"):
+            chat_completion_params["reasoning_effort"] = "none"
+        elif self.model.startswith("gpt-5"):
+            chat_completion_params["reasoning_effort"] = "minimal"
         else:
             chat_completion_params["temperature"] = self.temperature
+
+        if self.extra_body:
+            chat_completion_params["extra_body"] = self.extra_body
+
         # Tools
         if all_tools:
             chat_completion_params["tools"] = all_tools
-            if allowed_tools:
-                chat_completion_params["tool_choice"] = {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": allowed_tools}}
-            else:
-                chat_completion_params["tool_choice"] = "none"
+            if any(m in self.model for m in ("grok", "gemini", "claude")):
+                # Skip setting `tool_choice` for non-GPT models
+                pass
+            elif self.enable_tool_filtering:
+                if allowed_tools:
+                    chat_completion_params["tool_choice"] = {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": allowed_tools}}
+                else:
+                    chat_completion_params["tool_choice"] = "none"
 
         if self.debug:
             logger.info(f"Request to ChatGPT: {chat_completion_params}")
