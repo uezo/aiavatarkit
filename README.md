@@ -101,7 +101,7 @@ This change ensures compatibility with the new internal structure and removes th
 - [👂 Speech Listener](#-speech-listener)
     - [Preprocessing and Postprocessing](#preprocessing-and-postprocessing)
     - [Speaker Diarization](#speaker-diarization)
-- [🎙️ Speech Detector](#-speech-detector)
+- [🎙️ Speech Detector](#%EF%B8%8F-speech-detector)
 - [🥰 Face Expression](#-face-expression)
 - [💃 Animation](#-animation)
 
@@ -110,13 +110,13 @@ This change ensures compatibility with the new internal structure and removes th
     - [🔵 Dify-compatible API](#-dify-compatible-api)
     - [🔌 WebSocket](#-websocket)
 
-- [🦜 AI Agent](#️-ai-agent)
+- [🦜 AI Agent](#-ai-agent)
     - [⚡️ Tool Call](#️-tool-call)
-    - [⌛️ Stream Response](#-stream-response)
+    - [⌛️ Tool Call with Streaming Progress](#%EF%B8%8F-tool-call-with-streaming-progress)
     - [🪄 Dynamic Tool Call](#-dynamic-tool-call)
     - [🔌 MCP](#-mcp)
 
-- [🛡️ Guardrail](#-guardrail)
+- [🛡️ Guardrail](#%EF%B8%8F-guardrail)
 
 - [🌎 Platform Guide](#-platform-guide)
     - [🐈 VRChat](#-vrchat)
@@ -126,19 +126,20 @@ This change ensures compatibility with the new internal structure and removes th
     - [🎛️ Configuration API](#️-configuration-api)
     - [🎮 Control API](#-control-api)
     - [🔐 Authorization](#-authorization)
-    - [📈 Observability](#️-observability)
+    - [📈 Observability](#-observability)
 
 - [🧪 Evaluation](#-evaluation)
 
 - [🤿 Deep Dive](#-deep-dive)
     - [👀 Vision](#-vision)
     - [💾 Long-term Memory](#-long-term-memory)
-    - [🐓 Wakeword](#-wakeword-listener)
+    - [🐓 Wakeword](#-wakeword)
+    - [📋 System Prompt Parameters](#-system-prompt-parameters)
     - [🧵 Request merging](#-request-merging)
     - [🧺 Shared Context](#-shared-context)
     - [🔈 Audio Device](#-audio-device)
     - [🎭 Custom Behavior](#-custom-behavior)
-    - [🎚️ Noise Filter](#-noise-filter)
+    - [🎚️ Noise Filter](#%EF%B8%8F-noise-filter)
 
 
 ## 🎓 Generative AI
@@ -1423,6 +1424,16 @@ curl -X POST "http://localhost:8000/admin/llm/config" \
 You can monitor the entire sequence - what requests are sent to the LLM, how they are interpreted, which tools are invoked, and what responses are generated from specific results or data - to support AIAvatar quality improvements and governance.
 
 Since AIAvatarKit lets you replace the OpenAI client module with an alternative, you can leverage that capability to integrate with [Langfuse](https://langfuse.com).
+
+```sh
+pip install langfuse
+```
+
+```sh
+export LANGFUSE_SECRET_KEY=sk-lf-4ac91419-bdc0-437a-bd87-9eda6645fcea
+export LANGFUSE_PUBLIC_KEY=pk-lf-2a669b6f-08e1-48b1-8998-8d6f2059eff4
+export LANGFUSE_HOST=http://localhost:3000
+```
 
 ```python
 from langfuse.openai import openai as langfuse_openai

@@ -565,7 +565,7 @@ async def test_chatgpt_service_compat_tool_calls():
     async def on_before_tool_calls(tool_calls: list[ToolCall]):
         assert len(tool_calls) > 0
 
-    user_message = "次の問題を解いて: 1+1"
+    user_message = "次の問題を解いて: 1+1\n必ずsolve_mathを使用すること。"
     collected_text = []
 
     async for resp in service.chat_stream(context_id, "test_user", user_message):

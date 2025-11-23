@@ -377,7 +377,10 @@ async def test_gemini_service_tool_calls():
 
     assert messages[2]["role"] == "user"
     assert "function_response" in messages[2]["parts"][0]
-    assert messages[2]["parts"][0]["function_response"] == {"id": None, "name": "solve_math", "response": {"answer": 2}}    # SDK doesn't set id
+    # {'will_continue': None, 'scheduling': None, 'parts': None, 'id': None, 'name': 'solve_math', 'response': {'answer': 2}}
+    function_response = messages[2]["parts"][0]["function_response"]
+    assert function_response["name"] == "solve_math"
+    assert function_response["response"] == {"answer": 2}
 
     assert messages[3]["role"] == "model"
     assert "2" in messages[3]["parts"][0]["text"]
