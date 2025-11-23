@@ -1430,8 +1430,8 @@ pip install langfuse
 ```
 
 ```sh
-export LANGFUSE_SECRET_KEY=sk-lf-4ac91419-bdc0-437a-bd87-9eda6645fcea
-export LANGFUSE_PUBLIC_KEY=pk-lf-2a669b6f-08e1-48b1-8998-8d6f2059eff4
+export LANGFUSE_SECRET_KEY=sk-lf-XXXXXXXX
+export LANGFUSE_PUBLIC_KEY=pk-lf-XXXXXXXX
 export LANGFUSE_HOST=http://localhost:3000
 ```
 
