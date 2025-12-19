@@ -222,7 +222,7 @@ async def test_gemini_service_with_initial_messages():
     assert len(full_text) > 0, "No text was returned from the LLM."
 
     # Check if the response contains sushi or ramen
-    assert "寿司" in full_text or "ラーメン" in full_text, "Food name from initial messages not found in response."
+    assert ("寿司" in full_text or "ラーメン" in full_text), "Food name from initial messages not found in response."
 
     # Check the context - should have initial messages + new exchange
     messages = await service.context_manager.get_histories(context_id)
