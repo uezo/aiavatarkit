@@ -79,7 +79,7 @@ class SQLiteSessionStateManager(SessionStateManager):
                 # Add missing columns for existing deployments
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(session_states)")}
                 if "timestamp_inserted_at" not in columns:
-                    conn.execute("ALTER TABLE session_states ADD COLUMN timestamp_inserted_at TIMESTAMP NOT NULL")
+                    conn.execute("ALTER TABLE session_states ADD COLUMN timestamp_inserted_at TIMESTAMP NOT NULL DEFAULT '0001-01-01 00:00:00+00:00:00'")
 
                 conn.execute(
                     """
@@ -152,7 +152,7 @@ class SQLiteSessionStateManager(SessionStateManager):
                                                previous_request_text, previous_request_files, timestamp_inserted_at, updated_at, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (session_id, None, None, None, None, None, now_utc, now_utc)
+                    (session_id, None, None, None, None, new_state.timestamp_inserted_at, now_utc, now_utc)
                 )
             
             # Update cache
@@ -226,16 +226,16 @@ class SQLiteSessionStateManager(SessionStateManager):
                     """
                     INSERT INTO session_states (
                         session_id, active_transaction_id, previous_request_timestamp, previous_request_text, 
-                        previous_request_files, updated_at, created_at
+                        previous_request_files, timestamp_inserted_at, updated_at, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(session_id) DO UPDATE SET
                         previous_request_timestamp = excluded.previous_request_timestamp,
                         previous_request_text = excluded.previous_request_text,
                         previous_request_files = excluded.previous_request_files,
                         updated_at = excluded.updated_at
                     """,
-                    (session_id, None, timestamp, text, files_json, now_utc, now_utc)
+                    (session_id, None, timestamp, text, files_json, datetime.min.replace(tzinfo=timezone.utc), now_utc, now_utc)
                 )
             
             # Update cache

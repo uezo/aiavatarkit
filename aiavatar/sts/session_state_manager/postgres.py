@@ -63,7 +63,7 @@ class PostgreSQLSessionStateManager(SessionStateManager):
                 cur.execute(
                     """
                     ALTER TABLE session_states
-                    ADD COLUMN IF NOT EXISTS timestamp_inserted_at TIMESTAMP NOT NULL
+                    ADD COLUMN IF NOT EXISTS timestamp_inserted_at TIMESTAMP NOT NULL DEFAULT '0001-01-01 00:00:00'
                     """
                 )
                 # Create index for cleanup operations
@@ -139,7 +139,7 @@ class PostgreSQLSessionStateManager(SessionStateManager):
                                                previous_request_text, previous_request_files, timestamp_inserted_at, updated_at, created_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (session_id, None, None, None, None, None, now_utc, now_utc)
+                    (session_id, None, None, None, None, new_state.timestamp_inserted_at, now_utc, now_utc)
                 )
             conn.commit()
             
@@ -217,16 +217,16 @@ class PostgreSQLSessionStateManager(SessionStateManager):
                     """
                     INSERT INTO session_states (
                         session_id, active_transaction_id, previous_request_timestamp, previous_request_text, 
-                        previous_request_files, updated_at, created_at
+                        previous_request_files, timestamp_inserted_at, updated_at, created_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT(session_id) DO UPDATE SET
                         previous_request_timestamp = EXCLUDED.previous_request_timestamp,
                         previous_request_text = EXCLUDED.previous_request_text,
                         previous_request_files = EXCLUDED.previous_request_files,
                         updated_at = EXCLUDED.updated_at
                     """,
-                    (session_id, None, timestamp, text, files_json, now_utc, now_utc)
+                    (session_id, None, timestamp, text, files_json, datetime.min.replace(tzinfo=timezone.utc), now_utc, now_utc)
                 )
             conn.commit()
             

@@ -39,13 +39,15 @@ async def test_get_session_state_empty_creates_new(session_manager):
 async def test_update_and_get_transaction(session_manager):
     session_id = "test_session_1"
     transaction_id = "txn_123"
+    timestamp_inserted_at = datetime.now(timezone.utc)
     
-    await session_manager.update_transaction(session_id, transaction_id)
+    await session_manager.update_transaction(session_id, transaction_id, timestamp_inserted_at)
     
     state = await session_manager.get_session_state(session_id)
     assert state is not None
     assert state.session_id == session_id
     assert state.active_transaction_id == transaction_id
+    assert state.timestamp_inserted_at == timestamp_inserted_at
     assert state.previous_request_timestamp is None
     assert state.previous_request_text is None
     assert state.previous_request_files is None
@@ -78,7 +80,7 @@ async def test_update_both_transaction_and_request(session_manager):
     files = {"file": "data"}
     
     # Update transaction first
-    await session_manager.update_transaction(session_id, transaction_id)
+    await session_manager.update_transaction(session_id, transaction_id, timestamp)
     
     # Then update previous request
     await session_manager.update_previous_request(session_id, timestamp, text, files)
@@ -86,6 +88,7 @@ async def test_update_both_transaction_and_request(session_manager):
     state = await session_manager.get_session_state(session_id)
     assert state is not None
     assert state.active_transaction_id == transaction_id
+    assert state.timestamp_inserted_at == timestamp
     assert state.previous_request_text == text
     assert state.previous_request_files == files
 
@@ -94,9 +97,10 @@ async def test_update_both_transaction_and_request(session_manager):
 async def test_cache_functionality(session_manager):
     session_id = "test_cache"
     transaction_id = "txn_cache"
+    timestamp_inserted_at = datetime.now(timezone.utc)
     
     # First update - will be written to DB and cache
-    await session_manager.update_transaction(session_id, transaction_id)
+    await session_manager.update_transaction(session_id, transaction_id, timestamp_inserted_at)
     
     # First get - should come from cache
     state1 = await session_manager.get_session_state(session_id)
@@ -121,14 +125,15 @@ async def test_cache_functionality(session_manager):
 @pytest.mark.asyncio
 async def test_cache_update_consistency(session_manager):
     session_id = "test_consistency"
-    
+    timestamp_inserted_at = datetime.now(timezone.utc)
+
     # Initial transaction
-    await session_manager.update_transaction(session_id, "txn_1")
+    await session_manager.update_transaction(session_id, "txn_1", timestamp_inserted_at)
     state1 = await session_manager.get_session_state(session_id)
     assert state1.active_transaction_id == "txn_1"
     
     # Update transaction - cache should be updated too
-    await session_manager.update_transaction(session_id, "txn_2")
+    await session_manager.update_transaction(session_id, "txn_2", timestamp_inserted_at)
     
     # Get from cache (should reflect the update)
     state2 = await session_manager.get_session_state(session_id)
@@ -147,8 +152,9 @@ async def test_cache_update_consistency(session_manager):
 @pytest.mark.asyncio
 async def test_clear_session(session_manager):
     session_id = "test_clear"
+    timestamp_inserted_at = datetime.now(timezone.utc)
     
-    await session_manager.update_transaction(session_id, "txn_clear")
+    await session_manager.update_transaction(session_id, "txn_clear", timestamp_inserted_at)
     
     # Verify session exists with transaction
     state = await session_manager.get_session_state(session_id)
@@ -170,10 +176,12 @@ async def test_clear_session(session_manager):
 
 @pytest.mark.asyncio
 async def test_cleanup_old_sessions(session_manager):
+    timestamp_inserted_at = datetime.now(timezone.utc)
+
     # Create sessions with transactions
-    await session_manager.update_transaction("session_1", "txn_1")
-    await session_manager.update_transaction("session_2", "txn_2")
-    await session_manager.update_transaction("session_3", "txn_3")
+    await session_manager.update_transaction("session_1", "txn_1", timestamp_inserted_at)
+    await session_manager.update_transaction("session_2", "txn_2", timestamp_inserted_at)
+    await session_manager.update_transaction("session_3", "txn_3", timestamp_inserted_at)
     
     # Verify all sessions exist with transactions
     state1 = await session_manager.get_session_state("session_1")
@@ -209,10 +217,11 @@ async def test_multiple_sessions(session_manager):
         ("session_b", "txn_b", "Request B"),
         ("session_c", "txn_c", "Request C"),
     ]
+    timestamp_inserted_at = datetime.now(timezone.utc)
     
     # Create multiple sessions
     for session_id, transaction_id, text in sessions:
-        await session_manager.update_transaction(session_id, transaction_id)
+        await session_manager.update_transaction(session_id, transaction_id, timestamp_inserted_at)
         await session_manager.update_previous_request(
             session_id, 
             datetime.now(timezone.utc), 
@@ -231,14 +240,15 @@ async def test_multiple_sessions(session_manager):
 @pytest.mark.asyncio
 async def test_overwrite_transaction(session_manager):
     session_id = "test_overwrite"
+    timestamp_inserted_at = datetime.now(timezone.utc)
     
     # Set initial transaction
-    await session_manager.update_transaction(session_id, "txn_old")
+    await session_manager.update_transaction(session_id, "txn_old", timestamp_inserted_at)
     state1 = await session_manager.get_session_state(session_id)
     assert state1.active_transaction_id == "txn_old"
     
     # Overwrite with new transaction
-    await session_manager.update_transaction(session_id, "txn_new")
+    await session_manager.update_transaction(session_id, "txn_new", timestamp_inserted_at)
     state2 = await session_manager.get_session_state(session_id)
     assert state2.active_transaction_id == "txn_new"
 
@@ -293,4 +303,4 @@ async def test_init_db_adds_missing_timestamp_column(db_path):
     assert "timestamp_inserted_at" in columns
 
     state = await manager.get_session_state("legacy_session")
-    assert state.timestamp_inserted_at == datetime.min
+    assert state.timestamp_inserted_at == datetime.min.replace(tzinfo=timezone.utc)
