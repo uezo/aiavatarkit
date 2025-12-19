@@ -219,7 +219,7 @@ async def test_claude_service_with_initial_messages():
     assert len(full_text) > 0, "No text was returned from the LLM."
 
     # Check if the response contains sushi or ramen
-    assert "寿司" in full_text or "ラーメン" in full_text, "Food name from initial messages not found in response."
+    assert ("寿司" in full_text or "ラーメン" in full_text), "Food name from initial messages not found in response."
 
     # Check the context
     messages = await service.context_manager.get_histories(context_id)
@@ -229,7 +229,7 @@ async def test_claude_service_with_initial_messages():
     assert messages[0]["role"] == "user"
     assert messages[0]["content"][0]["text"] == user_message
     assert messages[1]["role"] == "assistant"
-    assert "寿司" in messages[1]["content"][0]["text"] or "ラーメン" in messages[1]["content"][0]["text"]
+    assert ("寿司" in messages[1]["content"][0]["text"] or "ラーメン" in messages[1]["content"][0]["text"])
 
 
 @pytest.mark.asyncio

@@ -42,7 +42,7 @@ async def test_dify_service_simple():
     conversation_id = service.conversation_ids[context_id]
 
     # Call again
-    user_message = "あれっ？私、あなたの何を食べたって言ったっけ？"
+    user_message = "私が勝手に食べたものは何ですか？"
     collected_text = []
     collected_voice = []
     async for resp in service.chat_stream(context_id, "test_user", user_message):
@@ -118,7 +118,7 @@ async def test_dify_service_agent_mode():
     conversation_id = service.conversation_ids[context_id]
 
     # Call again
-    user_message = "あれっ？私、あなたの何を食べたって言ったっけ？"
+    user_message = "私が勝手に食べたものは何ですか？"
     collected_text = []
     collected_voice = []
     async for resp in service.chat_stream(context_id, "test_user", user_message):
