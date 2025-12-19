@@ -16,6 +16,7 @@ class SessionState:
     previous_request_timestamp: Optional[datetime] = None
     previous_request_text: Optional[str] = None
     previous_request_files: Optional[Dict[str, Any]] = None
+    timestamp_inserted_at: datetime = datetime.min.replace(tzinfo=timezone.utc)
     updated_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
@@ -26,7 +27,7 @@ class SessionStateManager(ABC):
         pass
 
     @abstractmethod
-    async def update_transaction(self, session_id: str, transaction_id: str) -> None:
+    async def update_transaction(self, session_id: str, transaction_id: str, timestamp_inserted_at: datetime) -> None:
         pass
 
     @abstractmethod
@@ -49,7 +50,7 @@ class SessionStateManager(ABC):
 
 
 class SQLiteSessionStateManager(SessionStateManager):
-    def __init__(self, db_path="session_state.db", session_timeout=3600, cache_ttl=60):
+    def __init__(self, db_path: str = "session_state.db", session_timeout: float = 3600, cache_ttl: float = 60):
         self.db_path = db_path
         self.session_timeout = session_timeout
         self.cache_ttl = cache_ttl  # Cache TTL in seconds
@@ -68,11 +69,17 @@ class SQLiteSessionStateManager(SessionStateManager):
                         previous_request_timestamp TIMESTAMP,
                         previous_request_text TEXT,
                         previous_request_files JSON,
+                        timestamp_inserted_at TIMESTAMP NOT NULL,
                         updated_at TIMESTAMP NOT NULL,
                         created_at TIMESTAMP NOT NULL
                     )
                     """
                 )
+
+                # Add missing columns for existing deployments
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(session_states)")}
+                if "timestamp_inserted_at" not in columns:
+                    conn.execute("ALTER TABLE session_states ADD COLUMN timestamp_inserted_at TIMESTAMP NOT NULL")
 
                 conn.execute(
                     """
@@ -106,7 +113,7 @@ class SQLiteSessionStateManager(SessionStateManager):
             cursor.execute(
                 """
                 SELECT session_id, active_transaction_id, previous_request_timestamp,
-                       previous_request_text, previous_request_files, updated_at, created_at
+                       previous_request_text, previous_request_files, timestamp_inserted_at, updated_at, created_at
                 FROM session_states
                 WHERE session_id = ?
                 """,
@@ -121,8 +128,9 @@ class SQLiteSessionStateManager(SessionStateManager):
                     previous_request_timestamp=datetime.fromisoformat(row[2]) if row[2] else None,
                     previous_request_text=row[3],
                     previous_request_files=json.loads(row[4]) if row[4] else None,
-                    updated_at=datetime.fromisoformat(row[5]),
-                    created_at=datetime.fromisoformat(row[6])
+                    timestamp_inserted_at=datetime.fromisoformat(row[5]),
+                    updated_at=datetime.fromisoformat(row[6]),
+                    created_at=datetime.fromisoformat(row[7])
                 )
                 # Update cache
                 self.cache[session_id] = state
@@ -141,10 +149,10 @@ class SQLiteSessionStateManager(SessionStateManager):
                 conn.execute(
                     """
                     INSERT INTO session_states (session_id, active_transaction_id, previous_request_timestamp,
-                                               previous_request_text, previous_request_files, updated_at, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                                               previous_request_text, previous_request_files, timestamp_inserted_at, updated_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (session_id, None, None, None, None, now_utc, now_utc)
+                    (session_id, None, None, None, None, None, now_utc, now_utc)
                 )
             
             # Update cache
@@ -157,7 +165,7 @@ class SQLiteSessionStateManager(SessionStateManager):
         finally:
             conn.close()
 
-    async def update_transaction(self, session_id: str, transaction_id: str) -> None:
+    async def update_transaction(self, session_id: str, transaction_id: str, timestamp_inserted_at: datetime) -> None:
         if not session_id:
             raise ValueError("Error at update_transaction: session_id cannot be None or empty")
         
@@ -167,24 +175,27 @@ class SQLiteSessionStateManager(SessionStateManager):
             with conn:
                 conn.execute(
                     """
-                    INSERT INTO session_states (session_id, active_transaction_id, updated_at, created_at)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO session_states (session_id, active_transaction_id, timestamp_inserted_at, updated_at, created_at)
+                    VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT(session_id) DO UPDATE SET
                         active_transaction_id = excluded.active_transaction_id,
+                        timestamp_inserted_at = COALESCE(excluded.timestamp_inserted_at, session_states.timestamp_inserted_at),
                         updated_at = excluded.updated_at
                     """,
-                    (session_id, transaction_id, now_utc, now_utc)
+                    (session_id, transaction_id, timestamp_inserted_at, now_utc, now_utc)
                 )
             
             # Update cache
             if session_id in self.cache:
                 self.cache[session_id].active_transaction_id = transaction_id
+                self.cache[session_id].timestamp_inserted_at = timestamp_inserted_at
                 self.cache[session_id].updated_at = now_utc
             else:
                 # Create new cache entry
                 self.cache[session_id] = SessionState(
                     session_id=session_id,
                     active_transaction_id=transaction_id,
+                    timestamp_inserted_at=timestamp_inserted_at,
                     updated_at=now_utc,
                     created_at=now_utc
                 )

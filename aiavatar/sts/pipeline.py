@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import json
 import logging
+import re
 from time import time
 import traceback
 from typing import AsyncGenerator, Tuple, List, Optional
@@ -18,7 +20,7 @@ from .performance_recorder import PerformanceRecord, PerformanceRecorder
 from .performance_recorder.sqlite import SQLitePerformanceRecorder
 from .voice_recorder import VoiceRecorder, RequestVoice, ResponseVoices
 from .voice_recorder.file import FileVoiceRecorder
-from .session_state_manager import SessionStateManager, SQLiteSessionStateManager
+from .session_state_manager import SessionState, SessionStateManager, SQLiteSessionStateManager
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,9 @@ class STSPipeline:
         merge_request_prefix: str = "$Previous user's request and your response have been canceled. Please respond again to the following request:\n\n",
         # Japanese version
         # merge_request_prefix: str = "$直前のユーザーの要求とあなたの応答はキャンセルされました。以下の要求に対して、あらためて応答しなおしてください:\n\n"
+        timestamp_interval_seconds: float = 0.0,
+        timestamp_prefix: str = "$Current date and time: ",
+        timestamp_timezone: str = "UTC",
         db_connection_str: str = "aiavatar.db",
         session_state_manager: SessionStateManager = None,
         performance_recorder: PerformanceRecorder = None,
@@ -126,6 +131,11 @@ class STSPipeline:
         # Merge consecutive requests
         self.merge_request_threshold = merge_request_threshold
         self.merge_request_prefix = merge_request_prefix
+
+        # Timestamp
+        self.timestamp_interval_seconds = timestamp_interval_seconds
+        self.timestamp_timezone = timestamp_timezone
+        self.timestamp_prefix = timestamp_prefix
 
         # Response handler
         self.handle_response = self.handle_response_default
@@ -257,10 +267,10 @@ class STSPipeline:
 
             # Get session state
             state = await self.session_state_manager.get_session_state(request.session_id)
+            now = datetime.now(timezone.utc)
 
             # Merge consecutive requests
             if self.merge_request_threshold > 0:
-                now = datetime.now(timezone.utc)
                 if state.previous_request_timestamp:
                     requests_interval = (now - state.previous_request_timestamp).total_seconds()
                     if self.merge_request_threshold > requests_interval:
@@ -284,10 +294,18 @@ class STSPipeline:
                     request.context_id = str(uuid4())
                     logger.info(f"Create new context_id: {request.context_id}")
 
+                # Insert timestamp
+                if self.timestamp_interval_seconds > 0 and (now - state.timestamp_inserted_at).total_seconds() > self.timestamp_interval_seconds:
+                    now_str = datetime.now(ZoneInfo(self.timestamp_timezone)).strftime("%Y/%m/%d %H:%M:%S")
+                    request.text = f"{self.timestamp_prefix}{now_str}\n\n{request.text}"
+                    timestamp_inserted_at = now
+                else:
+                    timestamp_inserted_at = state.timestamp_inserted_at
+
                 # Overwrite active transaction
                 if self.debug:
                     logger.info(f"Start transaction: {transaction_id} {request.text} (previous: {state.active_transaction_id})")
-                await self.session_state_manager.update_transaction(request.session_id, transaction_id)
+                await self.session_state_manager.update_transaction(request.session_id, transaction_id, timestamp_inserted_at)
             else:
                 # Clear request content to avoid LLM and TTS processing
                 request.text = None
