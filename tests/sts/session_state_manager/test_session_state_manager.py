@@ -2,6 +2,7 @@ from datetime import datetime, timezone, timedelta
 import asyncio
 import os
 import pytest
+import sqlite3
 from aiavatar.sts.session_state_manager import SessionState, SQLiteSessionStateManager
 
 
@@ -258,3 +259,38 @@ async def test_none_values_handling(session_manager):
     assert state is not None
     assert state.previous_request_text is None
     assert state.previous_request_files is None
+
+
+@pytest.mark.asyncio
+async def test_init_db_adds_missing_timestamp_column(db_path):
+    # Create legacy table without timestamp_inserted_at
+    conn = sqlite3.connect(db_path)
+    with conn:
+        conn.execute(
+            """
+            CREATE TABLE session_states (
+                session_id TEXT PRIMARY KEY,
+                active_transaction_id TEXT,
+                previous_request_timestamp TIMESTAMP,
+                previous_request_text TEXT,
+                previous_request_files JSON,
+                updated_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP NOT NULL
+            )
+            """
+        )
+    conn.close()
+
+    # init_db should add the missing column
+    manager = SQLiteSessionStateManager(db_path=db_path, session_timeout=3600, cache_ttl=2)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(session_states)")}
+    finally:
+        conn.close()
+
+    assert "timestamp_inserted_at" in columns
+
+    state = await manager.get_session_state("legacy_session")
+    assert state.timestamp_inserted_at == datetime.min

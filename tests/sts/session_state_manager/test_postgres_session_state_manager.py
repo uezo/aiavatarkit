@@ -291,6 +291,26 @@ async def test_timezone_handling(session_manager, unique_session_id):
 
 
 @pytest.mark.asyncio
+async def test_init_db_adds_timestamp_inserted_at(session_manager, unique_session_id):
+    """Ensure init_db creates timestamp_inserted_at column for existing deployments"""
+    conn = session_manager.connect_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'session_states'
+                """
+            )
+            columns = {row[0] for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+    assert "timestamp_inserted_at" in columns
+
+
+@pytest.mark.asyncio
 async def test_error_handling_invalid_session_id(session_manager):
     """Test that proper error is raised for invalid session_id"""
     with pytest.raises(ValueError) as exc_info:

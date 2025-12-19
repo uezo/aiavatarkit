@@ -54,9 +54,16 @@ class PostgreSQLSessionStateManager(SessionStateManager):
                         previous_request_timestamp TIMESTAMP,
                         previous_request_text TEXT,
                         previous_request_files JSON,
+                        timestamp_inserted_at TIMESTAMP NOT NULL,
                         updated_at TIMESTAMP NOT NULL,
                         created_at TIMESTAMP NOT NULL
                     )
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE session_states
+                    ADD COLUMN IF NOT EXISTS timestamp_inserted_at TIMESTAMP NOT NULL
                     """
                 )
                 # Create index for cleanup operations
@@ -93,7 +100,7 @@ class PostgreSQLSessionStateManager(SessionStateManager):
                 cur.execute(
                     """
                     SELECT session_id, active_transaction_id, previous_request_timestamp,
-                           previous_request_text, previous_request_files, updated_at, created_at
+                           previous_request_text, previous_request_files, timestamp_inserted_at, updated_at, created_at
                     FROM session_states
                     WHERE session_id = %s
                     """,
@@ -108,6 +115,7 @@ class PostgreSQLSessionStateManager(SessionStateManager):
                     previous_request_timestamp=self._ensure_utc(row["previous_request_timestamp"]),
                     previous_request_text=row["previous_request_text"],
                     previous_request_files=row["previous_request_files"],
+                    timestamp_inserted_at=self._ensure_utc(row["timestamp_inserted_at"]),
                     updated_at=self._ensure_utc(row["updated_at"]),
                     created_at=self._ensure_utc(row["created_at"])
                 )
@@ -128,10 +136,10 @@ class PostgreSQLSessionStateManager(SessionStateManager):
                 cur.execute(
                     """
                     INSERT INTO session_states (session_id, active_transaction_id, previous_request_timestamp,
-                                               previous_request_text, previous_request_files, updated_at, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                               previous_request_text, previous_request_files, timestamp_inserted_at, updated_at, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (session_id, None, None, None, None, now_utc, now_utc)
+                    (session_id, None, None, None, None, None, now_utc, now_utc)
                 )
             conn.commit()
             
@@ -146,7 +154,7 @@ class PostgreSQLSessionStateManager(SessionStateManager):
         finally:
             conn.close()
 
-    async def update_transaction(self, session_id: str, transaction_id: str) -> None:
+    async def update_transaction(self, session_id: str, transaction_id: str, timestamp_inserted_at: datetime) -> None:
         if not session_id:
             raise ValueError("Error at update_transaction: session_id cannot be None or empty")
         
@@ -156,25 +164,28 @@ class PostgreSQLSessionStateManager(SessionStateManager):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO session_states (session_id, active_transaction_id, updated_at, created_at)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO session_states (session_id, active_transaction_id, timestamp_inserted_at, updated_at, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT(session_id) DO UPDATE SET
                         active_transaction_id = EXCLUDED.active_transaction_id,
+                        timestamp_inserted_at = COALESCE(EXCLUDED.timestamp_inserted_at, session_states.timestamp_inserted_at),
                         updated_at = EXCLUDED.updated_at
                     """,
-                    (session_id, transaction_id, now_utc, now_utc)
+                    (session_id, transaction_id, timestamp_inserted_at, now_utc, now_utc)
                 )
             conn.commit()
             
             # Update cache
             if session_id in self.cache:
                 self.cache[session_id].active_transaction_id = transaction_id
+                self.cache[session_id].timestamp_inserted_at = timestamp_inserted_at
                 self.cache[session_id].updated_at = now_utc
             else:
                 # Create new cache entry
                 self.cache[session_id] = SessionState(
                     session_id=session_id,
                     active_transaction_id=transaction_id,
+                    timestamp_inserted_at=timestamp_inserted_at,
                     updated_at=now_utc,
                     created_at=now_utc
                 )
