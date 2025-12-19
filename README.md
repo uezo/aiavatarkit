@@ -109,6 +109,7 @@ This change ensures compatibility with the new internal structure and removes th
     - [💫 RESTful API (SSE)](#-restful-api-sse)
     - [🔵 Dify-compatible API](#-dify-compatible-api)
     - [🔌 WebSocket](#-websocket)
+    - [🟩 LINE Bot](#-line-bot)
 
 - [🦜 AI Agent](#-ai-agent)
     - [⚡️ Tool Call](#️-tool-call)
@@ -895,7 +896,7 @@ You can now perform voice interactions just like when running locally.
 **NOTE:** When using the WebSocket API, voice activity detection (VAD) is performed on the server side, so clients can simply stream microphone input directly to the server.
 
 
-### Connection and Disconnection Handling
+#### Connection and Disconnection Handling
 
 You can register callbacks to handle WebSocket connection and disconnection events. This is useful for logging, session management, or custom initialization/cleanup logic.
 
@@ -923,6 +924,111 @@ The `session_data` object contains information about the WebSocket session:
 - `user_id`: User identifier from the connection request
 - `session_id`: Session identifier from the connection request
 - Additional metadata passed during connection
+
+
+### 🟩 LINE Bot
+
+You can build a LINE Bot using the LINE Messaging API.
+
+```python
+# NOTE: Register https://{your.domain}/webhook as the "Webhook URL" in LINE Developers Console
+
+# Create LINE Bot adapter
+from aiavatar.adapter.linebot.server import AIAvatarLineBotServer
+aiavatar_app = AIAvatarLineBotServer(
+    openai_model="gpt-5.1",
+    system_prompt="You are a cat.",
+    openai_api_key=OPENAI_API_KEY,
+    channel_access_token=LINEBOT_CHANNEL_ACCESS_TOKEN,
+    channel_secret=LINEBOT_CHANNEL_SECRET,
+    image_download_url_base="https://{your.domain}",
+    debug=True
+)
+
+# Create FastAPI app
+from fastapi import FastAPI
+app = FastAPI()
+
+# Set adapter endpoints
+router = aiavatar_app.get_api_router()
+app.include_router(router)
+```
+
+
+By default, the LINE Messaging API user ID is used as the AIAvatarKit user ID. If you want to map it to your own AIAvatarKit user IDs, implement `edit_linebot_session` as shown below to update the session data.
+
+```python
+from aiavatar.adapter.linebot import LineBotSession
+@aiavatar_app.edit_linebot_session
+async def edit_linebot_session(linebot_session: LineBotSession):
+    # Get user_id by LINE Bot user id
+    aiavatar_user_id = map_user_id(linebot_session.linebot_user_id)
+    # Set user_id to LINE Bot session
+    linebot_session.user_id = aiavatar_user_id
+```
+
+Other customization hooks are below.
+
+```python
+@aiavatar_app.preprocess_request
+async def preprocess_request(request: STSRequest):
+    # Pre-process request before sending to LLM
+    # e.g. edit request text
+    request.text = "Pre-processed: " + request.text
+
+@aiavatar_app.preprocess_response
+async def preprocess_response(response: STSResponse):
+    # Pre-process response before sending to LINE API
+    # e.g. edit response voice_text (not text)
+    response.voice_text = "Pre-processed: " + response.voice_text
+
+@aiavatar_app.process_avatar_control_request
+async def process_avatar_control_request(avatar_control_request: AvatarControlRequest, reply_message_request: ReplyMessageRequest):
+    # Process facial expression
+    # e.g. set `sender` to the message in reply_message_request to change icon
+    face = avatar_control_request.face_name
+    if face:
+        reply_message_request.messages[0].sender = Sender(iconUrl=f"https://your_domain/path/to/icon/{face}.png")
+
+@aiavatar_app.on_send_error_message
+async def on_send_error_message(reply_message_request: ReplyMessageRequest, linebot_session: LineBotSession, event: Event, ex: Exception):
+    # Pre-process error message
+    # e.g. edit error response
+    text = make_user_friendly_error_message(event, ex)
+    reply_message_request.messages[0] = TextMessage(text=text)
+
+@aiavatar_app.event("postback")
+async def handle_postback_event(event: Event, linebot_session: LineBotSession):
+    # Process event
+    # e.g. Register postback data
+    await register_data(linebot_session.user_id, event.postback.data)
+```
+
+
+Session data is stored in `aiavatar.db` via SQLite by default. To use PostgreSQL, create a `PostgreSQLLineBotSessionManager` and pass it to `AIAvatarLineBotServer` as `session_manager`.
+
+```python
+# Create PostgreSQLLineBotSessionManager
+from aiavatar.adapter.linebot.session_manager.postgres import PostgreSQLLineBotSessionManager
+linebot_session_manager = PostgreSQLLineBotSessionManager(
+    host=DB_HOST,
+    port=DB_PORT,
+    dbname=DB_NAME,
+    user=DB_USER,
+    password=DB_PASSWORD
+)
+
+aiavatar_app = AIAvatarLineBotServer(
+    openai_model="gpt-5.1",
+    system_prompt="You are a cat.",
+    openai_api_key=OPENAI_API_KEY,
+    channel_access_token=LINEBOT_CHANNEL_ACCESS_TOKEN,
+    channel_secret=LINEBOT_CHANNEL_SECRET,
+    image_download_url_base="https://{your.domain}",
+    session_manager=linebot_session_manager,    # <- Set PostgresSQL session manager
+    debug=True
+)
+```
 
 
 ### STT / TTS Endpoints
