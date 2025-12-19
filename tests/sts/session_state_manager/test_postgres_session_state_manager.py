@@ -59,8 +59,9 @@ async def test_get_session_state_empty_creates_new(session_manager, unique_sessi
 @pytest.mark.asyncio
 async def test_update_and_get_transaction(session_manager, unique_session_id):
     transaction_id = f"txn_{uuid4()}"
+    timestamp_inserted_at = datetime.now(timezone.utc)
     
-    await session_manager.update_transaction(unique_session_id, transaction_id)
+    await session_manager.update_transaction(unique_session_id, transaction_id, timestamp_inserted_at)
     
     state = await session_manager.get_session_state(unique_session_id)
     assert state is not None
@@ -98,7 +99,7 @@ async def test_update_both_transaction_and_request(session_manager, unique_sessi
     files = {"file": "data"}
     
     # Update transaction first
-    await session_manager.update_transaction(unique_session_id, transaction_id)
+    await session_manager.update_transaction(unique_session_id, transaction_id, timestamp)
     
     # Then update previous request
     await session_manager.update_previous_request(unique_session_id, timestamp, text, files)
@@ -113,9 +114,10 @@ async def test_update_both_transaction_and_request(session_manager, unique_sessi
 @pytest.mark.asyncio
 async def test_cache_functionality(session_manager, unique_session_id):
     transaction_id = f"txn_cache_{uuid4()}"
+    timestamp_inserted_at = datetime.now(timezone.utc)
     
     # First update - will be written to DB and cache
-    await session_manager.update_transaction(unique_session_id, transaction_id)
+    await session_manager.update_transaction(unique_session_id, transaction_id, timestamp_inserted_at)
     
     # First get - should come from cache
     state1 = await session_manager.get_session_state(unique_session_id)
@@ -139,13 +141,15 @@ async def test_cache_functionality(session_manager, unique_session_id):
 
 @pytest.mark.asyncio
 async def test_cache_update_consistency(session_manager, unique_session_id):
+    timestamp_inserted_at = datetime.now(timezone.utc)
+
     # Initial transaction
-    await session_manager.update_transaction(unique_session_id, f"txn_1_{uuid4()}")
+    await session_manager.update_transaction(unique_session_id, f"txn_1_{uuid4()}", timestamp_inserted_at)
     state1 = await session_manager.get_session_state(unique_session_id)
     assert state1.active_transaction_id.startswith("txn_1_")
     
     # Update transaction - cache should be updated too
-    await session_manager.update_transaction(unique_session_id, f"txn_2_{uuid4()}")
+    await session_manager.update_transaction(unique_session_id, f"txn_2_{uuid4()}", timestamp_inserted_at)
     
     # Get from cache (should reflect the update)
     state2 = await session_manager.get_session_state(unique_session_id)
@@ -164,8 +168,9 @@ async def test_cache_update_consistency(session_manager, unique_session_id):
 @pytest.mark.asyncio
 async def test_clear_session(session_manager, unique_session_id):
     transaction_id = f"txn_clear_{uuid4()}"
+    timestamp_inserted_at = datetime.now(timezone.utc)
     
-    await session_manager.update_transaction(unique_session_id, transaction_id)
+    await session_manager.update_transaction(unique_session_id, transaction_id, timestamp_inserted_at)
     
     # Verify session exists with transaction
     state = await session_manager.get_session_state(unique_session_id)
@@ -189,10 +194,11 @@ async def test_clear_session(session_manager, unique_session_id):
 async def test_cleanup_old_sessions(session_manager):
     # Create sessions with unique IDs
     session_ids = [f"cleanup_test_{uuid4()}" for _ in range(3)]
+    timestamp_inserted_at = datetime.now(timezone.utc)
     
     # Create sessions with transactions
     for i, session_id in enumerate(session_ids):
-        await session_manager.update_transaction(session_id, f"txn_{i}")
+        await session_manager.update_transaction(session_id, f"txn_{i}", timestamp_inserted_at)
     
     # Verify all sessions exist with transactions
     for i, session_id in enumerate(session_ids):
@@ -214,6 +220,8 @@ async def test_cleanup_old_sessions(session_manager):
 
 @pytest.mark.asyncio
 async def test_multiple_sessions(session_manager):
+    timestamp_inserted_at = datetime.now(timezone.utc)
+
     sessions = [
         (f"session_a_{uuid4()}", f"txn_a_{uuid4()}", "Request A"),
         (f"session_b_{uuid4()}", f"txn_b_{uuid4()}", "Request B"),
@@ -222,7 +230,7 @@ async def test_multiple_sessions(session_manager):
     
     # Create multiple sessions
     for session_id, transaction_id, text in sessions:
-        await session_manager.update_transaction(session_id, transaction_id)
+        await session_manager.update_transaction(session_id, transaction_id, timestamp_inserted_at)
         await session_manager.update_previous_request(
             session_id, 
             datetime.now(timezone.utc), 
@@ -240,13 +248,15 @@ async def test_multiple_sessions(session_manager):
 
 @pytest.mark.asyncio
 async def test_overwrite_transaction(session_manager, unique_session_id):
+    timestamp_inserted_at = datetime.now(timezone.utc)
+
     # Set initial transaction
-    await session_manager.update_transaction(unique_session_id, f"txn_old_{uuid4()}")
+    await session_manager.update_transaction(unique_session_id, f"txn_old_{uuid4()}", timestamp_inserted_at)
     state1 = await session_manager.get_session_state(unique_session_id)
     assert state1.active_transaction_id.startswith("txn_old_")
     
     # Overwrite with new transaction
-    await session_manager.update_transaction(unique_session_id, f"txn_new_{uuid4()}")
+    await session_manager.update_transaction(unique_session_id, f"txn_new_{uuid4()}", timestamp_inserted_at)
     state2 = await session_manager.get_session_state(unique_session_id)
     assert state2.active_transaction_id.startswith("txn_new_")
 
@@ -316,9 +326,9 @@ async def test_error_handling_invalid_session_id(session_manager):
     with pytest.raises(ValueError) as exc_info:
         await session_manager.get_session_state(None)
     assert "session_id cannot be None or empty" in str(exc_info.value)
-    
+
     with pytest.raises(ValueError) as exc_info:
-        await session_manager.update_transaction(None, "txn_123")
+        await session_manager.update_transaction(None, "txn_123", datetime.now(timezone.utc))
     assert "session_id cannot be None or empty" in str(exc_info.value)
     
     with pytest.raises(ValueError) as exc_info:
