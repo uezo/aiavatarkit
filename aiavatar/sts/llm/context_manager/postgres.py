@@ -166,6 +166,7 @@ class PostgreSQLContextManager(ContextManager):
                 row = cursor.fetchone()
 
                 if row and row["created_at"]:
+                    # Normalize DB timestamp to UTC (naive -> set UTC, aware -> convert to UTC)
                     last_created_at = row["created_at"]
                     if last_created_at.tzinfo is None:
                         last_created_at = last_created_at.replace(tzinfo=timezone.utc)
