@@ -136,6 +136,7 @@ This change ensures compatibility with the new internal structure and removes th
     - [💾 Long-term Memory](#-long-term-memory)
     - [🐓 Wakeword](#-wakeword)
     - [📋 System Prompt Parameters](#-system-prompt-parameters)
+    - [⏰ Timestamp Insertion](#-timestamp-insertion)
     - [🧵 Request merging](#-request-merging)
     - [🧺 Shared Context](#-shared-context)
     - [🔈 Audio Device](#-audio-device)
@@ -2219,6 +2220,32 @@ aiavatar_app.sts.invoke(STSRequest(
 ```
 
 Placeholders in the system prompt, such as `{name}`, will be replaced with the corresponding values at runtime.
+
+
+### ⏰ Timestamp Insertion
+
+You can insert timestamps into requests at regular intervals. This keeps AIAvatar responses anchored to real-world time.
+
+```python
+aiavatar_app = AIAvatar(
+    vad=vad,
+    stt=stt,
+    llm=llm,
+    tts=tts,
+    timestamp_interval_seconds=600.0,   # Inserts a timestamp to the request every 600 seconds (10 minutes). Default is 0.
+    timestamp_timezone="Asia/Tokyo",    # Default is 'UTC'
+)
+```
+
+For example, a request of "Hello!" with timestamp insertion enabled becomes:
+
+```
+$Current date and time: 2025-12-24
+
+Hello!
+```
+
+When `timestamp_interval_seconds` is set to 0, no timestamp is inserted (default).
 
 
 ### 🧵 Request merging
