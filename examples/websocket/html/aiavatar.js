@@ -1,10 +1,11 @@
 class AIAvatarClient {
-    constructor({ webSocketUrl, faceImage, faceImagePaths, cancelEcho = true, sampleRate = 16000 }) {
+    constructor({ webSocketUrl, faceImage, faceImagePaths, cancelEcho = true, sampleRate = 16000, playbackAnalyzeHz = 60 }) {
         this.webSocketUrl = webSocketUrl;
         this.faceImage = faceImage;
         this.faceImagePaths = faceImagePaths;
         this.cancelEcho = cancelEcho;
         this.sampleRate = sampleRate;
+        this.playbackAnalyzeHz = playbackAnalyzeHz;
 
         this.ws = null;
         this.audioContext = null;
@@ -16,8 +17,12 @@ class AIAvatarClient {
         this.currentAudioSource = null;
         this.latestFaceUpdate = null;
         this.faceTimeout = null;
+        this.currentFaceName = null;
+        this.onResetFace = null;
         this.onMicrophoneDataSend = () => { };
         this.onResponseReceived = () => { };
+        this.analyser = null;
+        this.onPlaybackAnalyze = null;
     }
 
     async startListening(sessionId, userId) {
@@ -45,7 +50,7 @@ class AIAvatarClient {
                 } else if (msg.type === "stop") {
                     this.messageQueue.length = 0;
                     this.stopAudio();
-                    this.updateFace("neutral", 0);
+                    this.resetFace();
                 } else if (msg.type === "final") {
                     console.log("Final response:", msg);
                 }
@@ -100,6 +105,14 @@ class AIAvatarClient {
             source.connect(this.scriptNode);
             // Connect to dest to fire onaudioprocess event
             this.scriptNode.connect(this.audioContext.destination);
+
+            // Setup analyzer
+            if (!this.analyser) {
+                const a = this.audioContext.createAnalyser();
+                a.fftSize = 256;
+                a.smoothingTimeConstant = 0.6;
+                this.analyser = a;
+            }
         } catch (err) {
             console.error("Error during microphone activation:", err);
         }
@@ -148,7 +161,51 @@ class AIAvatarClient {
                     (decodedData) => {
                         const source = this.audioContext.createBufferSource();
                         source.buffer = decodedData;
-                        source.connect(this.audioContext.destination);
+
+                        const canAnalyze = this.analyser && typeof this.onPlaybackAnalyze === "function";
+                        if (canAnalyze) {
+                            source.connect(this.analyser);
+                            this.analyser.connect(this.audioContext.destination);
+
+                            // Analyze audio
+                            const freqData = new Float32Array(this.analyser.frequencyBinCount);
+                            const timeData = new Float32Array(this.analyser.fftSize);
+                            let lastAnalyzeT = 0;
+                            const tick = (ts) => {
+                                if (!this.currentAudioSource) return; // Exit on playback ends
+                                if (!this.analyser) return; // Analyzer disposed after stopListening
+                                // Throttle by playbackAnalyzeHz
+                                const analyzeIntervalMs = 1000 / (this.playbackAnalyzeHz || 60);
+                                if (ts - lastAnalyzeT >= analyzeIntervalMs) {
+                                    lastAnalyzeT = ts;
+                                    // RMS (time domain)
+                                    this.analyser.getFloatTimeDomainData(timeData);
+                                    let sum = 0;
+                                    for (let i = 0; i < timeData.length; i++) sum += timeData[i] * timeData[i];
+                                    const rms = Math.sqrt(sum / timeData.length);
+
+                                    // Spectral centroid (0..1)
+                                    this.analyser.getFloatFrequencyData(freqData); // dB
+                                    const nyq = this.audioContext.sampleRate / 2;
+                                    let num = 0, den = 0;
+                                    for (let i = 0; i < freqData.length; i++) {
+                                        const mag = Math.pow(10, freqData[i] / 20); // dB->amp
+                                        const freq = (i / freqData.length) * nyq;
+                                        num += mag * freq;
+                                        den += mag;
+                                    }
+                                    const centroid01 = den > 0 ? Math.min(1, (num / den) / nyq) : 0;
+
+                                    this.onPlaybackAnalyze?.({ rms, centroid01, tSec: ts / 1000 });
+                                }
+                                requestAnimationFrame(tick);
+                            };
+                            requestAnimationFrame(tick);
+                        } else {
+                            // No analyzer or callback: connect directly and skip analysis loop
+                            source.connect(this.audioContext.destination);
+                        }
+
                         this.currentAudioSource = source;
                         source.start(0);
                         source.onended = () => {
@@ -182,6 +239,7 @@ class AIAvatarClient {
         if (faceImagePath === undefined || faceImagePath === null || faceImagePath === "") {
             return;
         }
+        this.currentFaceName = faceName;
         this.faceImage.src = faceImagePath;
         const currentUpdate = Date.now();
         this.latestFaceUpdate = currentUpdate;
@@ -189,9 +247,19 @@ class AIAvatarClient {
         if (this.faceTimeout) clearTimeout(this.faceTimeout);
         this.faceTimeout = setTimeout(() => {
             if (this.latestFaceUpdate === currentUpdate) {
+                this.currentFaceName = "neutral";
                 this.faceImage.src = this.faceImagePaths["neutral"];
             }
         }, (faceDuration || 2) * 1000);
+    }
+
+    resetFace() {
+        this.updateFace("neutral", 0);
+        this.onResetFace?.();
+    }
+
+    getCurrentFace() {
+        return this.currentFaceName;
     }
 
     float32To16BitPCMBuffer(floatBuffer) {
@@ -218,12 +286,14 @@ class AIAvatarClient {
     }
 
     async stopListening(sessionId) {
+        this.resetFace();
         this.processingQueue = false;
         if (this.scriptNode) {
             this.scriptNode.disconnect();
         }
         if (this.audioContext) {
             await this.audioContext.close();
+            this.analyser = null;
             this.isAudioPlaying = false;
         }
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {

@@ -24,31 +24,49 @@
         }
 
         .avatar-frame {
-            display: inline-block;
+            display: block;
+            width: clamp(256px, 60vw, 512px);
+            aspect-ratio: 1;
             background: linear-gradient(45deg, #FF007F, #7F00FF);
             border-radius: 50%;
             padding: 4px;
             transition: background 0.3s ease;
             margin: 20px auto;
-            max-width: 90vw;
-            max-height: 90vw;
         }
 
         .avatar-container {
+            position: relative;
             background: #000;
             border-radius: 50%;
             width: 100%;
             height: 100%;
-            max-width: 480px;
-            max-height: 480px;
+            max-width: 512px;
+            max-height: 512px;
             aspect-ratio: 1;
             overflow: hidden;
         }
 
-        #faceImage {
+        .avatar-container img {
+            display: block;
+        }
+
+        .face-image {
+            position: absolute;
+            inset: 0;
             width: 100%;
             height: 100%;
             object-fit: cover;
+        }
+
+        .mouth-overlay {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            pointer-events: none;
+            z-index: 1;
+            display: none;
         }
 
         .button-container {
@@ -79,7 +97,8 @@
 
     <div class="avatar-frame" id="avatarFrame">
         <div class="avatar-container">
-            <img id="faceImage" src="img/neutral.png" alt="Avatar Face">
+            <img id="faceImage" class="face-image" src="images/neutral.png" alt="Avatar Face">
+            <img id="mouthImage" class="mouth-overlay" alt="Mouth">
         </div>
     </div>
 
@@ -95,23 +114,46 @@
     </div>
 
     <script src="aiavatar.js"></script>
+    <script src="lipsync.js"></script>
+    <script src="blink.js"></script>
     <script>
         const sessionId = crypto.randomUUID(); 
         const userId = "user01";
+        const faceImage = document.getElementById("faceImage");
+        const mouthImage = document.getElementById("mouthImage");
 
-        // Create AIAvatar
+        // AIAvatar
         const aiavatar = new AIAvatarClient({
             webSocketUrl: "../ws",
-            faceImage: document.getElementById("faceImage"),
+            faceImage: faceImage,
             faceImagePaths: {
-                neutral: "img/neutral.png",
-                joy: "img/joy.png",
-                angry: "img/angry.png",
-                sorrow: "img/sorrow.png",
-                fun: "img/fun.png",
-                surprised: "img/surprised.png",
-                think: "img/think.png"
-            }
+                neutral: "images/neutral.png",
+                joy: "images/joy.png",
+                angry: "images/angry.png",
+                sorrow: "images/sorrow.png",
+                fun: "images/fun.png",
+                surprised: "images/surprised.png",
+                eyes_closed: "images/eyes_closed.png"
+            },
+        });
+
+        // LipSync
+        const lipsyncEngine = new LipSyncEngine({
+            applyTarget: mouthImage,
+            mouthPathTemplate: "images/mouth_{mouth}.png",
+            hideOnClosed: true,
+        });
+        aiavatar.onPlaybackAnalyze = ({ rms, centroid01, tSec }) => {
+            lipsyncEngine.apply({ rms, centroid01, tSec }); 
+        };
+        aiavatar.onResetFace = () => { lipsyncEngine.reset(); };
+
+        // Blink
+        const blinker = new BlinkController({
+            targetImage: faceImage,
+            facePathTemplate: "images/{face}.png",
+            blinkFaceName: "eyes_closed",
+            stateProvider: () => ({ isSpeaking: aiavatar.isAudioPlaying, currentFace: aiavatar.getCurrentFace() }),
         });
 
         // Example: Show microphone effect and input level
@@ -161,7 +203,7 @@
 
             // Example: Show thinking effect while server is processing
             if (response.type == "start") {
-                aiavatar.updateFace("think", 10);
+                aiavatar.updateFace("eyes_closed", 10);
             } else if (response.type == "chunk" && response.metadata.is_first_chunk) {
                 aiavatar.updateFace("neutral", 0);
             } else if (response.type == "tool_call") {
