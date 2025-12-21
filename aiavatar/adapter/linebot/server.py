@@ -82,6 +82,9 @@ class AIAvatarLineBotServer(Adapter):
         llm_model: str = "gpt-4.1",
         llm_system_prompt: str = None,
         llm_context_manager: ContextManager = None,
+        timestamp_interval_seconds: float = 0.0,
+        timestamp_prefix: str = "$Current date and time: ",
+        timestamp_timezone: str = "UTC",
         db_connection_str: str = "aiavatar.db",
         session_state_manager: SessionStateManager = None,
         performance_recorder: PerformanceRecorder = None,
@@ -107,6 +110,9 @@ class AIAvatarLineBotServer(Adapter):
             # TTS
             tts=SpeechSynthesizerDummy(),
             # Pipeline
+            timestamp_interval_seconds=timestamp_interval_seconds,
+            timestamp_prefix=timestamp_prefix,
+            timestamp_timezone=timestamp_timezone,
             db_connection_str=db_connection_str,
             session_state_manager=session_state_manager,
             performance_recorder=performance_recorder,
