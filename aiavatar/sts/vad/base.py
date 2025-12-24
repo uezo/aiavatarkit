@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, List, Callable, Awaitable
 
 logger = logging.getLogger(__name__)
 
@@ -10,6 +10,7 @@ class SpeechDetector(ABC):
         self.sample_rate = sample_rate
         self._on_speech_detected = self.on_speech_detected_default
         self.should_mute = lambda: False
+        self._on_recording_started: List[Callable[[str], Awaitable[None]]] = []
 
     def on_speech_detected(self, func):
         self._on_speech_detected = func
@@ -17,6 +18,10 @@ class SpeechDetector(ABC):
 
     async def on_speech_detected_default(data: bytes, recorded_duration: float, session_id: str):
         logger.info(f"Speech detected: len={recorded_duration} sec")
+
+    def on_recording_started(self, func: Callable[[str], Awaitable[None]]) -> Callable[[str], Awaitable[None]]:
+        self._on_recording_started.append(func)
+        return func
 
     @abstractmethod
     async def process_samples(self, samples: bytes, session_id: str = None):
