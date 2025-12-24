@@ -70,6 +70,7 @@ class AIAvatarWebSocketServer(Adapter):
         timestamp_interval_seconds: float = 0.0,
         timestamp_prefix: str = "$Current date and time: ",
         timestamp_timezone: str = "UTC",
+        mute_on_barge_in: bool = False,
         db_connection_str: str = "aiavatar.db",
         session_state_manager: SessionStateManager = None,
         performance_recorder: PerformanceRecorder = None,
@@ -133,6 +134,12 @@ class AIAvatarWebSocketServer(Adapter):
 
         # WebSocket processing
         self.response_audio_chunk_size = response_audio_chunk_size
+
+        # Mute immediately on barge-in
+        if mute_on_barge_in:
+            @self.sts.vad.on_recording_started
+            async def mute_on_barge_in(session_id: str):
+                await self.stop_response(session_id, "")
 
         # Debug
         self.debug = debug
