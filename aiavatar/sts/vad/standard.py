@@ -3,7 +3,7 @@ from collections import deque
 import logging
 import math
 import struct
-from typing import AsyncGenerator, Callable, Optional, Dict
+from typing import AsyncGenerator, Callable, Optional, Dict, List, Awaitable
 from . import SpeechDetector
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ class StandardSpeechDetector(SpeechDetector):
         channels: int = 1,
         preroll_buffer_count: int = 5,
         to_linear16: Optional[Callable[[bytes], bytes]] = None,
-        on_recording_started: Optional[Callable[[str, float], None]] = None,
+        on_recording_started: Optional[Callable[[str], Awaitable[None]]] = None,
         debug: bool = False
     ):
         self._volume_db_threshold = volume_db_threshold
@@ -52,7 +52,9 @@ class StandardSpeechDetector(SpeechDetector):
         self.min_duration = min_duration
         self.sample_rate = sample_rate
         self.channels = channels
-        self.on_recording_started = on_recording_started
+        self._on_recording_started: List[Callable[[str], Awaitable[None]]] = []
+        if on_recording_started:
+            self._on_recording_started.append(on_recording_started)
         self.debug = debug
         self.preroll_buffer_count = preroll_buffer_count
         self.to_linear16 = to_linear16
@@ -124,13 +126,16 @@ class StandardSpeechDetector(SpeechDetector):
             # Check if we've exceeded min_duration and call callback once
             if (session.record_duration - session.silence_duration >= self.min_duration and 
                 not session.on_recording_started_triggered and 
-                self.on_recording_started
+                self._on_recording_started
             ):
                 session.on_recording_started_triggered = True
-                try:
-                    asyncio.create_task(self.on_recording_started(session_id))
-                except Exception as ex:
-                    logger.error(f"Error in on_recording_started callback: {ex}", exc_info=True)
+                for handler in self._on_recording_started:
+                    async def _run(h, session_id):
+                        try:
+                            await h(session_id)
+                        except Exception as ex:
+                            logger.error("Error in on_recording_started callback", exc_info=True)
+                    asyncio.create_task(_run(handler, session_id))
 
             if session.silence_duration >= self.silence_duration_threshold:
                 recorded_duration = session.record_duration - session.silence_duration
