@@ -5,7 +5,7 @@ import numpy as np
 import struct
 import threading
 import torch
-from typing import AsyncGenerator, Callable, Optional, Dict, List, Awaitable
+from typing import AsyncGenerator, Callable, Optional, Dict, Awaitable
 from . import SpeechDetector
 
 logger = logging.getLogger(__name__)
@@ -59,8 +59,9 @@ class SileroSpeechDetector(SpeechDetector):
         chunk_size: int = 512,
         model_pool_size: int = 1,
         on_recording_started: Optional[Callable[[str], Awaitable[None]]] = None,
-        use_vad_iterator: bool = True
+        use_vad_iterator: bool = False
     ):
+        super().__init__(sample_rate=sample_rate)
         self._volume_db_threshold = volume_db_threshold
         if volume_db_threshold is not None:
             self.amplitude_threshold = 32767 * (10 ** (self.volume_db_threshold / 20.0))
@@ -69,14 +70,11 @@ class SileroSpeechDetector(SpeechDetector):
         self.silence_duration_threshold = silence_duration_threshold
         self.max_duration = max_duration
         self.min_duration = min_duration
-        self.sample_rate = sample_rate
         self.channels = channels
         self.debug = debug
         self.preroll_buffer_count = preroll_buffer_count
         self.to_linear16 = to_linear16
-        self.should_mute = lambda: False
         self.recording_sessions: Dict[str, RecordingSession] = {}
-        self._on_recording_started: List[Callable[[str], Awaitable[None]]] = []
         if on_recording_started:
             self._on_recording_started.append(on_recording_started)
 
