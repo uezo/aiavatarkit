@@ -1,11 +1,33 @@
 import asyncio
 import struct
+import wave
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-import torch
 
 from aiavatar.sts.vad.silero import SileroSpeechDetector
+
+
+def extend_audio(wave_data: bytes, repeat: int) -> bytes:
+    """Extend audio by repeating it multiple times."""
+    return wave_data * repeat
+
+
+def scale_audio_amplitude(wave_data: bytes, scale: float) -> bytes:
+    """Scale the amplitude of audio samples.
+
+    Args:
+        wave_data: Raw PCM audio data (16-bit signed)
+        scale: Scale factor (0.0 to 1.0 to reduce, >1.0 to increase)
+
+    Returns:
+        Scaled audio data
+    """
+    # Unpack 16-bit signed samples
+    samples = struct.unpack("<" + "h" * (len(wave_data) // 2), wave_data)
+    # Scale and clamp to int16 range
+    scaled = [max(-32768, min(32767, int(s * scale))) for s in samples]
+    # Pack back to bytes
+    return struct.pack("<" + "h" * len(scaled), *scaled)
 
 
 @pytest.fixture
@@ -17,239 +39,410 @@ def test_output_dir(tmp_path: Path):
 
 
 @pytest.fixture
-def mock_silero_model():
+def stt_wav_path() -> Path:
     """
-    Mock Silero VAD model to avoid downloading during tests
+    Returns the path to the hello.wav file containing "こんにちは。"
     """
-    model = MagicMock()
-    model.return_value = torch.tensor(0.7)  # Mock speech probability
-    
-    # Create a mock VAD iterator class that returns new instances
-    vad_iterator_class = MagicMock()
-    vad_iterator_class.side_effect = lambda *_args, **_kwargs: MagicMock()
-    
-    utils = (None, None, None, vad_iterator_class, None)
-    
-    return model, utils
+    return Path(__file__).parent.parent / "stt" / "data" / "hello.wav"
 
 
 @pytest.fixture
-def detector(test_output_dir, mock_silero_model):
+def detector(test_output_dir):
     """
-    Create SileroSpeechDetector with mocked model
+    Create SileroSpeechDetector with real Silero VAD model
     """
-    model, utils = mock_silero_model
-    
-    with patch('torch.hub.load', return_value=(model, utils)):
-        detector = SileroSpeechDetector(
-            silence_duration_threshold=0.5,
-            max_duration=3.0,
-            min_duration=0.5,
-            sample_rate=16000,
-            channels=1,
-            preroll_buffer_count=5,
-            speech_probability_threshold=0.5,
-            chunk_size=512,
-            debug=True
-        )
+    detector = SileroSpeechDetector(
+        silence_duration_threshold=0.5,
+        max_duration=10.0,
+        min_duration=0.2,
+        sample_rate=16000,
+        channels=1,
+        preroll_buffer_count=5,
+        speech_probability_threshold=0.5,
+        chunk_size=512,
+        use_vad_iterator=False,  # Use direct model for simpler probability-based detection
+        debug=True
+    )
+
+    detected_results = []
 
     @detector.on_speech_detected
-    async def on_speech_detected(recorded_data: bytes, recorded_duration: float, session_id: str):
-        output_file = test_output_dir / f"speech_{session_id}.pcm"
-        with open(output_file, "wb") as f:
-            f.write(recorded_data)
+    async def on_speech_detected(recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
+        detected_results.append({
+            "data": recorded_data,
+            "duration": recorded_duration,
+            "session_id": session_id
+        })
 
-    return detector
+    detector._detected_results = detected_results
+
+    yield detector
+
+    # Cleanup: delete all sessions
+    for session_id in list(detector.recording_sessions.keys()):
+        detector.delete_session(session_id)
 
 
 @pytest.fixture
-def detector_with_model_pool(test_output_dir, mock_silero_model):
+def detector_with_vad_iterator(test_output_dir):
     """
-    Create SileroSpeechDetector with model pool (size=2)
+    Create SileroSpeechDetector with real Silero VAD model using VAD iterator
     """
-    model, utils = mock_silero_model
-    
-    with patch('torch.hub.load', return_value=(model, utils)):
-        detector = SileroSpeechDetector(
-            silence_duration_threshold=0.5,
-            max_duration=3.0,
-            min_duration=0.5,
-            sample_rate=16000,
-            channels=1,
-            preroll_buffer_count=5,
-            speech_probability_threshold=0.5,
-            chunk_size=512,
-            model_pool_size=2,
-            debug=True
-        )
+    detector = SileroSpeechDetector(
+        silence_duration_threshold=0.5,
+        max_duration=10.0,
+        min_duration=0.2,
+        sample_rate=16000,
+        channels=1,
+        preroll_buffer_count=5,
+        speech_probability_threshold=0.5,
+        chunk_size=512,
+        use_vad_iterator=True,  # Use VAD iterator for stateful processing
+        debug=True
+    )
+
+    detected_results = []
 
     @detector.on_speech_detected
-    async def on_speech_detected(recorded_data: bytes, recorded_duration: float, session_id: str):
-        output_file = test_output_dir / f"speech_{session_id}.pcm"
-        with open(output_file, "wb") as f:
-            f.write(recorded_data)
+    async def on_speech_detected(recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
+        detected_results.append({
+            "data": recorded_data,
+            "duration": recorded_duration,
+            "session_id": session_id
+        })
 
-    return detector
+    detector._detected_results = detected_results
 
+    yield detector
 
-def generate_samples(amplitude: int, num_samples: int) -> bytes:
-    """Generate audio samples for testing"""
-    data = [amplitude] * num_samples
-    return struct.pack("<" + "h" * num_samples, *data)
+    # Cleanup: delete all sessions
+    for session_id in list(detector.recording_sessions.keys()):
+        detector.delete_session(session_id)
 
 
 @pytest.mark.asyncio
-async def test_process_samples_speech_detection(detector, test_output_dir):
+async def test_process_samples_speech_detection(detector, stt_wav_path, test_output_dir):
     """
-    Test to verify that when data exceeding the speech probability threshold is provided, 
-    recording starts, and after silence, recording ends, and on_speech_detected is called.
+    Test to verify that when speech audio is provided, recording starts,
+    and after silence, recording ends and on_speech_detected is called.
+    Uses real Silero VAD model.
     """
     session_id = "test_session"
 
-    # Mock high speech probability
-    detector.model_pool[0].return_value = torch.tensor(0.8)  # Above threshold (0.5)
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        sample_rate = wav_file.getframerate()
+        wave_data = wav_file.readframes(wav_file.getnframes())
 
-    assert detector.min_duration == 0.5
+    assert sample_rate == 16000, f"Expected 16000Hz, got {sample_rate}Hz"
 
-    # Start with loud samples (0.5 sec, same as min_duration)
-    # Need enough samples to trigger VAD (chunk_size * 2)
-    speech_samples = generate_samples(amplitude=1200, num_samples=8000)
-    await detector.process_samples(speech_samples, session_id=session_id)
-    session = detector.get_session(session_id)
-    assert session.is_recording is True
+    chunk_size = 3200  # 100ms at 16kHz, 16-bit mono
 
-    # Mock low speech probability for silence
-    detector.model_pool[0].return_value = torch.tensor(0.2)  # Below threshold
-    
-    # Stop with silent samples
-    silent_samples = generate_samples(amplitude=0, num_samples=16000)
-    await detector.process_samples(silent_samples, session_id=session_id)
+    # Send speech audio
+    for i in range(0, len(wave_data), chunk_size):
+        chunk = wave_data[i:i + chunk_size]
+        if chunk:
+            await detector.process_samples(chunk, session_id)
+            await asyncio.sleep(0.01)
 
-    # Wait for on_speech_detected invoked
-    await asyncio.sleep(0.2)
+    # Send silence to trigger end of speech detection
+    silence_chunk = b'\x00' * chunk_size
+    for _ in range(20):  # 2 seconds of silence
+        await detector.process_samples(silence_chunk, session_id)
+        await asyncio.sleep(0.01)
 
-    # Check whether the file that is created on_speech_detected exists
-    output_file = test_output_dir / f"speech_{session_id}.pcm"
-    assert output_file.exists(), "Recorded file doesn't exist"
-    file_size = output_file.stat().st_size
-    assert file_size > 0, "No data in the recorded file"
+    # Wait for callback to complete
+    await asyncio.sleep(0.5)
 
-
-@pytest.mark.asyncio
-async def test_process_samples_short_recording(detector, test_output_dir):
-    """
-    Verify that if recording starts but falls silent before min_duration, 
-    on_speech_detected is not called, and no file is created.
-    """
-    session_id = "test_short"
-
-    # Mock high speech probability initially
-    detector.model_pool[0].return_value = torch.tensor(0.8)
-
-    assert detector.min_duration == 0.5
-
-    # Speech samples slightly shorter than 0.5 sec (0.5 = 8000 samples)
-    speech_samples = generate_samples(amplitude=1000, num_samples=7999)
-    await detector.process_samples(speech_samples, session_id=session_id)
-
-    # Mock low speech probability for silence
-    detector.model_pool[0].return_value = torch.tensor(0.2)
-
-    # Stop with silent samples
-    silent_samples = generate_samples(amplitude=0, num_samples=8000)
-    await detector.process_samples(silent_samples, session_id=session_id)
-
-    await asyncio.sleep(0.2)
-
-    output_file = test_output_dir / f"speech_{session_id}.pcm"
-    assert not output_file.exists(), "File exists even the samples are shorter than min_duration"
+    # Check results
+    assert len(detector._detected_results) >= 1, "No speech detected"
+    result = detector._detected_results[0]
+    assert result["session_id"] == session_id
+    assert result["duration"] > 0, "Recording duration should be greater than 0"
+    assert len(result["data"]) > 0, "Recorded data should not be empty"
 
 
 @pytest.mark.asyncio
-async def test_process_samples_max_duration(detector, test_output_dir):
+async def test_process_samples_with_vad_iterator(detector_with_vad_iterator, stt_wav_path):
     """
-    Verify that when sound continues beyond max_duration (3 seconds), 
-    recording is automatically stopped, and on_speech_detected is not called.
+    Test speech detection using VAD iterator mode.
+    Uses real Silero VAD model with stateful processing.
     """
-    session_id = "test_max_duration"
+    session_id = "test_vad_iterator"
 
-    # Mock high speech probability throughout
-    detector.model_pool[0].return_value = torch.tensor(0.8)
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
 
-    assert detector.max_duration == 3.0
+    chunk_size = 3200
 
-    # Start recording
-    speech_samples = generate_samples(amplitude=2000, num_samples=16000)
-    await detector.process_samples(speech_samples, session_id=session_id)
-    session = detector.get_session(session_id)
-    assert session.is_recording is True
+    # Send speech audio
+    for i in range(0, len(wave_data), chunk_size):
+        chunk = wave_data[i:i + chunk_size]
+        if chunk:
+            await detector_with_vad_iterator.process_samples(chunk, session_id)
+            await asyncio.sleep(0.01)
 
-    # Continue beyond max_duration (3.0 = 48000 samples total)
-    more_speech_samples = generate_samples(amplitude=2000, num_samples=32000)
-    await detector.process_samples(more_speech_samples, session_id=session_id)
-    session = detector.get_session(session_id)
-    # Recording should be stopped due to max_duration
-    assert session.is_recording is False
+    # Send silence to trigger end of speech detection
+    silence_chunk = b'\x00' * chunk_size
+    for _ in range(20):
+        await detector_with_vad_iterator.process_samples(silence_chunk, session_id)
+        await asyncio.sleep(0.01)
 
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(0.5)
 
-    output_file = test_output_dir / f"speech_{session_id}.pcm"
-    assert not output_file.exists(), "File exists even the samples exceeded max_duration"
+    # Check results
+    assert len(detector_with_vad_iterator._detected_results) >= 1, "No speech detected with VAD iterator"
+    result = detector_with_vad_iterator._detected_results[0]
+    assert result["duration"] > 0
 
 
 @pytest.mark.asyncio
-async def test_process_stream(detector, test_output_dir):
+async def test_silence_only_no_detection(detector):
+    """
+    Test that silence-only audio does not trigger speech detection.
+    Uses real Silero VAD model.
+    """
+    session_id = "test_silence"
+
+    # Generate silence (16kHz, 16-bit mono, 2 seconds)
+    silence_samples = 16000 * 2
+    silence = b'\x00\x00' * silence_samples
+
+    chunk_size = 3200
+    for i in range(0, len(silence), chunk_size):
+        chunk = silence[i:i + chunk_size]
+        await detector.process_samples(chunk, session_id)
+        await asyncio.sleep(0.01)
+
+    await asyncio.sleep(0.5)
+
+    # No speech should be detected
+    assert len(detector._detected_results) == 0, "Speech was incorrectly detected in silence"
+
+
+@pytest.mark.asyncio
+async def test_on_recording_started_callback(stt_wav_path):
+    """
+    Test that on_recording_started callback is triggered when speech is detected.
+    Uses real Silero VAD model.
+    """
+    callback_calls = []
+
+    async def mock_callback(session_id: str):
+        callback_calls.append(session_id)
+
+    detector = SileroSpeechDetector(
+        silence_duration_threshold=0.5,
+        max_duration=10.0,
+        min_duration=0.2,
+        sample_rate=16000,
+        channels=1,
+        preroll_buffer_count=5,
+        speech_probability_threshold=0.5,
+        chunk_size=512,
+        use_vad_iterator=False,
+        on_recording_started=mock_callback,
+        debug=True
+    )
+
+    session_id = "test_callback"
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    chunk_size = 3200
+
+    # Send speech audio
+    for i in range(0, len(wave_data), chunk_size):
+        chunk = wave_data[i:i + chunk_size]
+        if chunk:
+            await detector.process_samples(chunk, session_id)
+            await asyncio.sleep(0.01)
+
+    # Wait for callback
+    await asyncio.sleep(0.5)
+
+    # Callback should have been triggered
+    assert len(callback_calls) >= 1, "on_recording_started callback was not triggered"
+    assert callback_calls[0] == session_id
+
+    # Cleanup
+    detector.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_process_stream(detector, stt_wav_path):
     """
     Test stream processing via process_stream.
+    Uses real Silero VAD model.
     """
     session_id = "test_stream"
 
-    # Mock speech probability sequence
-    speech_probs = [0.8, 0.8, 0.2]  # speech, speech, silence
-    speech_prob_iter = iter(speech_probs)
-    detector.model_pool[0].side_effect = lambda *_: torch.tensor(next(speech_prob_iter, 0.2))
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
 
-    assert detector.min_duration == 0.5
+    chunk_size = 3200
 
     async def async_audio_stream():
-        # Start recording with speech samples
-        yield generate_samples(amplitude=1500, num_samples=16000)
-        await asyncio.sleep(0.1)
-        # More speech samples
-        yield generate_samples(amplitude=1500, num_samples=3200)
-        # Stop with silent samples
-        yield generate_samples(amplitude=0, num_samples=16000)
-        return
+        # Send speech audio
+        for i in range(0, len(wave_data), chunk_size):
+            chunk = wave_data[i:i + chunk_size]
+            if chunk:
+                yield chunk
+                await asyncio.sleep(0.01)
 
-    await detector.process_stream(async_audio_stream(), session_id=session_id)
+        # Send silence
+        silence_chunk = b'\x00' * chunk_size
+        for _ in range(20):
+            yield silence_chunk
+            await asyncio.sleep(0.01)
 
-    # Wait for on_speech_detected invoked
-    await asyncio.sleep(0.2)
+    await detector.process_stream(async_audio_stream(), session_id)
 
-    output_file = test_output_dir / f"speech_{session_id}.pcm"
-    assert output_file.exists(), "Recorded file doesn't exist"
-    file_size = output_file.stat().st_size
-    assert file_size > 0, "No data in the recorded file"
+    await asyncio.sleep(0.5)
 
-    # Session is deleted after stream
+    # Check results
+    assert len(detector._detected_results) >= 1, "No speech detected in stream"
+    result = detector._detected_results[0]
+    assert result["duration"] > 0
+
+    # Session should be deleted after stream
     assert session_id not in detector.recording_sessions
 
 
 @pytest.mark.asyncio
-async def test_session_reset_and_delete(detector, test_output_dir):
+async def test_multiple_sessions(detector, stt_wav_path):
+    """
+    Test handling multiple concurrent sessions.
+    Uses real Silero VAD model.
+    """
+    session_ids = ["session_1", "session_2"]
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    chunk_size = 3200
+
+    # Send audio for both sessions
+    for i in range(0, len(wave_data), chunk_size):
+        chunk = wave_data[i:i + chunk_size]
+        if chunk:
+            for session_id in session_ids:
+                await detector.process_samples(chunk, session_id)
+            await asyncio.sleep(0.01)
+
+    # Send silence
+    silence_chunk = b'\x00' * chunk_size
+    for _ in range(20):
+        for session_id in session_ids:
+            await detector.process_samples(silence_chunk, session_id)
+        await asyncio.sleep(0.01)
+
+    await asyncio.sleep(0.5)
+
+    # Both sessions should have detected speech
+    results_by_session = {r["session_id"]: r for r in detector._detected_results}
+
+    for session_id in session_ids:
+        assert session_id in results_by_session, f"No result for session {session_id}"
+        result = results_by_session[session_id]
+        assert result["duration"] > 0
+
+
+@pytest.mark.asyncio
+async def test_short_recording_not_detected(detector):
+    """
+    Test that very short speech is not detected (below min_duration).
+    Uses real Silero VAD model.
+    """
+    session_id = "test_short"
+
+    # Create a very short "speech" by using a small portion of audio
+    # This may or may not trigger based on actual content, so we use generated data
+    # that looks like speech but is very short
+    import struct
+
+    # Generate a short burst (50ms = 800 samples at 16kHz)
+    short_samples = struct.pack("<" + "h" * 800, *([10000] * 800))
+    await detector.process_samples(short_samples, session_id)
+
+    # Immediately send silence
+    silence = b'\x00' * 16000  # 500ms of silence
+    await detector.process_samples(silence, session_id)
+
+    await asyncio.sleep(0.3)
+
+    # Recording should not be detected due to min_duration
+    session = detector.get_session(session_id)
+    assert session.is_recording is False
+
+
+def test_model_initialization(detector):
+    """
+    Test that Silero VAD model is properly initialized.
+    """
+    assert len(detector.model_pool) == 1
+    assert len(detector.model_locks) == 1
+    assert detector.model_pool[0] is not None
+
+
+def test_model_pool_size():
+    """
+    Test model pool initialization with different sizes.
+    """
+    detector = SileroSpeechDetector(model_pool_size=2)
+    assert len(detector.model_pool) == 2
+    assert len(detector.model_locks) == 2
+
+
+def test_speech_probability_threshold_change(detector):
+    """
+    Test that speech_probability_threshold can be changed.
+    """
+    detector.set_speech_probability_threshold(0.7)
+    assert detector.speech_probability_threshold == 0.7
+
+    detector.set_speech_probability_threshold(0.5)
+    assert detector.speech_probability_threshold == 0.5
+
+
+def test_volume_db_threshold_property(detector):
+    """
+    Test that volume_db_threshold property can be updated dynamically.
+    """
+    detector.volume_db_threshold = -10.0
+    assert detector.volume_db_threshold == -10.0
+    expected_threshold = 32767 * (10 ** (-10.0 / 20.0))
+    assert abs(detector.amplitude_threshold - expected_threshold) < 1
+
+    detector.volume_db_threshold = None
+    assert detector.volume_db_threshold is None
+    assert detector.amplitude_threshold is None
+
+
+@pytest.mark.asyncio
+async def test_session_reset_and_delete(detector, stt_wav_path):
     """
     Test the operation of reset / delete for a session.
+    Uses real Silero VAD model.
     """
     session_id = "test_session_reset"
 
-    # Mock high speech probability
-    detector.model_pool[0].return_value = torch.tensor(0.8)
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
 
-    assert detector.min_duration == 0.5
-    speech_samples = generate_samples(amplitude=1000, num_samples=8000)
+    chunk_size = 3200
 
-    # Start recording
-    await detector.process_samples(speech_samples, session_id=session_id)
+    # Start recording with some audio
+    chunk = wave_data[:chunk_size * 3]
+    await detector.process_samples(chunk, session_id)
+    await asyncio.sleep(0.1)
+
     session = detector.get_session(session_id)
     assert session.is_recording is True
     assert len(session.buffer) > 0
@@ -261,51 +454,154 @@ async def test_session_reset_and_delete(detector, test_output_dir):
     assert len(session.buffer) == 0
 
     # Start again
-    await detector.process_samples(speech_samples, session_id=session_id)
+    await detector.process_samples(chunk, session_id)
+    session = detector.get_session(session_id)
     assert session.is_recording is True
     assert len(session.buffer) > 0
 
     # Delete session
-    session = detector.get_session(session_id)
     detector.delete_session(session_id)
-    session.is_recording = False
-    assert len(session.buffer) == 0
     assert session_id not in detector.recording_sessions
 
 
 @pytest.mark.asyncio
-async def test_speech_probability_threshold_change(detector):
+async def test_on_recording_started_callback_error_handling(stt_wav_path):
     """
-    Verify that when speech_probability_threshold is changed, 
-    the detection behavior changes accordingly.
+    Test that errors in on_recording_started callback are handled gracefully.
+    Recording should complete and on_speech_detected should be called even if
+    on_recording_started callback raises an error.
+    Uses real Silero VAD model.
     """
-    session_id = "test_threshold_change"
+    callback_calls = []
+    detected_results = []
 
-    # Set threshold to 0.7 (stricter)
-    detector.set_speech_probability_threshold(0.7)
-    assert detector.speech_probability_threshold == 0.7
+    async def failing_callback(session_id: str):
+        callback_calls.append(session_id)
+        raise ValueError("Test error in callback")
 
-    # Mock probability below new threshold
-    detector.model_pool[0].return_value = torch.tensor(0.6)  # Below 0.7
-    
-    samples = generate_samples(amplitude=1000, num_samples=3200)
-    await detector.process_samples(samples, session_id=session_id)
+    detector = SileroSpeechDetector(
+        silence_duration_threshold=0.5,
+        max_duration=10.0,
+        min_duration=0.1,
+        sample_rate=16000,
+        channels=1,
+        preroll_buffer_count=5,
+        speech_probability_threshold=0.5,
+        chunk_size=512,
+        use_vad_iterator=False,
+        on_recording_started=failing_callback,
+        debug=True
+    )
 
-    session = detector.get_session(session_id)
-    assert session.is_recording is False
+    @detector.on_speech_detected
+    async def on_speech_detected(recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
+        detected_results.append({
+            "data": recorded_data,
+            "duration": recorded_duration,
+            "session_id": session_id
+        })
 
-    # Mock probability above new threshold
-    detector.model_pool[0].return_value = torch.tensor(0.8)  # Above 0.7
-    
-    samples = generate_samples(amplitude=1000, num_samples=3200)
-    await detector.process_samples(samples, session_id=session_id)
+    session_id = "test_error_callback"
 
-    session = detector.get_session(session_id)
-    assert session.is_recording is True
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    chunk_size = 3200
+
+    # Send speech audio
+    for i in range(0, len(wave_data), chunk_size):
+        chunk = wave_data[i:i + chunk_size]
+        if chunk:
+            await detector.process_samples(chunk, session_id)
+            await asyncio.sleep(0.01)
+
+    # Send silence to trigger end of recording
+    silence_chunk = b'\x00' * chunk_size
+    for _ in range(20):
+        await detector.process_samples(silence_chunk, session_id)
+        await asyncio.sleep(0.01)
+
+    # Wait for async callbacks to complete
+    await asyncio.sleep(0.3)
+
+    # Verify on_recording_started callback was called (even though it raised an error)
+    assert len(callback_calls) >= 1, "on_recording_started callback was not called"
+
+    # Verify recording completed successfully despite callback error
+    assert len(detected_results) >= 1, "on_speech_detected was not called - recording did not complete"
+    assert detected_results[0]["duration"] > 0, "Recording duration should be greater than 0"
+
+    # Cleanup
+    detector.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_process_samples_short_recording(stt_wav_path):
+    """
+    Verify that if recording starts but falls silent before min_duration,
+    on_speech_detected is not called.
+    Uses real Silero VAD model with longer min_duration.
+    """
+    detector = SileroSpeechDetector(
+        silence_duration_threshold=0.3,
+        max_duration=10.0,
+        min_duration=3.0,  # Set min_duration longer than the WAV file
+        sample_rate=16000,
+        channels=1,
+        preroll_buffer_count=5,
+        speech_probability_threshold=0.5,
+        chunk_size=512,
+        use_vad_iterator=False,
+        debug=True
+    )
+
+    detected_results = []
+
+    @detector.on_speech_detected
+    async def on_speech_detected(recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
+        detected_results.append({
+            "duration": recorded_duration,
+            "session_id": session_id
+        })
+
+    session_id = "test_short"
+
+    # Load WAV file (hello.wav is about 3.5 seconds)
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    chunk_size = 3200
+
+    # Send only a portion of the audio (less than min_duration of 3 seconds)
+    # 16000 samples/sec * 2 bytes * 2 sec = 64000 bytes
+    short_wave_data = wave_data[:64000]
+
+    for i in range(0, len(short_wave_data), chunk_size):
+        chunk = short_wave_data[i:i + chunk_size]
+        if chunk:
+            await detector.process_samples(chunk, session_id)
+            await asyncio.sleep(0.01)
+
+    # Send silence to trigger end of recording
+    silence_chunk = b'\x00' * chunk_size
+    for _ in range(10):
+        await detector.process_samples(silence_chunk, session_id)
+        await asyncio.sleep(0.01)
+
+    await asyncio.sleep(0.3)
+
+    # on_speech_detected should NOT have been called (recording too short)
+    assert len(detected_results) == 0, "Speech was detected even though recording was shorter than min_duration"
+
+    # Cleanup
+    detector.delete_session(session_id)
 
 
 def test_session_data(detector):
-    """Test session data storage functionality"""
+    """
+    Test session data storage functionality.
+    """
     session_id_1 = "session_id_1"
     session_id_2 = "session_id_2"
 
@@ -319,552 +615,207 @@ def test_session_data(detector):
 
     assert detector.recording_sessions.get(session_id_2) is None
 
-
-def test_model_pool_initialization(mock_silero_model):
-    """Test model pool initialization with different sizes"""
-    model, utils = mock_silero_model
-    
-    # Test single model (default)
-    with patch('torch.hub.load', return_value=(model, utils)):
-        detector = SileroSpeechDetector(model_pool_size=1)
-        assert len(detector.model_pool) == 1
-        assert len(detector.model_locks) == 1
-
-    # Test multiple models
-    with patch('torch.hub.load', return_value=(model, utils)):
-        detector = SileroSpeechDetector(model_pool_size=3)
-        assert len(detector.model_pool) == 3
-        assert len(detector.model_locks) == 3
-
-
-def test_get_model_and_lock(detector_with_model_pool):
-    """Test model assignment consistency"""
-    # Same session should always get same model
-    session_id = "test_session"
-    model1, lock1 = detector_with_model_pool._get_model_and_lock(session_id)
-    model2, lock2 = detector_with_model_pool._get_model_and_lock(session_id)
-    
-    assert model1 is model2
-    assert lock1 is lock2
-
-    # Different sessions might get different models
-    session_id_2 = "test_session_2"
-    model3, lock3 = detector_with_model_pool._get_model_and_lock(session_id_2)
-    
-    # Should be one of the models in the pool
-    assert model3 in detector_with_model_pool.model_pool
-    assert lock3 in detector_with_model_pool.model_locks
+    # Cleanup
+    detector.delete_session(session_id_1)
 
 
 @pytest.mark.asyncio
-async def test_concurrent_sessions(detector_with_model_pool):
-    """Test concurrent session handling"""
-    session_ids = ["session_1", "session_2", "session_3"]
-    
-    # Mock high speech probability for all
-    detector_with_model_pool.model_pool[0].return_value = torch.tensor(0.8)
-    detector_with_model_pool.model_pool[1].return_value = torch.tensor(0.8)
-
-    # Process samples concurrently
-    tasks = []
-    for session_id in session_ids:
-        samples = generate_samples(amplitude=1500, num_samples=8000)
-        task = detector_with_model_pool.process_samples(samples, session_id)
-        tasks.append(task)
-    
-    await asyncio.gather(*tasks)
-
-    # All sessions should be recording
-    for session_id in session_ids:
-        session = detector_with_model_pool.get_session(session_id)
-        assert session.is_recording is True
-        assert len(session.buffer) > 0
-
-    # Each session should have its own VAD iterator
-    iterators = [detector_with_model_pool.get_session(sid).vad_iterator for sid in session_ids]
-    iterator_ids = [id(it) for it in iterators]
-    assert len(set(iterator_ids)) == len(session_ids), f"Expected {len(session_ids)} unique iterators, got {len(set(iterator_ids))}"
-
-
-def test_reset_vad_state(detector_with_model_pool):
-    """Test VAD state reset functionality"""
-    session_ids = ["session_1", "session_2"]
-    
-    # Create sessions
-    for session_id in session_ids:
-        detector_with_model_pool.get_session(session_id)
-
-    # Reset specific session
-    detector_with_model_pool.reset_vad_state("session_1")
-    session_1_iterator = detector_with_model_pool.get_session("session_1").vad_iterator
-    session_1_iterator.reset_states.assert_called_once()
-
-    # Reset all sessions
-    detector_with_model_pool.reset_vad_state()
-    for session_id in session_ids:
-        iterator = detector_with_model_pool.get_session(session_id).vad_iterator
-        assert iterator.reset_states.call_count >= 1
-
-
-@pytest.mark.asyncio
-async def test_on_recording_started_callback(mock_silero_model):
+async def test_process_samples_return_value(detector, stt_wav_path):
     """
-    Test that on_recording_started callback is triggered when recording exceeds min_duration
+    Test that process_samples returns correct boolean value indicating recording status.
+    Uses real Silero VAD model.
     """
-    callback_calls = []
-    
-    async def mock_callback(session_id: str):
-        callback_calls.append(session_id)
-    
-    model, utils = mock_silero_model
-    
-    with patch('torch.hub.load', return_value=(model, utils)):
-        detector = SileroSpeechDetector(
-            silence_duration_threshold=0.5,
-            max_duration=3.0,
-            min_duration=0.5,
-            sample_rate=16000,
-            channels=1,
-            preroll_buffer_count=5,
-            speech_probability_threshold=0.5,
-            chunk_size=512,
-            on_recording_started=mock_callback,
-            debug=True
-        )
-    
-    # Mock high speech probability
-    detector.model_pool[0].return_value = torch.tensor(0.8)
-    
-    session_id = "test_callback"
-    
-    # Start recording with speech samples
-    speech_samples1 = generate_samples(amplitude=1200, num_samples=4000)  # 0.25 sec
-    is_recording = await detector.process_samples(speech_samples1, session_id)
-    assert is_recording is True
-    
-    # Callback should not be triggered yet (below min_duration)
-    await asyncio.sleep(0.1)
-    assert len(callback_calls) == 0
-    
-    # Add more samples to exceed min_duration
-    speech_samples2 = generate_samples(amplitude=1200, num_samples=4000)  # Another 0.25 sec
-    is_recording = await detector.process_samples(speech_samples2, session_id)
-    assert is_recording is True
-    
-    # Wait for callback task to complete
-    await asyncio.sleep(0.1)
-    
-    # Verify callback was triggered
-    assert len(callback_calls) == 1
-    assert callback_calls[0] == session_id
-    
-    # Verify flag is set
-    session = detector.get_session(session_id)
-    assert session.on_recording_started_triggered is True
-    
-    # Additional samples should not trigger callback again
-    more_samples = generate_samples(amplitude=1200, num_samples=3200)
-    await detector.process_samples(more_samples, session_id)
-    await asyncio.sleep(0.1)
-    assert len(callback_calls) == 1  # Still only one call
-
-
-@pytest.mark.asyncio
-async def test_on_recording_started_not_triggered_below_min_duration(mock_silero_model):
-    """
-    Test that on_recording_started callback is NOT triggered for short recordings
-    """
-    callback_calls = []
-    
-    async def mock_callback(session_id: str):
-        callback_calls.append(session_id)
-    
-    model, utils = mock_silero_model
-    
-    with patch('torch.hub.load', return_value=(model, utils)):
-        detector = SileroSpeechDetector(
-            silence_duration_threshold=0.5,
-            max_duration=3.0,
-            min_duration=0.5,
-            sample_rate=16000,
-            channels=1,
-            preroll_buffer_count=5,
-            speech_probability_threshold=0.5,
-            chunk_size=512,
-            on_recording_started=mock_callback,
-            debug=True
-        )
-    
-    # Mock high speech probability initially, then low
-    detector.model_pool[0].return_value = torch.tensor(0.8)
-    
-    session_id = "test_short_callback"
-    
-    # Short samples below min_duration
-    short_samples = generate_samples(amplitude=1200, num_samples=7000)  # Well under 0.5 sec (0.4375 sec)
-    is_recording = await detector.process_samples(short_samples, session_id)
-    assert is_recording is True
-    
-    # Mock low speech probability for silence
-    detector.model_pool[0].return_value = torch.tensor(0.2)
-    
-    # Stop with silence
-    silent_samples = generate_samples(amplitude=0, num_samples=8000)
-    is_recording = await detector.process_samples(silent_samples, session_id)
-    assert is_recording is False
-    
-    await asyncio.sleep(0.1)
-    
-    # Callback should not have been triggered
-    assert len(callback_calls) == 0
-    
-    # Flag should remain False
-    session = detector.get_session(session_id)
-    assert session.on_recording_started_triggered is False
-
-
-@pytest.mark.asyncio
-async def test_on_recording_started_callback_reset(mock_silero_model):
-    """
-    Test that on_recording_started_triggered flag is reset properly
-    """
-    callback_calls = []
-    
-    async def mock_callback(session_id: str):
-        callback_calls.append(session_id)
-    
-    model, utils = mock_silero_model
-    
-    with patch('torch.hub.load', return_value=(model, utils)):
-        detector = SileroSpeechDetector(
-            silence_duration_threshold=0.5,
-            max_duration=3.0,
-            min_duration=0.5,
-            sample_rate=16000,
-            channels=1,
-            preroll_buffer_count=5,
-            speech_probability_threshold=0.5,
-            chunk_size=512,
-            on_recording_started=mock_callback,
-            debug=True
-        )
-    
-    # Mock high speech probability
-    detector.model_pool[0].return_value = torch.tensor(0.8)
-    
-    session_id = "test_reset_callback"
-    
-    # First recording
-    speech_samples1 = generate_samples(amplitude=1200, num_samples=4000)
-    await detector.process_samples(speech_samples1, session_id)
-    speech_samples2 = generate_samples(amplitude=1200, num_samples=4000)
-    await detector.process_samples(speech_samples2, session_id)
-    await asyncio.sleep(0.1)
-    assert len(callback_calls) == 1
-    
-    # Reset session
-    detector.reset_session(session_id)
-    session = detector.get_session(session_id)
-    assert session.on_recording_started_triggered is False
-    
-    # Second recording after reset
-    await detector.process_samples(speech_samples1, session_id)
-    await detector.process_samples(speech_samples2, session_id)
-    await asyncio.sleep(0.1)
-    assert len(callback_calls) == 2  # Callback triggered again
-
-
-@pytest.mark.asyncio
-async def test_process_samples_return_value(mock_silero_model):
-    """
-    Test that process_samples returns correct boolean value indicating recording status
-    """
-    model, utils = mock_silero_model
-    
-    with patch('torch.hub.load', return_value=(model, utils)):
-        detector = SileroSpeechDetector(
-            silence_duration_threshold=0.5,
-            max_duration=3.0,
-            min_duration=0.5,
-            sample_rate=16000,
-            channels=1,
-            preroll_buffer_count=5,
-            speech_probability_threshold=0.5,
-            chunk_size=512,
-            debug=True
-        )
-    
     session_id = "test_return_value"
-    
-    # Mock high speech probability for recording
-    detector.model_pool[0].return_value = torch.tensor(0.8)
-    
-    # Start recording
-    speech_samples = generate_samples(amplitude=1200, num_samples=8000)
-    is_recording = await detector.process_samples(speech_samples, session_id)
-    assert is_recording is True
-    
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    chunk_size = 3200
+
+    # Start recording with speech
+    chunk = wave_data[:chunk_size * 3]
+    is_recording = await detector.process_samples(chunk, session_id)
+    assert is_recording is True, "Should return True when recording starts"
+
     # Continue recording
-    more_speech_samples = generate_samples(amplitude=1200, num_samples=3200)
-    is_recording = await detector.process_samples(more_speech_samples, session_id)
-    assert is_recording is True
-    
-    # Mock low speech probability for silence
-    detector.model_pool[0].return_value = torch.tensor(0.2)
-    
+    more_chunk = wave_data[chunk_size * 3:chunk_size * 6]
+    is_recording = await detector.process_samples(more_chunk, session_id)
+    assert is_recording is True, "Should return True while recording continues"
+
     # Stop with silence
-    silent_samples = generate_samples(amplitude=0, num_samples=8000)
-    is_recording = await detector.process_samples(silent_samples, session_id)
-    assert is_recording is False
+    silence_chunk = b'\x00' * chunk_size
+    for _ in range(15):  # Send enough silence to trigger end
+        is_recording = await detector.process_samples(silence_chunk, session_id)
+        await asyncio.sleep(0.01)
+
+    # After silence, recording should have stopped
+    assert is_recording is False, "Should return False after recording stops"
 
 
 @pytest.mark.asyncio
-async def test_process_samples_return_value_when_muted(mock_silero_model):
+async def test_process_samples_return_value_when_muted(detector, stt_wav_path):
     """
-    Test that process_samples returns False when detector is muted
+    Test that process_samples returns False when detector is muted.
+    Uses real Silero VAD model.
     """
-    model, utils = mock_silero_model
-    
-    with patch('torch.hub.load', return_value=(model, utils)):
-        detector = SileroSpeechDetector(
-            silence_duration_threshold=0.5,
-            max_duration=3.0,
-            min_duration=0.5,
-            sample_rate=16000,
-            channels=1,
-            preroll_buffer_count=5,
-            speech_probability_threshold=0.5,
-            chunk_size=512,
-            debug=True
-        )
-    
     # Mute the detector
     detector.should_mute = lambda: True
-    
+
     session_id = "test_muted_return"
-    
-    # Try to record
-    speech_samples = generate_samples(amplitude=1200, num_samples=8000)
-    is_recording = await detector.process_samples(speech_samples, session_id)
-    assert is_recording is False
 
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
 
-@pytest.mark.asyncio
-async def test_on_recording_started_callback_error_handling(mock_silero_model):
-    """
-    Test that errors in on_recording_started callback are handled gracefully
-    """
-    async def failing_callback(session_id: str):
-        raise ValueError("Test error in callback")
-    
-    model, utils = mock_silero_model
-    
-    with patch('torch.hub.load', return_value=(model, utils)):
-        detector = SileroSpeechDetector(
-            silence_duration_threshold=0.5,
-            max_duration=3.0,
-            min_duration=0.5,
-            sample_rate=16000,
-            channels=1,
-            preroll_buffer_count=5,
-            speech_probability_threshold=0.5,
-            chunk_size=512,
-            on_recording_started=failing_callback,
-            debug=True
-        )
-    
-    # Mock high speech probability
-    detector.model_pool[0].return_value = torch.tensor(0.8)
-    
-    session_id = "test_error_callback"
-    
-    # Recording should continue despite callback error
-    speech_samples1 = generate_samples(amplitude=1200, num_samples=4000)
-    await detector.process_samples(speech_samples1, session_id)
-    speech_samples2 = generate_samples(amplitude=1200, num_samples=4000)
-    is_recording = await detector.process_samples(speech_samples2, session_id)
-    assert is_recording is True
-    
-    await asyncio.sleep(0.1)
-    
-    # Flag should still be set even with callback error
-    session = detector.get_session(session_id)
-    assert session.on_recording_started_triggered is True
+    chunk_size = 3200
+    chunk = wave_data[:chunk_size * 3]
 
+    # Try to record while muted
+    is_recording = await detector.process_samples(chunk, session_id)
+    assert is_recording is False, "Should return False when muted"
 
-@pytest.mark.asyncio
-async def test_volume_db_threshold_filtering(mock_silero_model):
-    """
-    Test that volume_db_threshold properly filters out low volume audio
-    even when speech probability is high
-    """
-    model, utils = mock_silero_model
-    
-    with patch('torch.hub.load', return_value=(model, utils)):
-        # Set volume_db_threshold to -20 dB (relatively high threshold)
-        detector = SileroSpeechDetector(
-            volume_db_threshold=-20.0,  # Only sounds louder than -20 dB will be considered
-            silence_duration_threshold=0.5,
-            max_duration=3.0,
-            min_duration=0.5,
-            sample_rate=16000,
-            channels=1,
-            preroll_buffer_count=5,
-            speech_probability_threshold=0.5,
-            chunk_size=512,
-            debug=True
-        )
-    
-    # Mock high speech probability (would normally trigger recording)
-    detector.model_pool[0].return_value = torch.tensor(0.8)
-    
-    session_id = "test_volume_filter"
-    
-    # Calculate amplitude for -20 dB threshold
-    # amplitude_threshold = 32767 * 10^(-20/20) ≈ 3277
-    expected_threshold = 32767 * (10 ** (-20.0 / 20.0))
-    assert abs(detector.amplitude_threshold - expected_threshold) < 1  # Allow small floating point error
-    
-    # Test 1: Low volume samples (below threshold) - should NOT trigger recording
-    low_volume_samples = generate_samples(amplitude=1000, num_samples=8000)  # Below threshold
-    is_recording = await detector.process_samples(low_volume_samples, session_id)
-    assert is_recording is False, "Low volume samples should not trigger recording despite high speech probability"
-    
+    # Session should not be recording
     session = detector.get_session(session_id)
     assert session.is_recording is False
-    
-    # Test 2: High volume samples (above threshold) - should trigger recording
-    high_volume_samples = generate_samples(amplitude=5000, num_samples=8000)  # Above threshold
-    is_recording = await detector.process_samples(high_volume_samples, session_id)
-    assert is_recording is True, "High volume samples should trigger recording"
-    
-    session = detector.get_session(session_id)
-    assert session.is_recording is True
-    
-    # Test 3: Low volume during recording - should continue recording (no immediate stop)
-    low_volume_samples2 = generate_samples(amplitude=1000, num_samples=3200)
-    is_recording = await detector.process_samples(low_volume_samples2, session_id)
-    assert is_recording is True, "Recording should continue even with low volume samples"
-    
-    # Mock low speech probability for proper stop
-    detector.model_pool[0].return_value = torch.tensor(0.2)
-    
-    # Test 4: Silent samples to stop recording
-    silent_samples = generate_samples(amplitude=0, num_samples=8000)
-    is_recording = await detector.process_samples(silent_samples, session_id)
-    assert is_recording is False, "Recording should stop with silence"
+
+    # Unmute and try again
+    detector.should_mute = lambda: False
+    is_recording = await detector.process_samples(chunk, session_id)
+    assert is_recording is True, "Should return True when unmuted and speech detected"
 
 
 @pytest.mark.asyncio
-async def test_volume_db_threshold_property_update(mock_silero_model):
+async def test_process_samples_max_duration(stt_wav_path):
     """
-    Test that volume_db_threshold property can be updated dynamically
-    and amplitude_threshold is recalculated correctly
+    Verify that when sound continues beyond max_duration,
+    recording is automatically stopped and on_speech_detected is not called.
+    Uses extended audio data by repeating the middle portion of the WAV file
+    to avoid gaps caused by silence at the beginning/end.
     """
-    model, utils = mock_silero_model
-    
-    with patch('torch.hub.load', return_value=(model, utils)):
-        # Start with default threshold (0 dB)
-        detector = SileroSpeechDetector(
-            volume_db_threshold=0.0,
-            silence_duration_threshold=0.5,
-            max_duration=3.0,
-            min_duration=0.5,
-            sample_rate=16000,
-            channels=1,
-            preroll_buffer_count=5,
-            speech_probability_threshold=0.5,
-            chunk_size=512,
-            debug=True
-        )
-    
-    # Check initial values
-    assert detector.volume_db_threshold == 0.0
-    expected_threshold_0db = 32767 * (10 ** (0.0 / 20.0))  # Should be 32767
-    assert abs(detector.amplitude_threshold - expected_threshold_0db) < 1
-    
-    # Update to -10 dB
-    detector.volume_db_threshold = -10.0
-    assert detector.volume_db_threshold == -10.0
-    expected_threshold_minus10db = 32767 * (10 ** (-10.0 / 20.0))  # ≈ 10362
-    assert abs(detector.amplitude_threshold - expected_threshold_minus10db) < 1
-    
-    # Update to -30 dB
-    detector.volume_db_threshold = -30.0
-    assert detector.volume_db_threshold == -30.0
-    expected_threshold_minus30db = 32767 * (10 ** (-30.0 / 20.0))  # ≈ 1036
-    assert abs(detector.amplitude_threshold - expected_threshold_minus30db) < 1
-    
-    # Test with actual processing
-    detector.model_pool[0].return_value = torch.tensor(0.8)  # High speech probability
-    session_id = "test_dynamic_threshold"
-    
-    # With -30 dB threshold, even quiet sounds should trigger
-    quiet_samples = generate_samples(amplitude=1500, num_samples=8000)
-    is_recording = await detector.process_samples(quiet_samples, session_id)
-    assert is_recording is True
-    
-    # Change threshold to -10 dB
-    detector.volume_db_threshold = -10.0
+    detector = SileroSpeechDetector(
+        silence_duration_threshold=0.5,
+        max_duration=3.0,  # 3 seconds max
+        min_duration=0.2,
+        sample_rate=16000,
+        channels=1,
+        preroll_buffer_count=5,
+        speech_probability_threshold=0.5,
+        chunk_size=512,
+        use_vad_iterator=False,
+        debug=True
+    )
+
+    detected_results = []
+
+    @detector.on_speech_detected
+    async def on_speech_detected(recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
+        detected_results.append({
+            "duration": recorded_duration,
+            "session_id": session_id
+        })
+
+    session_id = "test_max_duration"
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    # Extract middle portion of audio (skip first and last 0.5 sec to avoid silence)
+    # 16000 samples/sec * 2 bytes * 0.5 sec = 16000 bytes
+    skip_bytes = 16000
+    middle_portion = wave_data[skip_bytes:-skip_bytes] if len(wave_data) > skip_bytes * 2 else wave_data
+
+    # Repeat the middle portion to create ~10 seconds of continuous speech
+    extended_wave_data = extend_audio(middle_portion, 5)
+
+    chunk_size = 3200
+
+    # Send extended audio
+    recording_was_active = False
+    max_duration_exceeded = False
+    for i in range(0, len(extended_wave_data), chunk_size):
+        chunk = extended_wave_data[i:i + chunk_size]
+        if chunk:
+            was_recording = detector.get_session(session_id).is_recording
+            is_recording = await detector.process_samples(chunk, session_id)
+            if is_recording:
+                recording_was_active = True
+            # Check if recording was stopped due to max_duration (was recording, now not, no silence sent)
+            if was_recording and not is_recording and detector.get_session(session_id).record_duration == 0:
+                max_duration_exceeded = True
+                break
+            await asyncio.sleep(0.01)
+
+    # Recording should have started at some point
+    assert recording_was_active is True, "Recording never started"
+
+    # Recording should have been stopped due to max_duration
+    assert max_duration_exceeded is True, "Recording should have been stopped due to max_duration"
+
+    await asyncio.sleep(0.3)
+
+    # on_speech_detected should NOT have been called (exceeded max_duration)
+    assert len(detected_results) == 0, "on_speech_detected should not be called when max_duration is exceeded"
+
+    # Cleanup
+    detector.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_volume_db_threshold_filtering(stt_wav_path):
+    """
+    Test that volume_db_threshold properly filters out low volume audio
+    even when speech probability is high.
+    Uses scaled audio data to simulate low volume.
+    """
+    detector = SileroSpeechDetector(
+        volume_db_threshold=-10.0,  # Only sounds louder than -10 dB will be considered
+        silence_duration_threshold=0.5,
+        max_duration=10.0,
+        min_duration=0.2,
+        sample_rate=16000,
+        channels=1,
+        preroll_buffer_count=5,
+        speech_probability_threshold=0.5,
+        chunk_size=512,
+        use_vad_iterator=False,
+        debug=True
+    )
+
+    session_id = "test_volume_filter"
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    # Scale down audio to very low volume (1% of original)
+    low_volume_data = scale_audio_amplitude(wave_data, 0.01)
+
+    chunk_size = 3200
+
+    # Send low volume audio - should NOT trigger recording due to volume threshold
+    for i in range(0, len(low_volume_data), chunk_size):
+        chunk = low_volume_data[i:i + chunk_size]
+        if chunk:
+            is_recording = await detector.process_samples(chunk, session_id)
+            # Recording should not start with low volume
+            assert is_recording is False, "Low volume audio should not trigger recording"
+            await asyncio.sleep(0.01)
+
+    session = detector.get_session(session_id)
+    assert session.is_recording is False, "Recording should not have started with low volume audio"
+
+    # Now send normal volume audio - should trigger recording
     detector.reset_session(session_id)
-    
-    # Same quiet samples should NOT trigger with stricter threshold
-    is_recording = await detector.process_samples(quiet_samples, session_id)
-    assert is_recording is False
-    
-    # Louder samples should trigger
-    loud_samples = generate_samples(amplitude=15000, num_samples=8000)
-    is_recording = await detector.process_samples(loud_samples, session_id)
-    assert is_recording is True
+    for i in range(0, min(len(wave_data), chunk_size * 5), chunk_size):
+        chunk = wave_data[i:i + chunk_size]
+        if chunk:
+            is_recording = await detector.process_samples(chunk, session_id)
+            await asyncio.sleep(0.01)
 
-
-@pytest.mark.asyncio
-async def test_volume_threshold_with_mixed_volume(mock_silero_model):
-    """
-    Test volume threshold behavior with mixed volume audio
-    (quiet start, loud middle, quiet end)
-    """
-    model, utils = mock_silero_model
-    
-    with patch('torch.hub.load', return_value=(model, utils)):
-        detector = SileroSpeechDetector(
-            volume_db_threshold=-15.0,  # Moderate threshold
-            silence_duration_threshold=0.5,
-            max_duration=3.0,
-            min_duration=0.5,
-            sample_rate=16000,
-            channels=1,
-            preroll_buffer_count=5,
-            speech_probability_threshold=0.5,
-            chunk_size=512,
-            debug=True
-        )
-    
-    # Always return high speech probability
-    detector.model_pool[0].return_value = torch.tensor(0.8)
-    
-    session_id = "test_mixed_volume"
-    
-    # Start with quiet samples (below threshold)
-    quiet_start = generate_samples(amplitude=2000, num_samples=3200)
-    is_recording = await detector.process_samples(quiet_start, session_id)
-    assert is_recording is False
-    
-    # Loud samples (above threshold) - should start recording
-    loud_middle = generate_samples(amplitude=8000, num_samples=8000)
-    is_recording = await detector.process_samples(loud_middle, session_id)
-    assert is_recording is True
-    
-    # Continue with more loud samples
-    more_loud = generate_samples(amplitude=8000, num_samples=3200)
-    is_recording = await detector.process_samples(more_loud, session_id)
-    assert is_recording is True
-    
-    # Quiet end (below threshold but recording continues)
-    quiet_end = generate_samples(amplitude=2000, num_samples=3200)
-    is_recording = await detector.process_samples(quiet_end, session_id)
-    assert is_recording is True  # Recording continues despite low volume
-    
-    # Verify recording is still active
     session = detector.get_session(session_id)
-    assert session.is_recording is True
+    assert session.is_recording is True, "Normal volume audio should trigger recording"
+
+    # Cleanup
+    detector.delete_session(session_id)

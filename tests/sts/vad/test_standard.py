@@ -28,7 +28,7 @@ def detector(test_output_dir):
     )
 
     @detector.on_speech_detected
-    async def on_speech_detected(recorded_data: bytes, recorded_duration: float, session_id: str):
+    async def on_speech_detected(recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
         output_file = test_output_dir / f"speech_{session_id}.pcm"
         with open(output_file, "wb") as f:
             f.write(recorded_data)
