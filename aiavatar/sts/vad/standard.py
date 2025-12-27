@@ -73,7 +73,7 @@ class StandardSpeechDetector(SpeechDetector):
 
     async def execute_on_speech_detected(self, recorded_data: bytes, recorded_duration: float, session_id: str):
         try:
-            await self._on_speech_detected(recorded_data, recorded_duration, session_id)
+            await self._on_speech_detected(recorded_data, None, None, recorded_duration, session_id)
         except Exception as ex:
             logger.error(f"Error in task for session {session_id}: {ex}", exc_info=True)
 
@@ -137,6 +137,8 @@ class StandardSpeechDetector(SpeechDetector):
                             logger.error("Error in on_recording_started callback", exc_info=True)
                     asyncio.create_task(_run(handler, session_id))
 
+            print(f"vad: {session.silence_duration} :: {self.silence_duration_threshold}")
+
             if session.silence_duration >= self.silence_duration_threshold:
                 recorded_duration = session.record_duration - session.silence_duration
                 if recorded_duration < self.min_duration:
@@ -146,6 +148,7 @@ class StandardSpeechDetector(SpeechDetector):
                     if self.debug:
                         logger.info(f"Recording finished: {recorded_duration} sec")
                     recorded_data = bytes(session.buffer)
+                    print("execute!")
                     asyncio.create_task(self.execute_on_speech_detected(recorded_data, recorded_duration, session.session_id))
                 session.reset()
 

@@ -57,6 +57,7 @@ class AIAvatar(AIAvatarClientBase):
         wakeword_timeout: float = 60.0,
         merge_request_threshold: float = 0.0,
         merge_request_prefix: str = "$Previous user's request and your response have been canceled. Please respond again to the following request:\n\n",
+        mute_on_barge_in: bool = False,
         db_connection_str: str = "aiavatar.db",
         session_state_manager: SessionStateManager = None,
         performance_recorder: PerformanceRecorder = None,
@@ -136,6 +137,12 @@ class AIAvatar(AIAvatarClientBase):
         # Noise filter
         self.auto_noise_filter_threshold = auto_noise_filter_threshold
         self.noise_margin = noise_margin
+
+        # Mute immediately on barge-in
+        if mute_on_barge_in:
+            @self.sts.vad.on_recording_started
+            async def mute_on_barge_in(session_id: str):
+                await self.stop_response(session_id, "")
 
     async def send_request(self, request):
         async for r in self.sts.invoke(STSRequest(
