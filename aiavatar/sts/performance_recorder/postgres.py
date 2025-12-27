@@ -3,8 +3,8 @@ from datetime import datetime, timezone
 import logging
 import queue
 import threading
-import time
-import psycopg2
+import asyncio
+import asyncpg
 from . import PerformanceRecorder, PerformanceRecord
 
 logger = logging.getLogger(__name__)
@@ -19,47 +19,63 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
         dbname: str = "aiavatar",
         user: str = "postgres",
         password: str = None,
-        connection_str: str = None
+        connection_str: str = None,
+        db_pool_size: int = 2  # Single worker only needs 1, but 2 provides failover when a connection becomes stale
     ):
-        self.connection_params = {
-            "host": host,
-            "port": port,
-            "dbname": dbname,
-            "user": user,
-            "password": password,
-        }
+        self.host = host
+        self.port = port
+        self.dbname = dbname
+        self.user = user
+        self.password = password
         self.connection_str = connection_str
+        self.db_pool_size = db_pool_size
         self.record_queue = queue.Queue()
         self.stop_event = threading.Event()
-
-        self.init_db()
+        self._pool: asyncpg.Pool = None
+        self._loop: asyncio.AbstractEventLoop = None
 
         self.worker_thread = threading.Thread(target=self.start_worker, daemon=True)
         self.worker_thread.start()
 
-    def connect_db(self):
-        if self.connection_str:
-            return psycopg2.connect(self.connection_str)
-        else:
-            return psycopg2.connect(**self.connection_params)
+    async def get_pool(self) -> asyncpg.Pool:
+        if self._pool is None:
+            if self.connection_str:
+                self._pool = await asyncpg.create_pool(
+                    dsn=self.connection_str,
+                    min_size=self.db_pool_size,
+                    max_size=self.db_pool_size,
+                )
+            else:
+                self._pool = await asyncpg.create_pool(
+                    host=self.host,
+                    port=self.port,
+                    database=self.dbname,
+                    user=self.user,
+                    password=self.password,
+                    min_size=self.db_pool_size,
+                    max_size=self.db_pool_size,
+                )
+            await self.init_db()
+        return self._pool
 
-    def add_column_if_not_exist(self, cur, column_name):
-        cur.execute(
-            f"""
-            SELECT column_name FROM information_schema.columns
-            WHERE table_name='performance_records' AND column_name='{column_name}'
+    async def add_column_if_not_exist(self, conn, column_name):
+        row = await conn.fetchrow(
             """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name='performance_records' AND column_name=$1
+            """,
+            column_name
         )
-        if not cur.fetchone():
-            cur.execute(
+        if not row:
+            await conn.execute(
                 f"ALTER TABLE performance_records ADD COLUMN {column_name} TEXT"
             )
 
-    def init_db(self):
-        conn = self.connect_db()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
+    async def init_db(self):
+        pool = self._pool
+        async with pool.acquire() as conn:
+            try:
+                await conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS performance_records (
                         id SERIAL PRIMARY KEY,
@@ -88,26 +104,32 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
                 )
 
                 # Add request_files column if not exist (migration v0.3.0 -> 0.3.2)
-                self.add_column_if_not_exist(cur, "request_files")
+                await self.add_column_if_not_exist(conn, "request_files")
 
                 # Add user_id column if not exist (migration v0.3.2 -> 0.3.3)
-                self.add_column_if_not_exist(cur, "user_id")
+                await self.add_column_if_not_exist(conn, "user_id")
 
                 # Add transaction_id column if not exist (migration v0.3.3 -> 0.3.4)
-                self.add_column_if_not_exist(cur, "transaction_id")
+                await self.add_column_if_not_exist(conn, "transaction_id")
 
                 # Create index
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_created_at ON performance_records (created_at)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_transaction_id ON performance_records (transaction_id)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON performance_records (user_id)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_context_id ON performance_records (context_id)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_created_at ON performance_records (created_at)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_transaction_id ON performance_records (transaction_id)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON performance_records (user_id)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_context_id ON performance_records (context_id)")
 
-            conn.commit()
-        finally:
-            conn.close()
+            except Exception as ex:
+                logger.error(f"Error at init_db: {ex}")
+                raise
 
     def start_worker(self):
-        conn = self.connect_db()
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_until_complete(self._worker())
+        self._loop.close()
+
+    async def _worker(self):
+        pool = await self.get_pool()
         try:
             while not self.stop_event.is_set() or not self.record_queue.empty():
                 try:
@@ -116,33 +138,27 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
                     continue
 
                 try:
-                    self.insert_record(conn, record)
-                except (psycopg2.InterfaceError, psycopg2.OperationalError):
+                    await self.insert_record(pool, record)
+                except (asyncpg.InterfaceError, asyncpg.PostgresError) as e:
+                    logger.warning(f"Error inserting record, retrying: {e}")
+                    await asyncio.sleep(0.5)
                     try:
-                        conn.close()
-                    except Exception:
-                        pass
-
-                    logger.warning("Connection is not available. Retrying insert_record with new connection...")
-                    time.sleep(0.5)
-                    conn = self.connect_db()
-                    self.insert_record(conn, record)
+                        await self.insert_record(pool, record)
+                    except Exception as retry_error:
+                        logger.error(f"Retry failed: {retry_error}")
 
                 self.record_queue.task_done()
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            if self._pool is not None:
+                await self._pool.close()
 
-    def insert_record(self, conn: psycopg2.extensions.connection, record: PerformanceRecord):
+    async def insert_record(self, pool: asyncpg.Pool, record: PerformanceRecord):
         columns = [field.name for field in fields(PerformanceRecord)] + ["created_at"]
-        placeholders = ["%s"] * len(columns)
+        placeholders = [f"${i+1}" for i in range(len(columns))]
         values = [getattr(record, field.name) for field in fields(PerformanceRecord)] + [datetime.now(timezone.utc)]
         sql = f"INSERT INTO performance_records ({', '.join(columns)}) VALUES ({', '.join(placeholders)})"
-        with conn.cursor() as cur:
-            cur.execute(sql, values)
-        conn.commit()
+        async with pool.acquire() as conn:
+            await conn.execute(sql, *values)
 
     def record(self, record: PerformanceRecord):
         self.record_queue.put(record)

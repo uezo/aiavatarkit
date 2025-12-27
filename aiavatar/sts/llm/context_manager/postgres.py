@@ -2,8 +2,7 @@ from datetime import datetime, timezone, timedelta
 import json
 import logging
 from typing import List, Dict, Union
-import psycopg2
-import psycopg2.extras
+import asyncpg
 from ..base import ContextManager
 
 logger = logging.getLogger(__name__)
@@ -19,31 +18,48 @@ class PostgreSQLContextManager(ContextManager):
         user: str = "postgres",
         password: str = None,
         connection_str: str = None,
-        context_timeout: int = 3600
+        context_timeout: int = 3600,
+        db_pool_min_size: int = 1,
+        db_pool_max_size: int = 5
     ):
-        self.connection_params = {
-            "host": host,
-            "port": port,
-            "dbname": dbname,
-            "user": user,
-            "password": password,
-        }
+        self.host = host
+        self.port = port
+        self.dbname = dbname
+        self.user = user
+        self.password = password
         self.connection_str = connection_str
         self.context_timeout = context_timeout
-        self.init_db()
+        self.db_pool_min_size = db_pool_min_size
+        self.db_pool_max_size = db_pool_max_size
+        self._pool: asyncpg.Pool = None
 
-    def connect_db(self):
-        if self.connection_str:
-            return psycopg2.connect(self.connection_str)
-        else:
-            return psycopg2.connect(**self.connection_params)
+    async def get_pool(self) -> asyncpg.Pool:
+        if self._pool is None:
+            if self.connection_str:
+                self._pool = await asyncpg.create_pool(
+                    dsn=self.connection_str,
+                    min_size=self.db_pool_min_size,
+                    max_size=self.db_pool_max_size,
+                )
+            else:
+                self._pool = await asyncpg.create_pool(
+                    host=self.host,
+                    port=self.port,
+                    database=self.dbname,
+                    user=self.user,
+                    password=self.password,
+                    min_size=self.db_pool_min_size,
+                    max_size=self.db_pool_max_size,
+                )
+            await self.init_db()
+        return self._pool
 
-    def init_db(self):
-        conn = self.connect_db()
-        try:
-            with conn.cursor() as cur:
+    async def init_db(self):
+        pool = self._pool
+        async with pool.acquire() as conn:
+            try:
                 # Create table
-                cur.execute(
+                await conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS chat_histories (
                         id SERIAL PRIMARY KEY,
@@ -55,115 +71,108 @@ class PostgreSQLContextManager(ContextManager):
                     """
                 )
                 # Create index
-                cur.execute(
+                await conn.execute(
                     """
                     CREATE INDEX IF NOT EXISTS idx_chat_histories_context_id_created_at
                     ON chat_histories (context_id, created_at)
                     """
                 )
-            conn.commit()
-        except Exception as ex:
-            logger.exception(f"Error at init_db: {ex}")
-            conn.rollback()
-        finally:
-            conn.close()
+            except Exception as ex:
+                logger.exception(f"Error at init_db: {ex}")
 
     async def get_histories(self, context_id: Union[str, List[str]], limit: int = 100) -> List[Dict]:
-        conn = self.connect_db()
-        try:
-            if not context_id:
-                raise ValueError("context_id is required")
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            try:
+                if not context_id:
+                    raise ValueError("context_id is required")
 
-            where_clauses = []
-            params = []
+                where_clauses = []
+                params = []
+                param_index = 1
 
-            if isinstance(context_id, (list, tuple)):
-                placeholders = ",".join(["%s"] * len(context_id))
-                where_clauses.append(f"context_id IN ({placeholders})")
-                params.extend(context_id)
-            else:
-                where_clauses.append("context_id = %s")
-                params.append(context_id)
+                if isinstance(context_id, (list, tuple)):
+                    placeholders = ",".join([f"${i}" for i in range(param_index, param_index + len(context_id))])
+                    where_clauses.append(f"context_id IN ({placeholders})")
+                    params.extend(context_id)
+                    param_index += len(context_id)
+                else:
+                    where_clauses.append(f"context_id = ${param_index}")
+                    params.append(context_id)
+                    param_index += 1
 
-            if self.context_timeout > 0:
-                # Cutoff time to exclude old records
-                where_clauses.append("created_at >= %s")
-                cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=self.context_timeout)
-                params.append(cutoff_time)
+                if self.context_timeout > 0:
+                    # Cutoff time to exclude old records
+                    where_clauses.append(f"created_at >= ${param_index}")
+                    cutoff_time = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=self.context_timeout)
+                    params.append(cutoff_time)
+                    param_index += 1
 
-            params.append(limit)
+                params.append(limit)
 
-            sql = f"""
-            SELECT serialized_data
-            FROM chat_histories
-            WHERE {' AND '.join(where_clauses)}
-            ORDER BY id DESC
-            LIMIT %s
-            """
+                sql = f"""
+                SELECT serialized_data
+                FROM chat_histories
+                WHERE {' AND '.join(where_clauses)}
+                ORDER BY id DESC
+                LIMIT ${param_index}
+                """
 
-            with conn.cursor() as cur:
-                cur.execute(sql, tuple(params))
-                rows = cur.fetchall()
+                rows = await conn.fetch(sql, *params)
 
-            rows.reverse()
-            results = [row[0] for row in rows]
-            return results
+                rows = list(reversed(rows))
+                results = []
+                for row in rows:
+                    data = row["serialized_data"]
+                    if isinstance(data, str):
+                        data = json.loads(data)
+                    results.append(data)
+                return results
 
-        except Exception as ex:
-            logger.exception(f"Error at get_histories: {ex}")
-            return []
-
-        finally:
-            conn.close()
+            except Exception as ex:
+                logger.exception(f"Error at get_histories: {ex}")
+                return []
 
     async def add_histories(self, context_id: str, data_list: List[Dict], context_schema: str = None):
         if not data_list:
             return
 
-        conn = self.connect_db()
-        try:
-            columns = ["created_at", "context_id", "serialized_data", "context_schema"]
-            placeholders = ["%s"] * len(columns)
-            sql_query = f"""
-                INSERT INTO chat_histories ({', '.join(columns)}) 
-                VALUES ({', '.join(placeholders)})
-            """
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            try:
+                sql_query = """
+                    INSERT INTO chat_histories (created_at, context_id, serialized_data, context_schema)
+                    VALUES ($1, $2, $3, $4)
+                """
 
-            now_utc = datetime.now(timezone.utc)
-            records = []
-            for data_item in data_list:
-                record = (
-                    now_utc,  # created_at
-                    context_id,  # context_id
-                    json.dumps(data_item, ensure_ascii=False),  # serialized_data
-                    context_schema,  # context_schema
-                )
-                records.append(record)
+                now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+                records = []
+                for data_item in data_list:
+                    record = (
+                        now_utc,  # created_at
+                        context_id,  # context_id
+                        json.dumps(data_item, ensure_ascii=False),  # serialized_data
+                        context_schema,  # context_schema
+                    )
+                    records.append(record)
 
-            with conn.cursor() as cur:
-                cur.executemany(sql_query, records)
-            conn.commit()
+                await conn.executemany(sql_query, records)
 
-        except Exception as ex:
-            logger.exception(f"Error at add_histories: {ex}")
-            conn.rollback()
-
-        finally:
-            conn.close()
+            except Exception as ex:
+                logger.exception(f"Error at add_histories: {ex}")
 
     async def get_last_created_at(self, context_id: str) -> datetime:
-        conn = self.connect_db()
-        try:
-            sql = """
-            SELECT created_at
-            FROM chat_histories
-            WHERE context_id = %s
-            ORDER BY id DESC
-            LIMIT 1
-            """
-            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
-                cursor.execute(sql, (context_id,))
-                row = cursor.fetchone()
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            try:
+                sql = """
+                SELECT created_at
+                FROM chat_histories
+                WHERE context_id = $1
+                ORDER BY id DESC
+                LIMIT 1
+                """
+                row = await conn.fetchrow(sql, context_id)
 
                 if row and row["created_at"]:
                     # Normalize DB timestamp to UTC (naive -> set UTC, aware -> convert to UTC)
@@ -177,9 +186,6 @@ class PostgreSQLContextManager(ContextManager):
 
                 return last_created_at
 
-        except Exception as ex:
-            logger.exception(f"Error at get_last_created_at: {ex}")
-            return datetime.min.replace(tzinfo=timezone.utc)
-
-        finally:
-            conn.close()
+            except Exception as ex:
+                logger.exception(f"Error at get_last_created_at: {ex}")
+                return datetime.min.replace(tzinfo=timezone.utc)
