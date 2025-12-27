@@ -3,6 +3,7 @@ import json
 import os
 from uuid import uuid4
 import pytest
+import pytest_asyncio
 from aiavatar.sts.llm.context_manager.postgres import PostgreSQLContextManager
 
 AIAVATAR_DB_PORT = os.getenv("AIAVATAR_DB_PORT")
@@ -10,14 +11,18 @@ AIAVATAR_DB_USER = os.getenv("AIAVATAR_DB_USER")
 AIAVATAR_DB_PASSWORD = os.getenv("AIAVATAR_DB_PASSWORD")
 
 
-@pytest.fixture
-def context_manager() -> PostgreSQLContextManager:
-    return PostgreSQLContextManager(
+@pytest_asyncio.fixture
+async def context_manager():
+    manager = PostgreSQLContextManager(
         port=AIAVATAR_DB_PORT,
         user=AIAVATAR_DB_USER,
         password=AIAVATAR_DB_PASSWORD,
         context_timeout=3600
     )
+    yield manager
+    # Close pool after test
+    if manager._pool is not None:
+        await manager._pool.close()
 
 
 @pytest.mark.asyncio
@@ -96,26 +101,22 @@ async def test_get_histories_limit(context_manager):
 @pytest.mark.asyncio
 async def test_get_histories_timeout(context_manager):
     context_id = f"test_context_timeout_{uuid4()}"
-    
+
     old_data = {"message": "Old data"}
     new_data = {"message": "New data"}
 
     await context_manager.add_histories(context_id, [new_data])
 
-    old_timestamp = datetime(2000, 1, 1, tzinfo=timezone.utc)
-    conn = context_manager.connect_db()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO chat_histories (created_at, context_id, serialized_data)
-                    VALUES (%s, %s, %s)
-                    """,
-                    (old_timestamp, context_id, json.dumps(old_data))
-                )
-    finally:
-        conn.close()
+    old_timestamp = datetime(2000, 1, 1)
+    pool = await context_manager.get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO chat_histories (created_at, context_id, serialized_data)
+            VALUES ($1, $2, $3)
+            """,
+            old_timestamp, context_id, json.dumps(old_data)
+        )
 
     histories = await context_manager.get_histories(context_id)
     assert len(histories) == 1

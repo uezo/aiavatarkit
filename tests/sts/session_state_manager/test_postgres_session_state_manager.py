@@ -3,6 +3,7 @@ import asyncio
 import os
 from uuid import uuid4
 import pytest
+import pytest_asyncio
 from aiavatar.sts.session_state_manager.postgres import PostgreSQLSessionStateManager
 
 # Environment variables for PostgreSQL connection
@@ -19,9 +20,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.fixture
-def session_manager() -> PostgreSQLSessionStateManager:
-    return PostgreSQLSessionStateManager(
+@pytest_asyncio.fixture
+async def session_manager():
+    manager = PostgreSQLSessionStateManager(
         host=AIAVATAR_DB_HOST,
         port=AIAVATAR_DB_PORT,
         dbname=AIAVATAR_DB_NAME,
@@ -30,6 +31,10 @@ def session_manager() -> PostgreSQLSessionStateManager:
         session_timeout=3600,
         cache_ttl=2
     )
+    yield manager
+    # Close pool after test
+    if manager._pool is not None:
+        await manager._pool.close()
 
 
 @pytest.fixture
@@ -303,19 +308,16 @@ async def test_timezone_handling(session_manager, unique_session_id):
 @pytest.mark.asyncio
 async def test_init_db_adds_timestamp_inserted_at(session_manager, unique_session_id):
     """Ensure init_db creates timestamp_inserted_at column for existing deployments"""
-    conn = session_manager.connect_db()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_name = 'session_states'
-                """
-            )
-            columns = {row[0] for row in cur.fetchall()}
-    finally:
-        conn.close()
+    pool = await session_manager.get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'session_states'
+            """
+        )
+        columns = {row["column_name"] for row in rows}
 
     assert "timestamp_inserted_at" in columns
 
