@@ -83,11 +83,12 @@ class STSPipeline:
         )
 
         @self.vad.on_speech_detected
-        async def on_speech_detected(data: bytes, recorded_duration: float, session_id: str):
+        async def on_speech_detected(data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
             async for response in self.invoke(STSRequest(
                 session_id=session_id,
                 user_id=self.vad.get_session_data(session_id, "user_id"),
                 context_id=self.vad.get_session_data(session_id, "context_id"),
+                text=text,
                 audio_data=data,
                 audio_duration=recorded_duration,
                 system_prompt_params=self.vad.get_session_data(session_id, "system_prompt_params")
@@ -240,14 +241,16 @@ class STSPipeline:
                 tts_name=self.tts.__class__.__name__
             )
 
+            # Record request voice
+            if self.voice_recorder_enabled and request.audio_data:
+                await self.voice_recorder.record(RequestVoice(transaction_id, request.audio_data))
+
             if request.text:
                 # Use text if exist
                 recognized_text = request.text
                 if self.debug:
                     logger.info(f"Use text in request: {recognized_text}")
             elif request.audio_data:
-                if self.voice_recorder_enabled:
-                    await self.voice_recorder.record(RequestVoice(transaction_id, request.audio_data))
                 # Speech-to-Text
                 recognized_text = (await self.stt.recognize(request.session_id, request.audio_data)).text
                 if not recognized_text:

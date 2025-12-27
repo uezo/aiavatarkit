@@ -19,6 +19,7 @@ class AIAvatarHttpClient(AIAvatarClientBase):
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
+        mute_on_barge_in: bool = False,
         # Client configurations
         vad: SpeechDetector = None,
         vad_volume_db_threshold: float = -50.0,
@@ -62,7 +63,7 @@ class AIAvatarHttpClient(AIAvatarClientBase):
         )
 
         @self.vad.on_speech_detected
-        async def on_speech_detected(data: bytes, recorded_duration: float, session_id: str):
+        async def on_speech_detected(data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
             await self.send_request(AIAvatarRequest(
                 type="start",
                 session_id=session_id,
@@ -88,6 +89,12 @@ class AIAvatarHttpClient(AIAvatarClientBase):
         # Noise filter
         self.auto_noise_filter_threshold = auto_noise_filter_threshold
         self.noise_margin = noise_margin
+
+        # Mute immediately on barge-in
+        if mute_on_barge_in:
+            @self.sts.vad.on_recording_started
+            async def mute_on_barge_in(session_id: str):
+                await self.stop_response(session_id, "")
 
         self.url = url
         self.api_key = api_key
