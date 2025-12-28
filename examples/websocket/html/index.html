@@ -201,13 +201,19 @@
                 aiavatar.ws.send(JSON.stringify(configMessage));
             }
 
-            // Example: Show thinking effect while server is processing
-            if (response.type == "start") {
+            // Example: response handling by type
+            if (response.type == "accepted") {
+                isServerProcessing = true;
+            } else if (response.type == "start") {
                 aiavatar.updateFace("eyes_closed", 10);
             } else if (response.type == "chunk" && response.metadata.is_first_chunk) {
                 aiavatar.updateFace("neutral", 0);
             } else if (response.type == "tool_call") {
                 console.log(response.metadata);
+            } else if (response.type == "info") {
+                console.log(response.metadata);
+            } else if (response.type == "final" || response.type == "error") {
+                isServerProcessing = false;
             }
 
             // Disconnect
@@ -236,15 +242,25 @@
         // Interrupt toggle functionality
         let interruptEnabled = false;
         const interruptToggleBtn = document.getElementById("interruptToggleBtn");
-        
+
+        // Microphone mute logic
+        let isServerProcessing = false;
+        aiavatar.isMicrophoneMuted = () => {
+            if (interruptEnabled) {
+                return false;
+            }
+            if (aiavatar.isAudioPlaying) {
+                isServerProcessing = false;
+            }
+            return aiavatar.isAudioPlaying || isServerProcessing;
+        };
+
+        // UI event listener
         interruptToggleBtn.addEventListener("click", () => {
             interruptEnabled = !interruptEnabled;
-            aiavatar.cancelEcho = !interruptEnabled;
             interruptToggleBtn.textContent = interruptEnabled ? "Interrupt Speech: ON" : "Interrupt Speech: OFF";
             interruptToggleBtn.style.backgroundColor = interruptEnabled ? "#2E7D32" : "#1E1E1E";
         });
-
-        // Start and stop buttons
         document.getElementById("startBtn").addEventListener("click", () => aiavatar.startListening(sessionId, userId));
         document.getElementById("stopBtn").addEventListener("click", () => aiavatar.stopListening(sessionId));
     </script>
