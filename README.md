@@ -102,6 +102,10 @@ This change ensures compatibility with the new internal structure and removes th
     - [Preprocessing and Postprocessing](#preprocessing-and-postprocessing)
     - [Speaker Diarization](#speaker-diarization)
 - [🎙️ Speech Detector](#%EF%B8%8F-speech-detector)
+    - [Standard Speech Detector](#standard-speech-detector)
+    - [Silero VAD Speech Detector](#silero-speech-detector)
+    - [Azure Stream Speech Detector](#azure-stream-speech-detector)
+    - [Speech Detection Callback](#speech-detection-callback)
 - [🥰 Face Expression](#-face-expression)
 - [💃 Animation](#-animation)
 
@@ -132,6 +136,7 @@ This change ensures compatibility with the new internal structure and removes th
 - [🧪 Evaluation](#-evaluation)
 
 - [🤿 Deep Dive](#-deep-dive)
+    - [🐘 PostgreSQL](#-postgresql)
     - [👀 Vision](#-vision)
     - [💾 Long-term Memory](#-long-term-memory)
     - [🐓 Wakeword](#-wakeword)
@@ -575,39 +580,9 @@ async def stt_postprocess(session_id: str, text: str, audio_bytes: bytes, prepro
 
 AIAvatarKit includes Voice Activity Detection (VAD) components to automatically detect when speech starts and ends in audio streams. This enables seamless conversation flow without manual input controls.
 
-### Standard Speech Detector
-
-The default `StandardSpeechDetector` uses volume-based detection with configurable thresholds:
-
-```python
-from aiavatar.sts.vad.standard import StandardSpeechDetector
-
-# Create StandardSpeechDetector with custom parameters
-vad = StandardSpeechDetector(
-    volume_db_threshold=-30.0,           # Voice detection threshold in dB
-    silence_duration_threshold=0.5,      # Seconds of silence to end recording
-    max_duration=10.0,                   # Maximum recording duration
-    min_duration=0.2,                    # Minimum recording duration
-    sample_rate=16000,                   # Audio sample rate
-    channels=1,                          # Audio channels
-    preroll_buffer_count=5,              # Pre-recording buffer size
-    debug=True
-)
-
-# Create AIAvatar with custom VAD
-aiavatar_app = AIAvatar(
-    vad=vad,
-    openai_api_key=OPENAI_API_KEY
-)
-```
-
 ### Silero Speech Detector
 
-For more accurate speech detection, use `SileroSpeechDetector` which employs AI-based voice activity detection:
-
-```sh
-pip install silero-vad
-```
+The default Speech Detector is `SileroSpeechDetector`, which employs AI-based voice activity detection:
 
 ```python
 from aiavatar.sts.vad.silero import SileroSpeechDetector
@@ -646,6 +621,62 @@ vad = SileroSpeechDetector(
 ```
 
 You can also make custom VAD components by implementing `SpeechDetector` interface.
+
+
+### Azure Stream Speech Detector
+
+`AzureStreamSpeechDetector` combines Azure's streaming speech recognition service with Silero VAD, performing speech segment detection and request transcription simultaneously.
+
+```python
+from aiavatar.sts.vad.azure_stream import AzureStreamSpeechDetector
+vad = AzureStreamSpeechDetector(
+    azure_subscription_key=AZURE_API_KEY,
+    azure_region=AZURE_REGION
+)
+```
+
+This VAD performs incremental transcription internally, and you can receive partial transcription results through the `on_speech_detecting` callback to perform custom processing. The following code shows an example of notifying the client of partial transcription results when using the WebSocket adapter.
+
+```python
+@vad.on_speech_detecting
+async def on_speech_detecting(text, sess):
+    resp = STSResponse(
+        type="info",
+        session_id=sess.session_id,
+        metadata={"partial_request_text": text}
+    )
+    await ws_app.handle_response(resp)
+```
+
+**NOTE**: For Azure, the speed improvement from streaming transcription is limited since Fast Transcription (which AIAvatarKit also uses) is already very fast. However, speech end detection is delegated to Azure, which may potentially improve recognition accuracy. (Silero VAD only detects speech start, which triggers the start of sending microphone input data to Azure.)
+
+
+### Standard Speech Detector
+
+`StandardSpeechDetector` simply uses volume-based detection with configurable thresholds, that works well in the limited computing resorces:
+
+```python
+from aiavatar.sts.vad.standard import StandardSpeechDetector
+
+# Create StandardSpeechDetector with custom parameters
+vad = StandardSpeechDetector(
+    volume_db_threshold=-30.0,           # Voice detection threshold in dB
+    silence_duration_threshold=0.5,      # Seconds of silence to end recording
+    max_duration=10.0,                   # Maximum recording duration
+    min_duration=0.2,                    # Minimum recording duration
+    sample_rate=16000,                   # Audio sample rate
+    channels=1,                          # Audio channels
+    preroll_buffer_count=5,              # Pre-recording buffer size
+    debug=True
+)
+
+# Create AIAvatar with custom VAD
+aiavatar_app = AIAvatar(
+    vad=vad,
+    openai_api_key=OPENAI_API_KEY
+)
+```
+
 
 ### Speech Detection Callback
 
@@ -2072,6 +2103,82 @@ scenario = Scenario(
 ## 🤿 Deep dive
 
 Advanced usases.
+
+
+### 🐘 PostgreSQL
+
+You can use PostgreSQL instead of the default SQLite. We strongly recommend using PostgreSQL in production environments for its scalability and performance benefits from asynchronous processing.
+
+To use PostgreSQL, install asyncpg and pass the database connection string as `db_connection_str` when initializing each component.
+
+```sh
+pip install asyncpg
+```
+
+```python
+# DB_CONNECTION_STR = "postgresql://{user}:{password}@{host}:{port}/{database-name}"
+DB_CONNECTION_STR = "postgresql://postgres:postgres@127.0.0.1:5432/aiavatar"
+
+# LLM
+llm = ChatGPTService(
+    openai_api_key=OPENAI_API_KEY,
+    system_prompt=SYSTEM_PROMPT,
+    db_connection_str=DB_CONNECTION_STR,    # <- for ContextManager
+)
+
+# Adapter (Create pipeline internally)
+ws_app = AIAvatarWebSocketServer(
+    vad=vad,
+    stt=stt,
+    llm=llm,
+    tts=tts,
+    db_connection_str=DB_CONNECTION_STR,    # <- for SessionStateManager and PerformanceRecorder
+)
+```
+
+You can also specify the number of connections in the connection pool for each component. When running AIAvatar in a multi-process configuration, be careful that the total does not exceed the maximum number of connections allowed by the database server.
+
+Note that the number of connections cannot be changed after initialization. Create the PostgreSQL components with the desired connection count and pass them to the components that will use them.
+
+```python
+from aiavatar.sts.llm.context_manager.postgres import PostgreSQLContextManager
+context_manager = PostgreSQLContextManager(
+    connection_str=DB_CONNECTION_STR,
+    db_pool_max_size=10,    # <- Default: 5
+)
+
+from aiavatar.sts.llm.chatgpt import ChatGPTService
+llm = ChatGPTService(
+    openai_api_key=OPENAI_API_KEY,
+    system_prompt=SYSTEM_PROMPT,
+    voice_text_tag="answer",
+    context_manager=context_manager,    # <- Set PostgreSQLContextManager
+)
+
+from aiavatar.sts.session_state_manager.postgres import PostgreSQLSessionStateManager
+session_state_manager = PostgreSQLSessionStateManager(
+    connection_str=DB_CONNECTION_STR,
+    db_pool_max_size=10,    # <- Default: 5
+)
+
+from aiavatar.sts.performance_recorder.postgres import PostgreSQLPerformanceRecorder
+performance_recorder = PostgreSQLPerformanceRecorder(
+    connection_str=DB_CONNECTION_STR,
+    db_pool_size=3,         # <- Default: 2
+)
+
+from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer
+ws_app = AIAvatarWebSocketServer(
+    vad=vad,
+    stt=stt,
+    llm=llm,
+    tts=tts,
+    session_state_manager=session_state_manager,    # <- Set SessionStateManager
+    performance_recorder=performance_recorder,      # <- Set PerformanceRecorder
+)
+```
+
+**NOTE**: `PerformanceRecorder` runs in a separate thread and writes performance information serially as it receives it through a queue, so it basically uses only a single connection. We recommend not changing this unless you have a specific reason.
 
 
 ### 👀 Vision
