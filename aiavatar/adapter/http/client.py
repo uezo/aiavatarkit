@@ -1,7 +1,8 @@
 import base64
 import logging
 import httpx
-from ...sts.vad import SpeechDetector, StandardSpeechDetector
+from ...sts.vad import SpeechDetector
+from ...sts.vad.silero import SileroSpeechDetector
 from .. import AIAvatarRequest, AIAvatarResponse, AIAvatarException
 from ..client import AIAvatarClientBase
 from ...device import NoiseLevelDetector
@@ -22,7 +23,7 @@ class AIAvatarHttpClient(AIAvatarClientBase):
         mute_on_barge_in: bool = False,
         # Client configurations
         vad: SpeechDetector = None,
-        vad_volume_db_threshold: float = -50.0,
+        vad_volume_db_threshold: float = -90.0,
         vad_silence_duration_threshold: float = 0.5,
         vad_sample_rate: int = 16000,
         face_controller = None,
@@ -36,7 +37,7 @@ class AIAvatarHttpClient(AIAvatarClientBase):
         audio_devices = None,
         cancel_echo = True,
         # Noise filter
-        auto_noise_filter_threshold: bool = True,
+        auto_noise_filter_threshold: bool = False,
         noise_margin: float = 20.0,
         debug = False,
     ):
@@ -55,7 +56,7 @@ class AIAvatarHttpClient(AIAvatarClientBase):
         )
 
         # VAD
-        self.vad = vad or StandardSpeechDetector(
+        self.vad = vad or SileroSpeechDetector(
             volume_db_threshold=vad_volume_db_threshold,
             silence_duration_threshold=vad_silence_duration_threshold,
             sample_rate=vad_sample_rate,

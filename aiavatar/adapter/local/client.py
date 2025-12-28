@@ -42,7 +42,7 @@ class AIAvatar(AIAvatarClientBase):
         tts: SpeechSynthesizer = None,
 
         # STS Pipeline params for default components
-        vad_volume_db_threshold: float = -50.0,
+        vad_volume_db_threshold: float = -90.0,
         vad_silence_duration_threshold: float = 0.5,
         vad_sample_rate: int = 16000,
         stt_sample_rate: int = 16000,
@@ -66,7 +66,7 @@ class AIAvatar(AIAvatarClientBase):
         voice_recorder_dir: str = "recorded_voices",
 
         # Noise filter
-        auto_noise_filter_threshold: bool = True,
+        auto_noise_filter_threshold: bool = False,
         noise_margin: float = 20.0,
 
         # Client configurations

@@ -3,3 +3,4 @@ openai>=1.55.3
 aiofiles>=24.1.0
 numpy>=2.2.3
 PyAudio>=0.2.14
+silero-vad>=6.0.0
