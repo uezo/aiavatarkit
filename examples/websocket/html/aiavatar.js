@@ -1,9 +1,8 @@
 class AIAvatarClient {
-    constructor({ webSocketUrl, faceImage, faceImagePaths, cancelEcho = true, sampleRate = 16000, playbackAnalyzeHz = 60 }) {
+    constructor({ webSocketUrl, faceImage, faceImagePaths, sampleRate = 16000, playbackAnalyzeHz = 60 }) {
         this.webSocketUrl = webSocketUrl;
         this.faceImage = faceImage;
         this.faceImagePaths = faceImagePaths;
-        this.cancelEcho = cancelEcho;
         this.sampleRate = sampleRate;
         this.playbackAnalyzeHz = playbackAnalyzeHz;
 
@@ -23,6 +22,7 @@ class AIAvatarClient {
         this.onResponseReceived = () => { };
         this.analyser = null;
         this.onPlaybackAnalyze = null;
+        this.isMicrophoneMuted = () => this.isAudioPlaying;
     }
 
     async startListening(sessionId, userId) {
@@ -90,7 +90,7 @@ class AIAvatarClient {
                 const pcmBuffer = this.float32To16BitPCMBuffer(inputData);
                 const base64Data = this.arrayBufferToBase64(pcmBuffer);
                 if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                    if (this.cancelEcho === false || this.isAudioPlaying === false) {
+                    if (!this.isMicrophoneMuted()) {
                         this.onMicrophoneDataSend(rms);
                         const dataMessage = {
                             type: "data",
