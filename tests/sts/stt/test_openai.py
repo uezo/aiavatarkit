@@ -51,7 +51,7 @@ async def test_openai_speech_recognizer_transcribe(stt_wav_path):
     recognized_text = await recognizer.transcribe(wave_data)
 
     # 4) Check the recognized text (Whisper-1 doesn't recognize 'こんにちは' correctly...)
-    assert "こんにちわ" in recognized_text, f"Expected 'こんにちわ', got: {recognized_text}"
+    assert "こんにちは" in recognized_text, f"Expected 'こんにちは', got: {recognized_text}"
 
     # 5) Close the recognizer's http_client
     await recognizer.close()
@@ -83,7 +83,7 @@ async def test_openai_speech_recognizer_transcribe_autodetect(stt_wav_path, stt_
     recognized_text = await recognizer.transcribe(wave_data)
 
     # 1-4) Check the recognized text (Whisper-1 doesn't recognize 'こんにちは' correctly...)
-    assert "こんにちわ" in recognized_text, f"Expected 'こんにちわ', got: {recognized_text}"
+    assert "こんにちは" in recognized_text, f"Expected 'こんにちは', got: {recognized_text}"
 
     # 2-1) Load the WAV file
     with wave.open(str(stt_wav_path_en), 'rb') as wav_file:
