@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import json
@@ -229,6 +230,12 @@ class STSPipeline:
         try:
             if not request.session_id:
                 raise ValueError("session_id is required but not provided")
+
+            # Notify client that request is accepted (fire and forget to avoid blocking pipeline latency)
+            asyncio.create_task(self.handle_response(STSResponse(
+                type="accepted",
+                session_id=request.session_id
+            )))
 
             start_time = time()
             transaction_id = str(uuid4())
