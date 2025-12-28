@@ -66,6 +66,7 @@ class AzureStreamSpeechDetector(SpeechDetector):
         model_pool_size: int = 1,
         on_recording_started: Optional[Callable[[str], Awaitable[None]]] = None
     ):
+        super().__init__(sample_rate=sample_rate)
         # Azure Speech SDK settings
         self.azure_subscription_key = azure_subscription_key
         self.azure_region = azure_region
@@ -78,16 +79,14 @@ class AzureStreamSpeechDetector(SpeechDetector):
             self.amplitude_threshold = None
         self.silence_duration_threshold = silence_duration_threshold
         self.max_duration = max_duration
-        self.sample_rate = sample_rate
         self.channels = channels
         self.debug = debug
         self.preroll_buffer_count = preroll_buffer_count
         self.to_linear16 = to_linear16
-        self.should_mute = lambda: False
         self.recording_sessions: Dict[str, RecordingSession] = {}
-        self._on_recording_started: List[Callable[[str], Awaitable[None]]] = []
         if on_recording_started:
             self._on_recording_started.append(on_recording_started)
+        self._on_speech_detecting: Callable[[str, RecordingSession], Awaitable[None]] = None
 
         # Silero VAD specific parameters
         self.speech_probability_threshold = speech_probability_threshold
@@ -217,6 +216,12 @@ class AzureStreamSpeechDetector(SpeechDetector):
                     logger.debug(f"Azure recognizing: {evt.result.text}")
                 session.recognized_text = evt.result.text
 
+                if self._on_speech_detecting:
+                    try:
+                        asyncio.run_coroutine_threadsafe(self._on_speech_detecting(evt.result.text, session), session.event_loop)
+                    except Exception as ex:
+                        logger.error("Error in on_speech_detecting callback", exc_info=True)
+
                 # Trigger on_recording_started callback on first recognizing event
                 if not session.on_recording_started_triggered and self._on_recording_started:
                     session.on_recording_started_triggered = True
@@ -286,6 +291,10 @@ class AzureStreamSpeechDetector(SpeechDetector):
                 session.azure_push_stream.write(audio_data)
             except Exception as e:
                 logger.error(f"Failed to write to Azure stream: {e}")
+
+    def on_speech_detecting(self, func):
+        self._on_speech_detecting = func
+        return func
 
     async def execute_on_speech_detected(self, recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
         try:
