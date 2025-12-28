@@ -9,7 +9,8 @@ import traceback
 from typing import AsyncGenerator, Tuple, List, Optional
 from uuid import uuid4
 from .models import STSRequest, STSResponse
-from .vad import SpeechDetector, StandardSpeechDetector
+from .vad import SpeechDetector
+from .vad.silero import SileroSpeechDetector
 from .stt import SpeechRecognizer
 from .stt.google import GoogleSpeechRecognizer
 from .llm import LLMService, LLMResponse
@@ -31,7 +32,7 @@ class STSPipeline:
         self,
         *,
         vad: SpeechDetector = None,
-        vad_volume_db_threshold: float = -50.0,
+        vad_volume_db_threshold: float = -90.0,
         vad_silence_duration_threshold: float = 0.5,
         vad_sample_rate: int = 16000,
         stt: SpeechRecognizer = None,
@@ -76,7 +77,7 @@ class STSPipeline:
                 self.session_state_manager = SQLiteSessionStateManager(db_path=db_connection_str)
 
         # VAD
-        self.vad = vad or StandardSpeechDetector(
+        self.vad = vad or SileroSpeechDetector(
             volume_db_threshold=vad_volume_db_threshold,
             silence_duration_threshold=vad_silence_duration_threshold,
             sample_rate=vad_sample_rate,

@@ -95,8 +95,10 @@ def aiavatar_app():
         face_controller=FaceControllerForTest(),
         animation_controller=AnimationControllerTest(),
         openai_api_key=OPENAI_API_KEY,
-        openai_model="gpt-4o",
+        openai_model="gpt-4.1",
         system_prompt=SYSTEM_PROMPT,
+        vad_silence_duration_threshold=1.5,
+        input_sample_rate=INPUT_VOICE_SAMPLE_RATE,
         debug=True
     )
 
@@ -123,14 +125,17 @@ async def chat(app: AIAvatar, text: str, session_id: str, context_id: str = None
             debug=True
         )
         voice = await voicevox_for_input.synthesize(text)
-        silence_samples = int(INPUT_VOICE_SAMPLE_RATE * 1.0)
+        silence_samples = int(INPUT_VOICE_SAMPLE_RATE * 2.0)
         silence_bytes = numpy.zeros(silence_samples, dtype=numpy.int16).tobytes()
         return voice + silence_bytes
 
-    await app.send_microphone_data(
-        await get_input_voice(text),
-        session_id=session_id
-    )
+    audio_bytes = await get_input_voice(text)
+    for i in range(0, len(audio_bytes), 1024):
+        chunk = audio_bytes[i:i + 1024]
+        await app.send_microphone_data(
+            chunk,
+            session_id=session_id
+        )
 
     # Wait for processing responses
     start_time = time()
@@ -139,10 +144,6 @@ async def chat(app: AIAvatar, text: str, session_id: str, context_id: str = None
         if time() - start_time > 60:
             print("Response timeout (60 sec)")
             break
-    while not app.response_queue.empty():
-        await asyncio.sleep(0.1)
-    while app.audio_player.is_playing:
-        await asyncio.sleep(0.1)
 
     last_response = app.last_responses[-1]
     last_response.audio_data = b""
@@ -215,7 +216,7 @@ async def test_chat_wakeword(aiavatar_app: AIAvatar):
     user_id = "test_chat_wakeword_user"
     task = asyncio.create_task(aiavatar_app.start_listening(session_id=session_id, user_id=user_id))
 
-    aiavatar_app.sts.wakewords = ["こんにちは"]
+    aiavatar_app.sts.wakewords = ["こんにちは", "こんにちわ"]
     aiavatar_app.sts.wakeword_timeout = 10
 
     try:
