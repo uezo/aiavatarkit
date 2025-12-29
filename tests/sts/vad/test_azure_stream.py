@@ -39,9 +39,6 @@ def detector(test_output_dir):
         max_duration=10.0,
         sample_rate=16000,
         channels=1,
-        preroll_buffer_count=5,
-        speech_probability_threshold=0.5,
-        chunk_size=512,
         debug=True
     )
 
@@ -182,9 +179,6 @@ async def test_on_recording_started_callback(stt_wav_path):
         max_duration=10.0,
         sample_rate=16000,
         channels=1,
-        preroll_buffer_count=5,
-        speech_probability_threshold=0.5,
-        chunk_size=512,
         on_recording_started=mock_callback,
         debug=True
     )
@@ -224,21 +218,33 @@ async def test_session_reset_and_delete(detector, stt_wav_path):
     with wave.open(str(stt_wav_path), 'rb') as wav_file:
         wave_data = wav_file.readframes(wav_file.getnframes())
 
-    # Start recording with some audio
+    # Send audio to create session and populate preroll buffer
     chunk_size = 3200
     chunk = wave_data[:chunk_size * 3]
     await detector.process_samples(chunk, session_id)
     await asyncio.sleep(0.1)
 
+    # Verify session was created with Azure recognition started
     session = detector.get_session(session_id)
-    assert session.is_recording is True
-    assert len(session.buffer) > 0
+    assert session.azure_push_stream is not None
+    assert session.azure_recognizer is not None
+    assert len(session.preroll_buffer) > 0
+
+    # Manually set recording state to test reset
+    session.is_recording = True
+    session.buffer.extend(b'\x00' * 100)
+    session.record_duration = 1.0
 
     # Reset recording session
     detector.reset_session(session_id)
-    session = detector.get_session(session_id)
     assert session.is_recording is False
     assert len(session.buffer) == 0
+    assert session.record_duration == 0
+    # preroll_buffer should NOT be cleared by reset
+    assert len(session.preroll_buffer) > 0
+    # Azure recognition should still be active
+    assert session.azure_push_stream is not None
+    assert session.azure_recognizer is not None
 
     # Delete session
     detector.delete_session(session_id)
@@ -339,32 +345,3 @@ def test_session_data(detector):
 
     # Cleanup
     detector.delete_session(session_id_1)
-
-
-def test_speech_probability_threshold_change(detector):
-    """
-    Verify that speech_probability_threshold can be changed.
-    """
-    # Set threshold to 0.7 (stricter)
-    detector.set_speech_probability_threshold(0.7)
-    assert detector.speech_probability_threshold == 0.7
-
-    # Set threshold back to 0.5
-    detector.set_speech_probability_threshold(0.5)
-    assert detector.speech_probability_threshold == 0.5
-
-
-def test_volume_db_threshold_property(detector):
-    """
-    Test that volume_db_threshold property can be updated dynamically.
-    """
-    # Update to -10 dB
-    detector.volume_db_threshold = -10.0
-    assert detector.volume_db_threshold == -10.0
-    expected_threshold_minus10db = 32767 * (10 ** (-10.0 / 20.0))
-    assert abs(detector.amplitude_threshold - expected_threshold_minus10db) < 1
-
-    # Update to None (disable threshold)
-    detector.volume_db_threshold = None
-    assert detector.volume_db_threshold is None
-    assert detector.amplitude_threshold is None
