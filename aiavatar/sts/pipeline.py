@@ -281,7 +281,7 @@ class STSPipeline:
             now = datetime.now(timezone.utc)
 
             # Merge consecutive requests
-            if self.merge_request_threshold > 0:
+            if self.merge_request_threshold > 0 and request.allow_merge:
                 if state.previous_request_timestamp:
                     requests_interval = (now - state.previous_request_timestamp).total_seconds()
                     if self.merge_request_threshold > requests_interval:
@@ -333,7 +333,7 @@ class STSPipeline:
                 session_id=request.session_id,
                 user_id=request.user_id,
                 context_id=request.context_id,
-                metadata={"request_text": request.text}
+                metadata={"request_text": request.text, "recognized_text": recognized_text}
             )
 
             # LLM

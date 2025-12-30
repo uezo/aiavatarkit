@@ -421,6 +421,59 @@ async def test_request_merging_enabled():
 
 
 @pytest.mark.asyncio
+async def test_request_merging_allow_merge_false():
+    """Test that requests are not merged when allow_merge=False even within threshold"""
+    session_id = f"test_request_merging_allow_merge_false_{str(uuid4())}"
+
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        merge_request_threshold=3.0,  # Merging enabled with 3 second threshold
+        performance_recorder=SQLitePerformanceRecorder(),
+        debug=True
+    )
+
+    user_id = "test_user"
+    context_id = "test_context"
+
+    # First request
+    request1 = STSRequest(
+        session_id=session_id,
+        user_id=user_id,
+        context_id=context_id,
+        text="Hello"
+    )
+
+    responses1 = []
+    async for response in sts.invoke(request1):
+        responses1.append(response)
+
+    # Second request with allow_merge=False (within threshold)
+    request2 = STSRequest(
+        session_id=session_id,
+        user_id=user_id,
+        context_id=context_id,
+        text="World",
+        allow_merge=False
+    )
+
+    responses2 = []
+    async for response in sts.invoke(request2):
+        responses2.append(response)
+
+    # Check that second request was NOT merged because allow_merge=False
+    assert sts.merge_request_prefix not in request2.text
+    assert request2.text == "World"  # Should remain unchanged
+
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_request_merging_disabled():
     session_id = f"test_request_merging_disabled_{str(uuid4())}"
 
