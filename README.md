@@ -625,7 +625,7 @@ You can also make custom VAD components by implementing `SpeechDetector` interfa
 
 ### Azure Stream Speech Detector
 
-`AzureStreamSpeechDetector` combines Azure's streaming speech recognition service with Silero VAD, performing speech segment detection and request transcription simultaneously.
+`AzureStreamSpeechDetector` uses Azure's streaming speech recognition service for both speech detection and transcription. Audio is continuously streamed to Azure, and speech boundaries are determined by Azure's recognition events.
 
 ```python
 from aiavatar.sts.vad.azure_stream import AzureStreamSpeechDetector
@@ -647,8 +647,6 @@ async def on_speech_detecting(text, sess):
     )
     await ws_app.handle_response(resp)
 ```
-
-**NOTE**: For Azure, the speed improvement from streaming transcription is limited since Fast Transcription (which AIAvatarKit also uses) is already very fast. However, speech end detection is delegated to Azure, which may potentially improve recognition accuracy. (Silero VAD only detects speech start, which triggers the start of sending microphone input data to Azure.)
 
 
 ### Standard Speech Detector
