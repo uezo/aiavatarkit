@@ -2,9 +2,17 @@ import json
 from typing import Dict, Optional, Any, Tuple, List, AsyncIterable
 import numpy as np
 import asyncpg
-# pip install pgvector
-from pgvector.asyncpg import register_vector
 from . import BaseSpeakerStore
+
+
+def _to_pg_vector(arr: np.ndarray) -> str:
+    """Convert numpy array to pgvector string format."""
+    return "[" + ",".join(map(str, arr.astype(np.float32).tolist())) + "]"
+
+
+def _from_pg_vector(s: str) -> np.ndarray:
+    """Convert pgvector string format to numpy array."""
+    return np.array(json.loads(s), dtype=np.float32)
 
 
 class PGVectorStore(BaseSpeakerStore):
@@ -44,8 +52,7 @@ class PGVectorStore(BaseSpeakerStore):
                 self._pool = await asyncpg.create_pool(
                     dsn=self.connection_str,
                     min_size=self.db_pool_min_size,
-                    max_size=self.db_pool_max_size,
-                    init=register_vector
+                    max_size=self.db_pool_max_size
                 )
             else:
                 self._pool = await asyncpg.create_pool(
@@ -55,8 +62,7 @@ class PGVectorStore(BaseSpeakerStore):
                     user=self.user,
                     password=self.password,
                     min_size=self.db_pool_min_size,
-                    max_size=self.db_pool_max_size,
-                    init=register_vector
+                    max_size=self.db_pool_max_size
                 )
             await self.init_db()
         return self._pool
@@ -73,31 +79,31 @@ class PGVectorStore(BaseSpeakerStore):
             """)
 
     async def upsert(self, speaker_id: str, embedding: np.ndarray, metadata: Optional[Dict[str, Any]] = None) -> None:
-        vec = embedding.astype(np.float32)
+        vec_str = _to_pg_vector(embedding)
         md_json = json.dumps(metadata or {})
         pool = await self.get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
                 f"""
                 INSERT INTO {self.table} (id, embedding, metadata)
-                VALUES ($1, $2, $3::jsonb)
+                VALUES ($1, $2::vector, $3::jsonb)
                 ON CONFLICT (id) DO UPDATE
                 SET embedding = EXCLUDED.embedding,
                     metadata = {self.table}.metadata || EXCLUDED.metadata
                 """,
-                speaker_id, vec, md_json
+                speaker_id, vec_str, md_json
             )
 
     async def get(self, speaker_id: str) -> Tuple[np.ndarray, Dict[str, Any]]:
         pool = await self.get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                f"SELECT embedding, metadata FROM {self.table} WHERE id = $1",
+                f"SELECT embedding::text, metadata FROM {self.table} WHERE id = $1",
                 speaker_id
             )
             if row is None:
                 raise KeyError(f"Unknown speaker_id: {speaker_id}")
-            emb = np.array(row["embedding"], dtype=np.float32)
+            emb = _from_pg_vector(row["embedding"])
             md = row["metadata"] or {}
             return emb, md
 
@@ -125,9 +131,9 @@ class PGVectorStore(BaseSpeakerStore):
     async def all_items(self) -> AsyncIterable[Tuple[str, np.ndarray, Dict[str, Any]]]:
         pool = await self.get_pool()
         async with pool.acquire() as conn:
-            rows = await conn.fetch(f"SELECT id, embedding, metadata FROM {self.table}")
+            rows = await conn.fetch(f"SELECT id, embedding::text, metadata FROM {self.table}")
             for row in rows:
-                yield row["id"], np.array(row["embedding"], dtype=np.float32), (row["metadata"] or {})
+                yield row["id"], _from_pg_vector(row["embedding"]), (row["metadata"] or {})
 
     async def count(self) -> int:
         pool = await self.get_pool()
@@ -138,11 +144,11 @@ class PGVectorStore(BaseSpeakerStore):
     async def topk_similarity(self, q_norm: np.ndarray, k: int) -> List[Tuple[str, float]]:
         """DB-side Top-K by distance; convert to cosine via dot."""
         k = max(1, k)
-        vec = q_norm.astype(np.float32)
+        vec_str = _to_pg_vector(q_norm)
         pool = await self.get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                f"SELECT id, embedding FROM {self.table} ORDER BY embedding {self._order_op} $1 LIMIT $2",
-                vec, k
+                f"SELECT id, embedding::text FROM {self.table} ORDER BY embedding {self._order_op} $1::vector LIMIT $2",
+                vec_str, k
             )
-        return [(row["id"], float(np.dot(np.array(row["embedding"], np.float32), q_norm))) for row in rows]
+        return [(row["id"], float(np.dot(_from_pg_vector(row["embedding"]), q_norm))) for row in rows]
