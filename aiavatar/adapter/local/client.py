@@ -153,7 +153,8 @@ class AIAvatar(AIAvatarClientBase):
             text=request.text,
             audio_data=request.audio_data,
             files=request.files,
-            system_prompt_params=request.system_prompt_params
+            system_prompt_params=request.system_prompt_params,
+            allow_merge=request.allow_merge
         )):
             await self.sts.handle_response(r)
 

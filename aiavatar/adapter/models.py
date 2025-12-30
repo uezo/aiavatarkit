@@ -18,6 +18,7 @@ class AIAvatarRequest(BaseModel):
     audio_data: Optional[Union[bytes, str]] = None
     files: Optional[List[Dict[str, str]]] = None
     system_prompt_params: Optional[Dict] = None
+    allow_merge: bool = True
     metadata: Optional[Dict] = None
 
 

@@ -195,15 +195,21 @@ class AIAvatarWebSocketServer(Adapter):
                 asyncio.create_task(self._on_connect(request, session_data))
 
         elif request.type == "invoke":
+            if request.context_id:
+                context_id = request.context_id
+            else:
+                context_id = self.sts.vad.get_session_data(request.session_id, "context_id")
+
             async for r in self.sts.invoke(STSRequest(
                 type=request.type,
                 session_id=request.session_id,
                 user_id=request.user_id,
-                context_id=request.context_id,
+                context_id=context_id,
                 text=request.text,
                 audio_data=request.audio_data,
                 files=request.files,
-                system_prompt_params=request.system_prompt_params
+                system_prompt_params=request.system_prompt_params,
+                allow_merge=request.allow_merge
             )):
                 await self.sts.handle_response(r)
 

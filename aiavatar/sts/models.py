@@ -14,6 +14,7 @@ class STSRequest:
     audio_duration: float = 0
     files: List[Dict[str, str]] = None
     system_prompt_params: Dict[str, Any] = None
+    allow_merge: bool = True
 
 
 @dataclass
