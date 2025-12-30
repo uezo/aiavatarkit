@@ -25,7 +25,7 @@
 
         .avatar-frame {
             display: block;
-            width: clamp(256px, 60vw, 512px);
+            width: clamp(200px, 60vw, 400px);
             aspect-ratio: 1;
             background: linear-gradient(45deg, #FF007F, #7F00FF);
             border-radius: 50%;
@@ -40,8 +40,8 @@
             border-radius: 50%;
             width: 100%;
             height: 100%;
-            max-width: 512px;
-            max-height: 512px;
+            max-width: 400px;
+            max-height: 400px;
             aspect-ratio: 1;
             overflow: hidden;
         }
@@ -70,6 +70,11 @@
         }
 
         .button-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
             margin: 20px 0;
         }
 
@@ -89,6 +94,103 @@
         button:hover {
             background-color: #333333;
         }
+
+        .message-box {
+            position: relative;
+            margin: 20px auto 0;
+            width: clamp(200px, 80vw, 500px);
+            background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+            border: 2px solid #4a6fa5;
+            border-radius: 8px;
+            padding: 28px 12px 8px;
+            box-shadow: 0 0 10px rgba(74, 111, 165, 0.2);
+            font-family: 'Hiragino Kaku Gothic ProN', 'メイリオ', sans-serif;
+        }
+
+        .message-speaker {
+            position: absolute;
+            top: 0;
+            left: 0;
+            font-size: 10px;
+            font-weight: bold;
+            padding: 2px 8px;
+            border-radius: 6px 0 6px 0;
+        }
+
+        .message-speaker.user {
+            background: #2d5a27;
+            color: #8fbc8f;
+        }
+
+        .message-speaker.ai {
+            background: #5a2763;
+            color: #dda0dd;
+        }
+
+        .message-text {
+            font-size: 14px;
+            line-height: 1.5;
+            color: #ffffff;
+            min-height: 20px;
+            text-align: left;
+        }
+
+        .message-box.hidden {
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+
+        .message-box.visible {
+            opacity: 1;
+            transition: opacity 0.3s ease;
+        }
+
+        /* iOS-style toggle switch */
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .toggle-label {
+            color: #E0E0E0;
+            font-size: 14px;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 51px;
+            height: 31px;
+            appearance: none;
+            background-color: #39393D;
+            border-radius: 31px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            outline: none;
+            border: none;
+        }
+
+        .toggle-switch::before {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 27px;
+            height: 27px;
+            background-color: #fff;
+            border-radius: 50%;
+            transition: transform 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .toggle-switch:checked {
+            background-color: #34C759;
+        }
+
+        .toggle-switch:checked::before {
+            transform: translateX(20px);
+        }
     </style>
 </head>
 
@@ -103,17 +205,33 @@
     </div>
 
     <div class="button-container">
-        <button id="startBtn">Start</button>
-        <button id="stopBtn">Stop</button>
-        <button id="interruptToggleBtn">Interrupt Speech: OFF</button>
+        <button id="chatBtn">Start</button>
+        <div class="toggle-container">
+            <span class="toggle-label">Barge-in</span>
+            <input type="checkbox" id="interruptToggle" class="toggle-switch">
+        </div>
+        <div class="toggle-container">
+            <span class="toggle-label">Camera</span>
+            <input type="checkbox" id="cameraToggle" class="toggle-switch">
+        </div>
     </div>
     
-    <div class="input-level">
+    <div class="input-level" style="display: none;">
         <span style="color: #E0E0E0;">Input: </span>
         <span id="inputLevel">0.0 dB</span>
     </div>
 
+    <div id="messageBox" class="message-box hidden">
+        <div id="messageSpeaker" class="message-speaker ai">AI</div>
+        <div id="messageText" class="message-text"></div>
+    </div>
+
+    <!-- Hidden camera elements -->
+    <video id="cameraVideo" style="display: none;" playsinline></video>
+    <canvas id="cameraCanvas" style="display: none;"></canvas>
+
     <script src="aiavatar.js"></script>
+    <script src="camera.js"></script>
     <script src="lipsync.js"></script>
     <script src="blink.js"></script>
     <script>
@@ -154,6 +272,23 @@
             facePathTemplate: "images/{face}.png",
             blinkFaceName: "eyes_closed",
             stateProvider: () => ({ isSpeaking: aiavatar.isAudioPlaying, currentFace: aiavatar.getCurrentFace() }),
+        });
+
+        // Camera
+        const camera = new Camera({
+            videoElement: document.getElementById('cameraVideo'),
+            canvasElement: document.getElementById('cameraCanvas'),
+            onCapture: (imageDataUrl) => {
+                // Send captured image via WebSocket
+                const imageMessage = {
+                    type: "invoke",
+                    session_id: sessionId,
+                    user_id: userId,
+                    files: [{url: imageDataUrl}],
+                    allow_merge: false
+                };
+                aiavatar.ws.send(JSON.stringify(imageMessage));
+            }
         });
 
         // Example: Show microphone effect and input level
@@ -210,10 +345,15 @@
                 aiavatar.updateFace("neutral", 0);
             } else if (response.type == "tool_call") {
                 console.log(response.metadata);
-            } else if (response.type == "info") {
-                console.log(response.metadata);
             } else if (response.type == "final" || response.type == "error") {
                 isServerProcessing = false;
+            }
+
+            // Vision
+            if (response.type == "vision" && response.metadata !== null) {
+                if (response.metadata.source == "camera" && cameraEnabled) {
+                    camera.capture();
+                }
             }
 
             // Disconnect
@@ -230,18 +370,29 @@
                 setTimeout(waitForAudioEnd, 0);
             }
 
-            // Example: Show user and AI's message in UI
-            if (response.metadata && response.metadata.request_text) {
-                // document.getElementById("user-balloon").innerText = response.metadata.request_text;
+            // Show user's partial speech recognition result
+            if (response.type === "info" && response.metadata && response.metadata.partial_request_text) {
+                updateMessage("user", response.metadata.partial_request_text, true);
             }
-            if (response.voice_text) {
-                // document.getElementById("ai-balloon").innerText = response.voice_text;
+            // Show user's final message
+            if (response.type === "start" && response.metadata && response.metadata.recognized_text) {
+                updateMessage("user", response.metadata.recognized_text, false);
+            }
+            // Stream AI response: show partial text, then finalize with voice_text
+            if (response.type === "chunk" && response.voice_text) {
+                updateMessage("ai", response.voice_text, true);
+            }
+            if (response.type === "final" && response.voice_text) {
+                updateMessage("ai", response.voice_text, false);
+            }
+            if (response.type === "error") {
+                updateMessage("ai", response.voice_text, false);
             }
         }
 
         // Interrupt toggle functionality
         let interruptEnabled = false;
-        const interruptToggleBtn = document.getElementById("interruptToggleBtn");
+        const interruptToggle = document.getElementById("interruptToggle");
 
         // Microphone mute logic
         let isServerProcessing = false;
@@ -255,14 +406,92 @@
             return aiavatar.isAudioPlaying || isServerProcessing;
         };
 
+        // Message box functions
+        const messageBox = document.getElementById("messageBox");
+        const messageSpeaker = document.getElementById("messageSpeaker");
+        const messageText = document.getElementById("messageText");
+        const SPEAKER_LABEL_USER = "User";
+        const SPEAKER_LABEL_AI = "AI";
+        let currentAIText = "";
+        let currentUserText = "";
+
+        function showMessage(speaker, text, isPartial = false) {
+            // Update speaker label
+            messageSpeaker.className = "message-speaker " + speaker;
+            messageSpeaker.textContent = speaker === "user" ? SPEAKER_LABEL_USER : SPEAKER_LABEL_AI;
+
+            // Update text
+            messageText.textContent = text;
+
+            // Show message box
+            messageBox.classList.remove("hidden");
+            messageBox.classList.add("visible");
+        }
+
+        function updateMessage(speaker, text, isPartial) {
+            // Update speaker label
+            messageSpeaker.className = "message-speaker " + speaker;
+            messageSpeaker.textContent = speaker === "user" ? SPEAKER_LABEL_USER : SPEAKER_LABEL_AI;
+
+            // Accumulate or finalize text
+            if (isPartial) {
+                if (speaker === "user") {
+                    currentUserText = text;
+                    messageText.textContent = currentUserText;
+                } else {
+                    currentAIText += text;
+                    messageText.textContent = currentAIText;
+                }
+            } else {
+                if (speaker === "user") {
+                    currentUserText = "";
+                } else {
+                    currentAIText = "";
+                }
+                messageText.textContent = text;
+            }
+
+            // Show message box
+            messageBox.classList.remove("hidden");
+            messageBox.classList.add("visible");
+        }
+
         // UI event listener
-        interruptToggleBtn.addEventListener("click", () => {
-            interruptEnabled = !interruptEnabled;
-            interruptToggleBtn.textContent = interruptEnabled ? "Interrupt Speech: ON" : "Interrupt Speech: OFF";
-            interruptToggleBtn.style.backgroundColor = interruptEnabled ? "#2E7D32" : "#1E1E1E";
+        interruptToggle.addEventListener("change", () => {
+            interruptEnabled = interruptToggle.checked;
         });
-        document.getElementById("startBtn").addEventListener("click", () => aiavatar.startListening(sessionId, userId));
-        document.getElementById("stopBtn").addEventListener("click", () => aiavatar.stopListening(sessionId));
+
+        // Camera toggle functionality
+        let cameraEnabled = false;
+        const cameraToggle = document.getElementById("cameraToggle");
+        cameraToggle.addEventListener("change", async () => {
+            if (cameraToggle.checked) {
+                const initialized = await camera.init();
+                if (initialized) {
+                    cameraEnabled = true;
+                } else {
+                    cameraToggle.checked = false;
+                }
+            } else {
+                camera.stop();
+                cameraEnabled = false;
+            }
+        });
+
+        let isChatActive = false;
+        const chatBtn = document.getElementById("chatBtn");
+        chatBtn.addEventListener("click", () => {
+            if (isChatActive) {
+                aiavatar.stopListening(sessionId);
+                chatBtn.textContent = "Start";
+                chatBtn.style.backgroundColor = "#1E1E1E";
+            } else {
+                aiavatar.startListening(sessionId, userId);
+                chatBtn.textContent = "Stop";
+                chatBtn.style.backgroundColor = "#C62828";
+            }
+            isChatActive = !isChatActive;
+        });
     </script>
 </body>
 
