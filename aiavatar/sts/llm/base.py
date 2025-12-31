@@ -132,6 +132,7 @@ class LLMService(ABC):
         split_chars: List[str] = None,
         option_split_chars: List[str] = None,
         option_split_threshold: int = 50,
+        split_on_control_tags: bool = True,
         voice_text_tag: str = None,
         use_dynamic_tools: bool = False,
         context_manager: ContextManager = None,
@@ -147,6 +148,7 @@ class LLMService(ABC):
         self.split_chars = split_chars or ["。", "？", "！", ". ", "?", "!", "\n"]
         self.option_split_chars = option_split_chars or ["、", ", "]
         self.option_split_threshold = option_split_threshold
+        self.split_on_control_tags = split_on_control_tags
 
         self.split_chars_pattern = "|".join(
             re.escape(char) for char in sorted(self.split_chars, key=len, reverse=True)
@@ -428,7 +430,11 @@ The list of tools is as follows:
             # Replace consecutive punctuation with the same punctuation followed by delimiter
             stream_buffer = re.sub(f"(({self.split_chars_pattern})+)", r"\1|", stream_buffer)
 
-            if len(stream_buffer) > self.option_split_threshold:
+            # Split before control tags [xxx:yyy] if enabled
+            if self.split_on_control_tags:
+                stream_buffer = re.sub(r"(?=\[\w+:[^\]]+\])", "|", stream_buffer)
+
+            if len(self.remove_control_tags(stream_buffer)) > self.option_split_threshold:
                 stream_buffer = self.replace_last_option_split_char(stream_buffer)
 
             segments = stream_buffer.split("|")

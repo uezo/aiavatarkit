@@ -9,7 +9,7 @@ from aiavatar.sts.llm.chatgpt import ChatGPTService, ToolCall
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 IMAGE_URL = os.getenv("IMAGE_URL")
-MODEL = "gpt-4o"
+MODEL = "gpt-4.1"
 
 XAI_MODEL = "grok-4-1-fast-non-reasoning"
 XAI_API_KEY = os.getenv("XAI_API_KEY")
@@ -589,5 +589,262 @@ async def test_chatgpt_service_compat_tool_calls():
 
     assert messages[3]["role"] == "assistant"
     assert "2" in messages[3]["content"]
+
+    await service.openai_client.close()
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_service_split_by_period():
+    """
+    Test that responses are split by period (。).
+    """
+    service = ChatGPTService(
+        openai_api_key=OPENAI_API_KEY,
+        system_prompt="ユーザーの指示に従い、入力内容を一字一句変えずに復唱してください。",
+        model=MODEL,
+        temperature=0.0
+    )
+    context_id = f"test_split_period_{uuid4()}"
+
+    # Two sentences separated by period
+    user_message = "以下を一字一句変えずに復唱して：今日は晴れです。明日は雨です。"
+
+    collected_responses = []
+    async for resp in service.chat_stream(context_id, "test_user", user_message):
+        if resp.voice_text:
+            collected_responses.append(resp.voice_text)
+
+    # Should be split into at least 2 segments
+    assert len(collected_responses) >= 2, f"Expected at least 2 segments, got {len(collected_responses)}: {collected_responses}"
+
+    # Verify content: first segment should end with 。 and contain first sentence
+    assert "今日は晴れです。" in collected_responses[0], f"First segment should contain '今日は晴れです。', got: {collected_responses[0]}"
+    # Second segment should contain second sentence
+    assert "明日は雨です" in collected_responses[1], f"Second segment should contain '明日は雨です', got: {collected_responses[1]}"
+
+    await service.openai_client.close()
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_service_split_by_comma_when_long():
+    """
+    Test that long responses are split by comma (、) when exceeding option_split_threshold.
+    """
+    service = ChatGPTService(
+        openai_api_key=OPENAI_API_KEY,
+        system_prompt="ユーザーの指示に従い、入力内容を一字一句変えずに復唱してください。",
+        model=MODEL,
+        temperature=0.0,
+        option_split_threshold=20  # Set low threshold to trigger comma split
+    )
+    context_id = f"test_split_comma_{uuid4()}"
+
+    # Long sentence with comma, no period - should split at comma due to length
+    user_message = "以下を一字一句変えずに復唱して：これはとても長い文章で読点を含んでいます、そしてまだまだ続きます"
+
+    collected_responses = []
+    async for resp in service.chat_stream(context_id, "test_user", user_message):
+        if resp.voice_text:
+            collected_responses.append(resp.voice_text)
+
+    # Should be split at comma because it exceeds threshold
+    assert len(collected_responses) >= 2, f"Expected at least 2 segments due to comma split, got {len(collected_responses)}: {collected_responses}"
+
+    # Verify content: first segment should end with 、 (split at comma)
+    assert collected_responses[0].endswith("、"), f"First segment should end with '、', got: {collected_responses[0]}"
+    # Second segment should contain the rest
+    assert "そしてまだまだ続きます" in collected_responses[-1], f"Last segment should contain 'そしてまだまだ続きます', got: {collected_responses[-1]}"
+
+    await service.openai_client.close()
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_service_no_comma_split_when_tag_makes_it_long():
+    """
+    Test that control tags are excluded from length calculation,
+    so comma split is not triggered when only the tag makes the buffer long.
+    """
+    service = ChatGPTService(
+        openai_api_key=OPENAI_API_KEY,
+        system_prompt="""ユーザーの指示に従い、入力内容を一字一句変えずに復唱してください。
+ただし、復唱する前に必ず[face:happy][mood:excellent][tone:cheerful]というタグをつけてください。""",
+        model=MODEL,
+        temperature=0.0,
+        option_split_threshold=20  # Threshold: tag included=52 chars (exceeds), tag excluded=6 chars (under)
+    )
+    context_id = f"test_split_tag_{uuid4()}"
+
+    # Short sentence with comma - multiple tags make buffer long but actual voice text is short
+    # "[face:happy][mood:excellent][tone:cheerful]短い文、続き" = 46 chars total (exceeds threshold of 20)
+    # "短い文、続き" = 6 chars (under threshold of 20)
+    user_message = "以下を一字一句変えずに復唱して：短い文、続き"
+
+    collected_text = []
+    collected_voice = []
+    async for resp in service.chat_stream(context_id, "test_user", user_message):
+        if resp.text:
+            collected_text.append(resp.text)
+        if resp.voice_text:
+            collected_voice.append(resp.voice_text)
+
+    full_text = "".join(collected_text)
+
+    # Verify that text contains control tags
+    assert "[face:happy]" in full_text, f"Text should contain '[face:happy]' tag, got: {full_text}"
+    assert "[mood:excellent]" in full_text, f"Text should contain '[mood:excellent]' tag, got: {full_text}"
+    assert "[tone:cheerful]" in full_text, f"Text should contain '[tone:cheerful]' tag, got: {full_text}"
+
+    # Should NOT be split at comma because voice text is short (tag is excluded from length)
+    assert len(collected_voice) == 1, f"Expected 1 segment (no comma split for short voice text), got {len(collected_voice)}: {collected_voice}"
+
+    # Verify voice_text does not contain control tags
+    assert "[face:happy]" not in collected_voice[0], f"Voice text should not contain tags, got: {collected_voice[0]}"
+
+    # Verify content: the single segment should contain the full text with comma intact
+    assert "短い文、続き" in collected_voice[0], f"Segment should contain '短い文、続き' (not split at comma), got: {collected_voice[0]}"
+
+    await service.openai_client.close()
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_service_split_on_control_tags():
+    """
+    Test that responses are split before control tags [xxx:yyy] when split_on_control_tags=True.
+    """
+    service = ChatGPTService(
+        openai_api_key=OPENAI_API_KEY,
+        system_prompt="""ユーザーの指示に従い、入力内容を一字一句変えずに復唱してください。""",
+        model=MODEL,
+        temperature=0.0,
+        split_on_control_tags=True  # Default, but explicit for clarity
+    )
+    context_id = f"test_split_control_tags_{uuid4()}"
+
+    # Text with control tags - should split before each tag
+    user_message = "以下を一字一句変えずに復唱して：[face:joy]海が見えたよ[face:fun]早く泳ごうよ"
+
+    collected_text = []
+    collected_voice = []
+    async for resp in service.chat_stream(context_id, "test_user", user_message):
+        if resp.text:
+            collected_text.append(resp.text)
+        if resp.voice_text:
+            collected_voice.append(resp.voice_text)
+
+    full_text = "".join(collected_text)
+
+    # Verify that text contains control tags
+    assert "[face:joy]" in full_text, f"Text should contain '[face:joy]' tag, got: {full_text}"
+    assert "[face:fun]" in full_text, f"Text should contain '[face:fun]' tag, got: {full_text}"
+
+    # Should be split into 2 segments (before each control tag)
+    assert len(collected_voice) >= 2, f"Expected at least 2 segments, got {len(collected_voice)}: {collected_voice}"
+
+    # First segment should contain first sentence
+    assert "海が見えたよ" in collected_voice[0], f"First segment should contain '海が見えたよ', got: {collected_voice[0]}"
+
+    # Second segment should contain second sentence
+    assert "早く泳ごうよ" in collected_voice[1], f"Second segment should contain '早く泳ごうよ', got: {collected_voice[1]}"
+
+    # Voice text should not contain control tags
+    assert "[face:joy]" not in collected_voice[0], f"Voice text should not contain tags, got: {collected_voice[0]}"
+    assert "[face:fun]" not in collected_voice[1], f"Voice text should not contain tags, got: {collected_voice[1]}"
+
+    await service.openai_client.close()
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_service_no_split_on_tts_tags():
+    """
+    Test that TTS tags [xxx] (without colon) are NOT split and remain in voice_text,
+    while control tags [xxx:yyy] are split and removed from voice_text.
+    """
+    service = ChatGPTService(
+        openai_api_key=OPENAI_API_KEY,
+        system_prompt="""ユーザーの指示に従い、入力内容を一字一句変えずに復唱してください。""",
+        model=MODEL,
+        temperature=0.0,
+        split_on_control_tags=True
+    )
+    context_id = f"test_no_split_tts_tags_{uuid4()}"
+
+    # Text with both TTS tags [xxx] and control tags [xxx:yyy]
+    # Should split on control tag but NOT on TTS tags
+    user_message = "以下を一字一句変えずに復唱して：[happy]こんにちは[face:joy]元気です[sad]さようなら"
+
+    collected_text = []
+    collected_voice = []
+    async for resp in service.chat_stream(context_id, "test_user", user_message):
+        if resp.text:
+            collected_text.append(resp.text)
+        if resp.voice_text:
+            collected_voice.append(resp.voice_text)
+
+    full_text = "".join(collected_text)
+    full_voice = "".join(collected_voice)
+
+    # Verify that text contains both TTS tags and control tags
+    assert "[happy]" in full_text, f"Text should contain '[happy]' tag, got: {full_text}"
+    assert "[face:joy]" in full_text, f"Text should contain '[face:joy]' tag, got: {full_text}"
+    assert "[sad]" in full_text, f"Text should contain '[sad]' tag, got: {full_text}"
+
+    # TTS tags should remain in voice_text (not removed)
+    assert "[happy]" in full_voice, f"Voice text should contain '[happy]' TTS tag, got: {full_voice}"
+    assert "[sad]" in full_voice, f"Voice text should contain '[sad]' TTS tag, got: {full_voice}"
+
+    # Control tags should be removed from voice_text
+    assert "[face:joy]" not in full_voice, f"Voice text should NOT contain '[face:joy]' control tag, got: {full_voice}"
+
+    # Should be split into 2 segments (split on control tag [face:joy], not on TTS tags)
+    assert len(collected_voice) == 2, f"Expected 2 segments (split on control tag only), got {len(collected_voice)}: {collected_voice}"
+
+    # First segment should contain first TTS tag and first sentence
+    assert "[happy]" in collected_voice[0], f"First segment should contain '[happy]', got: {collected_voice[0]}"
+    assert "こんにちは" in collected_voice[0], f"First segment should contain 'こんにちは', got: {collected_voice[0]}"
+
+    # Second segment should contain second TTS tag and second sentence
+    assert "[sad]" in collected_voice[1], f"Second segment should contain '[sad]', got: {collected_voice[1]}"
+    assert "さようなら" in collected_voice[1], f"Second segment should contain 'さようなら', got: {collected_voice[1]}"
+
+    await service.openai_client.close()
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_service_split_on_control_tags_disabled():
+    """
+    Test that control tags are NOT split when split_on_control_tags=False.
+    """
+    service = ChatGPTService(
+        openai_api_key=OPENAI_API_KEY,
+        system_prompt="""ユーザーの指示に従い、入力内容を一字一句変えずに復唱してください。""",
+        model=MODEL,
+        temperature=0.0,
+        split_on_control_tags=False  # Disable splitting on control tags
+    )
+    context_id = f"test_split_control_tags_disabled_{uuid4()}"
+
+    # Text with control tags - should NOT split because option is disabled
+    user_message = "以下を一字一句変えずに復唱して：[face:joy]海が見えたよ[face:fun]早く泳ごう"
+
+    collected_text = []
+    collected_voice = []
+    async for resp in service.chat_stream(context_id, "test_user", user_message):
+        if resp.text:
+            collected_text.append(resp.text)
+        if resp.voice_text:
+            collected_voice.append(resp.voice_text)
+
+    full_text = "".join(collected_text)
+
+    # Verify that text contains control tags
+    assert "[face:joy]" in full_text, f"Text should contain '[face:joy]' tag, got: {full_text}"
+    assert "[face:fun]" in full_text, f"Text should contain '[face:fun]' tag, got: {full_text}"
+
+    # Should be 1 segment because split_on_control_tags is disabled
+    assert len(collected_voice) == 1, f"Expected 1 segment (split_on_control_tags=False), got {len(collected_voice)}: {collected_voice}"
+
+    # Voice text should contain both sentences together
+    assert "海が見えたよ" in collected_voice[0], f"Voice text should contain '海が見えたよ', got: {collected_voice[0]}"
+    assert "早く泳ごう" in collected_voice[0], f"Voice text should contain '早く泳ごう', got: {collected_voice[0]}"
 
     await service.openai_client.close()
