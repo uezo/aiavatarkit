@@ -369,13 +369,16 @@ class STSPipeline:
                             await self._on_before_tts(request)
                     performance.llm_time = time() - start_time
 
-                    # Parse info from LLM chunk (especially, language)
+                    # Parse language
+                    if match := re.search(r"\[lang:([a-zA-Z-]+)\]", llm_stream_chunk.text):
+                        language = match.group(1)
+
+                    # Parse style info from LLM chunk
                     parsed_info = await self._process_llm_chunk(llm_stream_chunk)
-                    language = parsed_info.get("language") or language
 
                     audio_chunk = await self.tts.synthesize(
                         text=llm_stream_chunk.voice_text,
-                        style_info={"styled_text": llm_stream_chunk.text},
+                        style_info={"styled_text": llm_stream_chunk.text, "info": parsed_info},
                         language=language
                     )
 
