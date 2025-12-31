@@ -19,6 +19,7 @@ class DifyService(LLMService):
         split_chars: List[str] = None,
         option_split_chars: List[str] = None,
         option_split_threshold: int = 50,
+        split_on_control_tags: bool = True,
         voice_text_tag: str = None,
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
@@ -31,6 +32,7 @@ class DifyService(LLMService):
             split_chars=split_chars,
             option_split_chars=option_split_chars,
             option_split_threshold=option_split_threshold,
+            split_on_control_tags=split_on_control_tags,
             voice_text_tag=voice_text_tag
         )
         self.conversation_ids: Dict[str, str] = {}
