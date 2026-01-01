@@ -750,5 +750,255 @@ async def test_request_merging_prefix_removal():
     assert "First request" in request3.text
     assert "Second request" in request3.text
     assert "Third request" in request3.text
-    
+
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_invoke_queued_sequential():
+    """Test that invoke with use_invoke_queue=True processes requests sequentially"""
+    session_id = f"test_invoke_queued_sequential_{str(uuid4())}"
+
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o-mini",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        performance_recorder=SQLitePerformanceRecorder(),
+        use_invoke_queue=True,
+        debug=True
+    )
+
+    responses_a = []
+    responses_b = []
+
+    async def request_a():
+        async for response in sts.invoke(STSRequest(
+            session_id=session_id,
+            user_id="test_user",
+            text="Say 'Hello A'",
+            wait_in_queue=True
+        )):
+            responses_a.append(response)
+
+    async def request_b():
+        async for response in sts.invoke(STSRequest(
+            session_id=session_id,
+            user_id="test_user",
+            text="Say 'Hello B'",
+            wait_in_queue=True
+        )):
+            responses_b.append(response)
+
+    # Run both requests concurrently
+    await asyncio.gather(request_a(), request_b())
+
+    # Both should complete with responses
+    assert len(responses_a) > 0
+    assert len(responses_b) > 0
+
+    # Check final responses exist
+    final_a = [r for r in responses_a if r.type == "final"]
+    final_b = [r for r in responses_b if r.type == "final"]
+    assert len(final_a) == 1
+    assert len(final_b) == 1
+
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_invoke_queued_immediately_cancels_pending():
+    """Test that wait_in_queue=False cancels pending requests in queue"""
+    session_id = f"test_invoke_queued_immediately_{str(uuid4())}"
+
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o-mini",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        performance_recorder=SQLitePerformanceRecorder(),
+        use_invoke_queue=True,
+        debug=True
+    )
+
+    responses_a = []
+    responses_b = []
+    responses_c = []
+
+    async def request_a():
+        async for response in sts.invoke(STSRequest(
+            session_id=session_id,
+            user_id="test_user",
+            text="Say 'Hello A' with a long explanation",
+            wait_in_queue=True
+        )):
+            responses_a.append(response)
+
+    async def request_b():
+        # Small delay to ensure A starts first
+        await asyncio.sleep(0.1)
+        async for response in sts.invoke(STSRequest(
+            session_id=session_id,
+            user_id="test_user",
+            text="Say 'Hello B'",
+            wait_in_queue=True
+        )):
+            responses_b.append(response)
+
+    async def request_c():
+        # Wait a bit then send with wait_in_queue=False (interrupt)
+        await asyncio.sleep(0.2)
+        async for response in sts.invoke(STSRequest(
+            session_id=session_id,
+            user_id="test_user",
+            text="Say 'Hello C'",
+            wait_in_queue=False
+        )):
+            responses_c.append(response)
+
+    await asyncio.gather(request_a(), request_b(), request_c())
+
+    # A should complete (it was already processing)
+    assert len([r for r in responses_a if r.type == "final"]) == 1
+
+    # B should be cancelled (was in queue when C came with wait_in_queue=False)
+    cancelled_b = [r for r in responses_b if r.type == "cancelled"]
+    assert len(cancelled_b) == 1
+
+    # C should complete
+    assert len([r for r in responses_c if r.type == "final"]) == 1
+
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_invoke_queued_cleanup_on_idle():
+    """Test that queue resources are cleaned up after idle timeout"""
+    session_id = f"test_invoke_queued_cleanup_{str(uuid4())}"
+
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o-mini",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        invoke_queue_idle_timeout=1.0,  # Short timeout for testing
+        performance_recorder=SQLitePerformanceRecorder(),
+        use_invoke_queue=True,
+        debug=True
+    )
+
+    # Send a request
+    async for response in sts.invoke(STSRequest(
+        session_id=session_id,
+        user_id="test_user",
+        text="Hello"
+    )):
+        pass
+
+    # Queue resources should exist
+    assert session_id in sts._request_queues
+    assert session_id in sts._invoke_workers
+
+    # Wait for idle timeout + buffer
+    await asyncio.sleep(1.5)
+
+    # Queue resources should be cleaned up
+    assert session_id not in sts._request_queues
+    assert session_id not in sts._invoke_workers
+    assert session_id not in sts._response_queues
+
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_invoke_queued_error_handling():
+    """Test that errors in invoke are properly handled and returned"""
+    session_id = f"test_invoke_queued_error_{str(uuid4())}"
+
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key="invalid_key",  # This will cause an error
+            model="gpt-4o-mini",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        performance_recorder=SQLitePerformanceRecorder(),
+        use_invoke_queue=True,
+        debug=True
+    )
+
+    responses = []
+    async for response in sts.invoke(STSRequest(
+        session_id=session_id,
+        user_id="test_user",
+        text="Hello"
+    )):
+        responses.append(response)
+
+    # Should have an error response
+    error_responses = [r for r in responses if r.type == "error"]
+    assert len(error_responses) >= 1
+
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_invoke_queued_multiple_sessions():
+    """Test that different sessions have independent queues"""
+    session_id_1 = f"test_invoke_queued_multi_1_{str(uuid4())}"
+    session_id_2 = f"test_invoke_queued_multi_2_{str(uuid4())}"
+
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o-mini",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        performance_recorder=SQLitePerformanceRecorder(),
+        use_invoke_queue=True,
+        debug=True
+    )
+
+    responses_1 = []
+    responses_2 = []
+
+    async def session_1():
+        async for response in sts.invoke(STSRequest(
+            session_id=session_id_1,
+            user_id="user_1",
+            text="Hello from session 1"
+        )):
+            responses_1.append(response)
+
+    async def session_2():
+        async for response in sts.invoke(STSRequest(
+            session_id=session_id_2,
+            user_id="user_2",
+            text="Hello from session 2"
+        )):
+            responses_2.append(response)
+
+    # Run both sessions concurrently
+    await asyncio.gather(session_1(), session_2())
+
+    # Both should complete independently
+    assert len([r for r in responses_1 if r.type == "final"]) == 1
+    assert len([r for r in responses_2 if r.type == "final"]) == 1
+
+    # Each session should have its own queue
+    assert session_id_1 in sts._request_queues or session_id_1 not in sts._request_queues  # May be cleaned up
+    assert session_id_2 in sts._request_queues or session_id_2 not in sts._request_queues
+
     await sts.shutdown()

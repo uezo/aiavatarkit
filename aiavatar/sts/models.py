@@ -15,6 +15,7 @@ class STSRequest:
     files: List[Dict[str, str]] = None
     system_prompt_params: Dict[str, Any] = None
     allow_merge: bool = True
+    wait_in_queue: bool = False
 
 
 @dataclass

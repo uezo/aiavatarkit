@@ -46,6 +46,19 @@ SYSTEM_PROMPT_JP = """
 ```
 
 
+## 視覚情報
+
+ユーザーとの会話に応答するために視覚情報（画像）が必要な場合は、[vision:camera]のようなタグを応答に含めてください。
+画像取得のソースは以下のとおりです。
+
+- camera: カメラを通じて現実世界を見ることができます
+
+タグ以外の文言は必要最小限にしてください。
+
+例
+[vision:camera]どれどれ。
+
+
 ## 思考
 ユーザーへの応答内容を出力する前に、何をすべきか、どのように応答すべきかよく考えてください。
 まず考えた内容を<think>~</think>の間に出力して、応答内容を<answer>~</answer>の間に出力してください。
@@ -129,6 +142,8 @@ aiavatar_app = AIAvatarWebSocketServer(
     stt=stt,
     llm=llm,
     tts=tts,
+    merge_request_threshold=3.0,
+    use_invoke_queue=True,  # Enabled for vision sequence
     debug=True
 )
 

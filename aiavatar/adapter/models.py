@@ -19,6 +19,7 @@ class AIAvatarRequest(BaseModel):
     files: Optional[List[Dict[str, str]]] = None
     system_prompt_params: Optional[Dict] = None
     allow_merge: bool = True
+    wait_in_queue: bool = False
     metadata: Optional[Dict] = None
 
 
