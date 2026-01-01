@@ -285,7 +285,8 @@
                     session_id: sessionId,
                     user_id: userId,
                     files: [{url: imageDataUrl}],
-                    allow_merge: false
+                    allow_merge: false,
+                    wait_in_queue: true
                 };
                 aiavatar.ws.send(JSON.stringify(imageMessage));
             }
