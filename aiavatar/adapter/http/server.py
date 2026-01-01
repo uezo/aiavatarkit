@@ -139,6 +139,9 @@ class AIAvatarHttpServer(Adapter):
         voice_recorder: VoiceRecorder = None,
         voice_recorder_enabled: bool = True,
         voice_recorder_dir: str = "recorded_voices",
+        invoke_queue_idle_timeout: float = 10.0,
+        invoke_timeout: float = 60.0,
+        use_invoke_queue: bool = False,
 
         # Optional component
         speaker_registry: SpeakerRegistry = None,
@@ -182,6 +185,9 @@ class AIAvatarHttpServer(Adapter):
             voice_recorder=voice_recorder,
             voice_recorder_enabled=voice_recorder_enabled,
             voice_recorder_dir=voice_recorder_dir,
+            invoke_queue_idle_timeout=invoke_queue_idle_timeout,
+            invoke_timeout=invoke_timeout,
+            use_invoke_queue=use_invoke_queue,
             debug=debug
         )
 
@@ -265,7 +271,8 @@ class AIAvatarHttpServer(Adapter):
                     text=request.text,
                     audio_data=request.audio_data,
                     files=request.files,
-                    system_prompt_params=request.system_prompt_params
+                    system_prompt_params=request.system_prompt_params,
+                    wait_in_queue=request.wait_in_queue
                 )):
                     aiavatar_response = AIAvatarResponse(
                         type=response.type,

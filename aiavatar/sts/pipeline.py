@@ -62,9 +62,13 @@ class STSPipeline:
         voice_recorder: VoiceRecorder = None,
         voice_recorder_enabled: bool = True,
         voice_recorder_dir: str = "recorded_voices",
+        invoke_queue_idle_timeout: float = 10.0,
+        invoke_timeout: float = 60.0,
+        use_invoke_queue: bool = False,
         debug: bool = False
     ):
         self.debug = debug
+        self.use_invoke_queue = use_invoke_queue
 
         # Session state management
         if session_state_manager:
@@ -168,6 +172,13 @@ class STSPipeline:
         self._on_before_tts = self.on_before_tts_default
         self._on_finish = self.on_finish_default
 
+        # Queue management for invoke_queued
+        self._request_queues: dict[str, asyncio.Queue] = {}
+        self._invoke_workers: dict[str, asyncio.Task] = {}
+        self._response_queues: dict[str, dict[str, asyncio.Queue]] = {}
+        self.invoke_queue_idle_timeout = invoke_queue_idle_timeout
+        self.invoke_timeout = invoke_timeout
+
     def on_before_llm(self, func):
         self._on_before_llm = func
         return func
@@ -228,6 +239,14 @@ class STSPipeline:
         return state.active_transaction_id == transaction_id, state.active_transaction_id
 
     async def invoke(self, request: STSRequest) -> AsyncGenerator[STSResponse, None]:
+        if self.use_invoke_queue:
+            async for response in self._invoke_queued(request):
+                yield response
+        else:
+            async for response in self._invoke_direct(request):
+                yield response
+
+    async def _invoke_direct(self, request: STSRequest) -> AsyncGenerator[STSResponse, None]:
         try:
             if not request.session_id:
                 raise ValueError("session_id is required but not provided")
@@ -325,7 +344,8 @@ class STSPipeline:
             performance.context_id = request.context_id
 
             # Stop on-going response before new response
-            await self.stop_response(request.session_id, request.context_id)
+            if not self.use_invoke_queue or not request.wait_in_queue:
+                await self.stop_response(request.session_id, request.context_id)
             performance.stop_response_time = time() - start_time
 
             yield STSResponse(
@@ -460,6 +480,113 @@ class STSPipeline:
                 context_id=request.context_id,
                 metadata={"error": "Error in processing Speech-to-Speech pipeline"}
             )
+
+    async def _clear_queue(self, session_id: str):
+        if session_id not in self._request_queues:
+            return
+
+        queue = self._request_queues[session_id]
+        pending = self._response_queues.get(session_id, {})
+
+        while not queue.empty():
+            try:
+                request_id, request = queue.get_nowait()
+                response_queue = pending.get(request_id)
+                if response_queue:
+                    await response_queue.put(STSResponse(
+                        type="cancelled",
+                        session_id=session_id,
+                        context_id=request.context_id
+                    ))
+                    await response_queue.put(None)
+            except asyncio.QueueEmpty:
+                break
+
+    async def _process_queue(self, session_id: str):
+        queue = self._request_queues[session_id]
+        if self.debug:
+            logger.info(f"Queue worker started: {session_id}")
+
+        try:
+            while True:
+                try:
+                    request_id, request = await asyncio.wait_for(
+                        queue.get(), timeout=self.invoke_queue_idle_timeout
+                    )
+                except asyncio.TimeoutError:
+                    if queue.empty():
+                        if self.debug:
+                            logger.info(f"Queue worker idle timeout, cleaning up: {session_id}")
+                        self._cleanup_session_queue(session_id)
+                        return
+                    continue
+
+                response_queue = self._response_queues.get(session_id, {}).get(request_id)
+                try:
+                    async with asyncio.timeout(self.invoke_timeout):
+                        async for response in self._invoke_direct(request):
+                            if response_queue:
+                                await response_queue.put(response)
+                except asyncio.TimeoutError:
+                    logger.warning(f"invoke timed out: {session_id}")
+                    if response_queue:
+                        await response_queue.put(STSResponse(
+                            type="error",
+                            session_id=session_id,
+                            context_id=request.context_id,
+                            metadata={"error": "invoke timed out"}
+                        ))
+                except Exception as ex:
+                    logger.error(f"invoke error in queue worker: {session_id} - {ex}")
+                    if response_queue:
+                        await response_queue.put(STSResponse(
+                            type="error",
+                            session_id=session_id,
+                            context_id=request.context_id,
+                            metadata={"error": "invoke error in queue worker"}
+                        ))
+                finally:
+                    if response_queue:
+                        await response_queue.put(None)
+                    if session_id in self._response_queues:
+                        self._response_queues[session_id].pop(request_id, None)
+
+        except Exception as ex:
+            logger.error(f"Queue worker crashed: {session_id} - {ex}")
+            self._cleanup_session_queue(session_id)
+
+    def _cleanup_session_queue(self, session_id: str):
+        self._request_queues.pop(session_id, None)
+        self._invoke_workers.pop(session_id, None)
+        self._response_queues.pop(session_id, None)
+
+    async def _invoke_queued(
+        self,
+        request: STSRequest
+    ) -> AsyncGenerator[STSResponse, None]:
+        session_id = request.session_id
+
+        if session_id not in self._request_queues:
+            self._request_queues[session_id] = asyncio.Queue()
+            self._response_queues[session_id] = {}
+            self._invoke_workers[session_id] = asyncio.create_task(
+                self._process_queue(session_id)
+            )
+
+        if not request.wait_in_queue:
+            await self._clear_queue(session_id)
+
+        request_id = str(uuid4())
+        response_queue: asyncio.Queue[STSResponse] = asyncio.Queue()
+        self._response_queues[session_id][request_id] = response_queue
+
+        await self._request_queues[session_id].put((request_id, request))
+
+        while True:
+            response = await response_queue.get()
+            if response is None:
+                break
+            yield response
 
     async def finalize(self, context_id: str):
         await self.vad.finalize_session(context_id)

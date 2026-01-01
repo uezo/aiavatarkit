@@ -143,6 +143,7 @@ This change ensures compatibility with the new internal structure and removes th
     - [📋 System Prompt Parameters](#-system-prompt-parameters)
     - [⏰ Timestamp Insertion](#-timestamp-insertion)
     - [🧵 Request merging](#-request-merging)
+    - [📥 Invoke Queue](#-invoke-queue)
     - [🧺 Shared Context](#-shared-context)
     - [🔈 Audio Device](#-audio-device)
     - [🎭 Custom Behavior](#-custom-behavior)
@@ -2391,6 +2392,72 @@ aiavatar_app.sts.merge_request_prefix = "$直前のユーザーの要求とあ�
 ```
 
 NOTE: Files from the previous request are preserved in the merged request
+
+
+### 📥 Invoke Queue
+
+AIAvatarKit provides three invoke modes for handling concurrent requests. By default, new requests interrupt any ongoing response. With queue mode enabled, you can control whether requests wait in line or still interrupt.
+
+#### Invoke Modes
+
+| Mode | Settings | Behavior |
+|------|----------|----------|
+| **Direct** (default) | `use_invoke_queue=False` | New requests immediately interrupt the current response. Suitable for most use cases. |
+| **Queued (Interrupt)** | `use_invoke_queue=True`, `wait_in_queue=False` | Requests are queued but clear previous pending requests. The current response is interrupted. Default behavior when queue mode is enabled. |
+| **Queued (Wait)** | `use_invoke_queue=True`, `wait_in_queue=True` | Requests wait in queue until previous ones complete. No interruption occurs. Useful when you need sequential processing, such as sending a follow-up request (e.g., with an image requested by the server) without interrupting the current response. |
+
+#### Configuration
+
+Enable queue mode on the pipeline:
+
+```python
+from aiavatar.sts import STSPipeline
+
+pipeline = STSPipeline(
+    # ... other settings ...
+    use_invoke_queue=True,              # Enable queue mode
+    invoke_queue_idle_timeout=10.0,     # Worker stops after 10s of inactivity
+    invoke_timeout=60.0,                # Maximum time for a single invoke
+)
+```
+
+Or on the AIAvatar instance:
+
+```python
+aiavatar_app = AIAvatar(
+    openai_api_key=OPENAI_API_KEY,
+    use_invoke_queue=True,
+)
+```
+
+#### Per-Request Behavior
+
+When queue mode is enabled, control per-request behavior via `wait_in_queue`:
+
+```python
+from aiavatar.sts import STSRequest
+
+# Interrupt mode (default): clears queue and interrupts current response
+request = STSRequest(
+    session_id="session1",
+    text="Hello!",
+    wait_in_queue=False  # default
+)
+
+# Wait mode: queues and waits for previous requests to complete
+request = STSRequest(
+    session_id="session1",
+    text="What's next?",
+    wait_in_queue=True
+)
+```
+
+#### Caveats
+
+- **Python 3.11+ required**: Queue mode uses `asyncio.timeout()` which is only available in Python 3.11 and later.
+- **Session-based queues**: Each session has its own independent queue. Requests from different sessions do not affect each other.
+- **Do not mix modes**: The `use_invoke_queue` setting should remain consistent for a pipeline instance. Changing it at runtime is not supported.
+- **Cancelled responses**: When a queued request is cleared (by a non-waiting request), it receives a response with `type="cancelled"`.
 
 
 ### 🧺 Shared Context
