@@ -142,6 +142,7 @@ class LLMService(ABC):
         debug: bool = False
     ):
         self.system_prompt = system_prompt
+        self._get_system_prompt = self.get_system_prompt_default
         self.model = model
         self.temperature = temperature
         self.initial_messages = initial_messages
@@ -248,7 +249,11 @@ The list of tools is as follows:
     def replace_last_option_split_char(self, original):
         return re.sub(self.option_split_chars_regex, r"\1|", original)
 
-    def get_system_prompt(self, context_id: str, user_id: str, system_prompt_params: Dict[str, any]):
+    def get_system_prompt(self, func):
+        self._get_system_prompt = func
+        return func
+
+    async def get_system_prompt_default(self, context_id: str, user_id: str, system_prompt_params: Dict[str, any]):
         if not system_prompt_params:
             return self.system_prompt
         else:

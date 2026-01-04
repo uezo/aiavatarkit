@@ -99,7 +99,7 @@ class ChatGPTService(LLMService):
     async def compose_messages(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
         messages = []
         if self.system_prompt:
-            messages.append({"role": "system", "content": self.get_system_prompt(context_id, user_id, system_prompt_params)})
+            messages.append({"role": "system", "content": await self._get_system_prompt(context_id, user_id, system_prompt_params)})
 
         # Add initial messages (e.g. few-shot)
         if self.initial_messages:

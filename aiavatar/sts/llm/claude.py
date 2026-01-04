@@ -187,7 +187,7 @@ class ClaudeService(LLMService):
 
         async with self.anthropic_client.messages.stream(
             messages=messages,
-            system=self.get_system_prompt(context_id, user_id, system_prompt_params) + tool_instruction,
+            system=await self._get_system_prompt(context_id, user_id, system_prompt_params) + tool_instruction,
             model=self.model,
             temperature=self.temperature,
             tools=filtered_tools,
@@ -205,7 +205,7 @@ class ClaudeService(LLMService):
                             logger.info("Get dynamic tool")
                             filtered_tools = await self._get_dynamic_tools(
                                 messages,
-                                {"system_prompt": self.get_system_prompt(system_prompt_params)}
+                                {"system_prompt": await self._get_system_prompt(context_id, user_id, system_prompt_params)}
                             )
                             logger.info(f"Dynamic tools: {filtered_tools}")
                             try_dynamic_tools = True

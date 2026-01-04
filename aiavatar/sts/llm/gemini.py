@@ -254,7 +254,7 @@ class GeminiService(LLMService):
         else:
             filtered_tools = [t.spec for _, t in self.tools.items() if not t.is_dynamic] or None
 
-        system_instruction = self.get_system_prompt(context_id, user_id, system_prompt_params)
+        system_instruction = await self._get_system_prompt(context_id, user_id, system_prompt_params)
         if tool_instruction:
             system_instruction = system_instruction + tool_instruction if system_instruction else tool_instruction
 
@@ -294,7 +294,7 @@ class GeminiService(LLMService):
                         logger.info("Get dynamic tool")
                         filtered_tools = await self._get_dynamic_tools(
                             messages,
-                            {"system_prompt": self.get_system_prompt(context_id, user_id, system_prompt_params)}
+                            {"system_prompt": await self._get_system_prompt(context_id, user_id, system_prompt_params)}
                         )
                         logger.info(f"Dynamic tools: {filtered_tools}")
                         try_dynamic_tools = True
