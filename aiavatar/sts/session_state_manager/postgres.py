@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone, timedelta
 import json
 import logging
@@ -35,9 +36,16 @@ class PostgreSQLSessionStateManager(SessionStateManager):
         self.db_pool_min_size = db_pool_min_size
         self.db_pool_max_size = db_pool_max_size
         self._pool: asyncpg.Pool = None
+        self._pool_lock = asyncio.Lock()
 
     async def get_pool(self) -> asyncpg.Pool:
-        if self._pool is None:
+        if self._pool is not None:
+            return self._pool
+
+        async with self._pool_lock:
+            if self._pool is not None:
+                return self._pool
+
             if self.connection_str:
                 self._pool = await asyncpg.create_pool(
                     dsn=self.connection_str,
@@ -55,6 +63,7 @@ class PostgreSQLSessionStateManager(SessionStateManager):
                     max_size=self.db_pool_max_size,
                 )
             await self.init_db()
+
         return self._pool
 
     async def init_db(self):
