@@ -41,7 +41,8 @@ class MCPBase:
 
         for mcp_tool in mcp_tools:
             async def call_tool(tool_name=mcp_tool.name, **kwargs):
-                results = await self.client.call_tool(tool_name, kwargs)
+                call_tool_result = await self.client.call_tool(tool_name, kwargs)
+                results = call_tool_result.content
                 dumped_results = [r.text if r.type == "text" else r.model_dump() for r in results]
                 if len(results) == 1:
                     return dumped_results[0]
