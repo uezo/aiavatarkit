@@ -32,13 +32,20 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
         self.record_queue = queue.Queue()
         self.stop_event = threading.Event()
         self._pool: asyncpg.Pool = None
+        self._pool_lock = asyncio.Lock()
         self._loop: asyncio.AbstractEventLoop = None
 
         self.worker_thread = threading.Thread(target=self.start_worker, daemon=True)
         self.worker_thread.start()
 
     async def get_pool(self) -> asyncpg.Pool:
-        if self._pool is None:
+        if self._pool is not None:
+            return self._pool
+
+        async with self._pool_lock:
+            if self._pool is not None:
+                return self._pool
+
             if self.connection_str:
                 self._pool = await asyncpg.create_pool(
                     dsn=self.connection_str,
@@ -56,6 +63,7 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
                     max_size=self.db_pool_size,
                 )
             await self.init_db()
+
         return self._pool
 
     async def add_column_if_not_exist(self, conn, column_name):
