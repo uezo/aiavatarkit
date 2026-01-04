@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List, Callable, Optional
+import inspect
 import httpx
 import logging
 from .preprocessor import TTSPreprocessor
@@ -106,7 +107,12 @@ def create_instant_synthesizer(
             http_response.raise_for_status()
 
             # Parse HTTP response and return audio bytes
-            return response_parser(http_response) if response_parser else http_response.content
+            if response_parser:
+                result = response_parser(http_response)
+                if inspect.iscoroutine(result):
+                    return await result
+                return result
+            return http_response.content
 
     return InstantSynthesizer(
         style_mapper=style_mapper,
