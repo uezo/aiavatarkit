@@ -2399,42 +2399,29 @@ Below is an example using [ChatMemory](https://github.com/uezo/chatmemory).
 
 ```python
 # Create client for ChatMemory
-from examples.misc.chatmemory import ChatMemoryClient
-chat_memory_client = ChatMemoryClient(
-    base_url="http://your_chatmemory_host",
-    debug=True
+from aiavatar.character.memory import MemoryClient
+memory_client = MemoryClient(
+    base_url="http://localhost:8000"
 )
 
 # Add messages to ChatMemory service
 @aiavatar_app.sts.on_finish
 async def on_finish(request, response):
-    try:
-        await chat_memory_client.enqueue_messages(request, response)
-    except Exception as ex:
-        print(ex)
+    await memory_client.add_messages(
+        character_id=YOUR_CHARACTER_ID,  # Character ID registered via CharacterService, or any value to separate memory spaces
+        request=request,
+        response=response
+    )
 
-# Retrieve memory by calling tool
-search_memory_tool_spec = {
-    "type": "function",
-    "function": {
-        "name": "search_memory",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"}
-            },
-        },
-    }
-}
-@aiavatar_app.sts.llm.tool(search_memory_tool_spec)
-async def search_memory(query: str, metadata: dict = None):
-    """Search long-term memory
-
-    Args:
-        query: Query to search memory.
-    """
-    result = await chat_memory_client.search(metadata["user_id"], query)
-    return result.__dict__
+# Add MemorySearchTool to recall past events, conversations, or information about the user.
+from aiavatar.character.tools import MemorySearchTool
+llm.add_tool(
+    MemorySearchTool(
+        memory_client=memory_client,
+        character_id=YOUR_CHARACTER_ID,
+        debug=True
+    )
+)
 ```
 
 
