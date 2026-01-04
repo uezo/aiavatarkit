@@ -82,10 +82,10 @@ class LiteLLMService(LLMService):
         messages = []
         if self.system_prompt:
             if self.system_prompt_by_user_prompt:
-                messages.append({"role": "user", "content": self.get_system_prompt(context_id, user_id, system_prompt_params)})
+                messages.append({"role": "user", "content": await self._get_system_prompt(context_id, user_id, system_prompt_params)})
                 messages.append({"role": "assistant", "content": "ok"})
             else:
-                messages.append({"role": "system", "content": self.get_system_prompt(context_id, user_id, system_prompt_params)})
+                messages.append({"role": "system", "content": await self._get_system_prompt(context_id, user_id, system_prompt_params)})
 
         # Add initial messages (e.g. few-shot)
         if self.initial_messages:
