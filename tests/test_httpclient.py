@@ -122,9 +122,10 @@ async def test_chat(aiavatar_app: AIAvatar):
         context_id = response.context_id
 
         # Context
-        await chat(aiavatar_app, text="旅行で悩んでいます。東京、京都、福岡のいずれかに。", session_id=session_id, context_id=context_id)
-        response = await chat(aiavatar_app, text="おすすめはどこ？場所だけ答えて。それ以外は何も言わないで", session_id=session_id, context_id=context_id)
-        assert "東京" in response.text or "京都" in response.text or "福岡" in response.text
+        await chat(aiavatar_app, text="旅行で悩んでいます。東京、京都、福岡のいずれかに。どう思う？", session_id=session_id, context_id=context_id)
+        response = await chat(aiavatar_app, text="おすすめはどこ？先ほどの選択肢の中から選んで都市名だけ答えて。それ以外は何も言わないで", session_id=session_id, context_id=context_id)
+        response_text = response.text   # Avoid flooding the console with audio data when comparing response.text on assertion errors
+        assert "東京" in response_text or "京都" in response_text or "福岡" in response_text
         trans_text = transcribe(response.audio_data)
         assert response.audio_data != b""
         assert "東京" in trans_text or "京都" in trans_text or "福岡" in trans_text
@@ -245,8 +246,9 @@ async def test_chat_function(aiavatar_app: AIAvatar):
 
     try:
         response = await chat(aiavatar_app, text="東京の天気を教えて。", session_id=session_id)
-        assert "晴" in response.text
-        assert "23.4" in response.text
+        response_text = response.text
+        assert "晴" in response_text
+        assert "23.4" in response_text
 
     finally:
         await aiavatar_app.stop_listening(session_id)
