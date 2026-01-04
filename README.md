@@ -345,10 +345,12 @@ from aiavatar.sts.tts.speech_gateway import SpeechGatewaySpeechSynthesizer
 
 For quick setup of custom TTS services with HTTP API endpoints, use `create_instant_synthesizer`. This allows you to create a TTS synthesizer with just HTTP request parameters.
 
-```python
-from aiavatar.sts.tts.base import create_instant_synthesizer
+Examples:
 
-# Example: Style-Bert-VITS2 API
+```python
+from aiavatar.sts.tts import create_instant_synthesizer
+
+# Style-Bert-VITS2 API
 sbv2_tts = create_instant_synthesizer(
     method="POST",
     url="http://127.0.0.1:5000/voice",
@@ -357,6 +359,59 @@ sbv2_tts = create_instant_synthesizer(
         "speaker_id": "0",
         "text": "{text}"  # Placeholder for processed text
     }
+)
+
+# ElevenLabs
+elevenlabs_tts = create_instant_synthesizer(
+    method="POST",
+    url=f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+    headers={
+        "xi-api-key": ELEVENLABS_API_KEY
+    },
+    json={
+        "text": "{text}",
+        "model_id": "eleven_v3",
+        "output_format": "pcm_16000"
+    }
+)
+
+# Aivis Cloud API
+from aiavatar.sts.tts import AudioConverter
+aivis_tts = create_instant_synthesizer(
+    method="POST",
+    url="https://api.aivis-project.com/v1/tts/synthesize",
+    headers={
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {AIVIS_API_KEY}"
+    },
+    json={
+        "model_uuid": "22e8ed77-94fe-4ef2-871f-a86f94e9a579",   # Kohaku
+        "text": "{text}"
+    },
+    response_parser=AudioConverter(debug=True).convert
+)
+
+# Kotodama API (Implement `make_request` to apply style or language.)
+import base64
+async def base64_to_bytes(http_response) -> bytes:
+    response_json = http_response.json()
+    b64audio = response_json["audios"][0]
+    return base64.b64decode(b64audio)
+
+kotodama_tts = create_instant_synthesizer(
+    method="POST",
+    url=f"https://tts3.spiral-ai-app.com/api/tts_generate",
+    headers={
+        "Content-Type": "application/json",
+        "X-API-Key": KOTODAMA_API_KEY
+    },
+    json={
+        "text": "{text}",
+        "speaker_id": "Marlo",
+        "decoration_id": "neutral",
+        "audio_format": "wav"
+    },
+    response_parser=base64_to_bytes
 )
 ```
 
