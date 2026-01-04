@@ -72,7 +72,7 @@ class MemoryClient(MemoryClientBase):
         self.debug = debug
 
         self._queue: asyncio.Queue[Tuple[STSRequest, STSResponse]] = asyncio.Queue()
-        self._worker_task = asyncio.create_task(self._process_queue())
+        self._worker_task: asyncio.Task = None
 
     async def search(
         self,
@@ -125,6 +125,8 @@ class MemoryClient(MemoryClientBase):
         request: STSRequest,
         response: STSResponse,
     ):
+        if self._worker_task is None:
+            self._worker_task = asyncio.create_task(self._process_queue())
         await self._queue.put((request, response, character_id))
 
     async def _process_queue(self):
@@ -169,9 +171,10 @@ class MemoryClient(MemoryClientBase):
         return resp.json()
 
     async def close(self):
-        self._worker_task.cancel()
-        try:
-            await self._worker_task
-        except asyncio.CancelledError:
-            pass
+        if self._worker_task is not None:
+            self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
         await self.http_client.aclose()
