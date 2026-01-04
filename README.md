@@ -109,6 +109,13 @@ This change ensures compatibility with the new internal structure and removes th
 - [🥰 Face Expression](#-face-expression)
 - [💃 Animation](#-animation)
 
+- [🥳 Character Management](#-character-management)
+    - [Get started](#get-started)
+    - [Updating Diaries](#updating-diaries)
+    - [Updating Schedules](#updating-schedules)
+    - [Automated Daily Updates](#automated-daily-updates)
+    - [Long-term Memory](#long-term-memory)
+
 - [🧩 API](#-api)
     - [💫 RESTful API (SSE)](#-restful-api-sse)
     - [🔵 Dify-compatible API](#-dify-compatible-api)
@@ -732,6 +739,148 @@ This allows emojis like 🥳 to be autonomously displayed in the terminal during
 ## 💃 Animation
 
 Now writing... ✍️
+
+
+## 🥳 Character Management
+
+`CharacterService` provides functionality for managing AI character settings and generating dynamic content such as schedules and diaries based on character personalities.
+
+Schedules and diaries are generated as if by the character's own will. By updating these daily and incorporating them into prompts, you can make the character feel like they are actually living in real-world time.
+
+**Note:** This feature requires PostgreSQL as the database backend.
+
+
+### Get started
+
+Register a new character using a character setting prompt. At this time, both the weekly schedule and today's schedule are also generated.
+
+```python
+from datetime import date
+from aiavatar.character import CharacterService
+
+# Initialize service
+character_service = CharacterService(
+    openai_api_key="YOUR_API_KEY",
+    connection_str="postgresql://user:pass@localhost/aiavatar"
+)
+
+# Initialize a new character with weekly and daily schedules
+character, weekly, daily = await character_service.initialize_character(
+    name="Alice",
+    character_prompt="You are Alice, a cheerful high school student who loves reading..."
+)
+
+print(f"Character ID: {character.id}")
+```
+
+To use the registered and generated content as a system prompt, implement `LLMService.get_system_prompt` as follows:
+
+```python
+@llm.get_system_prompt
+async def get_system_prompt(context_id: str, user_id: str, system_prompt_params: dict):
+    return await character_service.get_system_prompt(
+        character_id="YOUR_CHARACTER_ID",
+        system_prompt_params=system_prompt_params
+    )
+```
+
+### Updating Diaries
+
+Diaries can be automatically generated using `create_diary_with_generation`. The following information is used:
+
+- Character settings
+- Today's schedule
+- Today's news (retrieved via web search)
+- Previous day's diary
+
+```python
+# Generate diary from daily activities
+diary = await character_service.create_diary_with_generation(
+    character_id=character.id,
+    diary_date=date.today()
+)
+```
+
+### Updating Schedules
+
+Daily schedules can be automatically generated using `create_daily_schedule_with_generation`. The following information is used:
+
+- Character settings
+- Weekly schedule
+- Previous day's schedule
+
+```python
+daily_schedule = await character_service.create_daily_schedule_with_generation(
+    character_id=character.id,
+    schedule_date=date.today()
+)
+```
+
+### Automated Daily Updates
+
+For a more realistic character experience, use a scheduler service (such as cron) to automatically update schedules and diaries:
+
+- **Daily schedule**: Generate at the beginning of each day (e.g., 0:00 or 6:00)
+- **Diary**: Generate at the end of each day (e.g., 23:00)
+
+Example cron configuration:
+
+```
+# Generate daily schedule at 6:00 AM
+0 6 * * * /usr/bin/python3 /path/to/generate_schedule.py
+
+# Generate diary at 11:00 PM
+0 23 * * * /usr/bin/python3 /path/to/generate_diary.py
+```
+
+Example script for `generate_schedule.py`:
+
+```python
+import asyncio
+from datetime import date
+from aiavatar.character import CharacterService
+
+async def main():
+    character_service = CharacterService(
+        openai_api_key="YOUR_API_KEY",
+        connection_str="postgresql://user:pass@localhost/aiavatar"
+    )
+    await character_service.create_daily_schedule_with_generation(
+        character_id="YOUR_CHARACTER_ID",
+        schedule_date=date.today()
+    )
+
+asyncio.run(main())
+```
+
+### Long-term Memory
+
+This feature is **optional**. If you want to make diaries searchable as long-term memory, you can integrate with an external memory service by configuring `MemoryClient`:
+
+```python
+from aiavatar.character import CharacterService, MemoryClient
+
+memory_client = MemoryClient(base_url="http://memory-service:8000")
+
+character_service = CharacterService(
+    openai_api_key="YOUR_API_KEY",
+    connection_str="postgresql://user:pass@localhost/aiavatar",
+    memory_client=memory_client
+)
+```
+
+Registered diaries can be included in search results using the `search` method.
+
+```python
+# In addition to diaries, conversation history with users and other knowledge are searched comprehensively
+result = await character_service.memory.search(
+    character_id="YOUR_CHARACTER_ID",
+    user_id="YOUR_USER_ID",
+    query="travel summer 2026"
+)
+```
+
+The default `MemoryClient` uses [ChatMemory](https://github.com/uezo/chatmemory) as its backend, but you can also use other long-term memory services by inheriting from `MemoryClientBase`.
 
 
 ## 🧩 API
