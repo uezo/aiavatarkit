@@ -17,10 +17,11 @@ class SpeechSynthesizer(ABC):
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
         preprocessors: List[TTSPreprocessor] = None,
+        follow_redirects: bool = False,
         debug: bool = False
     ):
         self.http_client = httpx.AsyncClient(
-            follow_redirects=False,
+            follow_redirects=follow_redirects,
             timeout=httpx.Timeout(timeout),
             limits=httpx.Limits(
                 max_connections=max_connections,
@@ -62,14 +63,15 @@ class SpeechSynthesizerDummy(SpeechSynthesizer):
 
 def create_instant_synthesizer(
     *,
-    method: str, url: str, params: dict = None, headers: dict = None, json: dict = None,
+    method: str = None, url: str = None, params: dict = None, headers: dict = None, json: dict = None,
     request_maker: Callable[[str, Optional[dict], Optional[str]], httpx.Request] = None,
     response_parser: Callable[[httpx.Response], bytes] = None,
-    style_mapper = None,
-    max_connections = 100,
-    max_keepalive_connections = 20,
-    timeout = 10,
-    preprocessors = None,
+    style_mapper: Dict[str, str] = None,
+    max_connections: int = 100,
+    max_keepalive_connections: int = 20,
+    timeout: float = 10,
+    preprocessors: List[TTSPreprocessor] = None,
+    follow_redirects: bool = False,
     debug = False
 ) -> SpeechSynthesizer:
     class InstantSynthesizer(SpeechSynthesizer):
@@ -120,5 +122,6 @@ def create_instant_synthesizer(
         max_keepalive_connections=max_keepalive_connections,
         timeout=timeout,
         preprocessors=preprocessors,
+        follow_redirects=follow_redirects,
         debug=debug
     )

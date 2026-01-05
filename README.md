@@ -413,6 +413,41 @@ kotodama_tts = create_instant_synthesizer(
     },
     response_parser=base64_to_bytes
 )
+
+# Coefont
+import hmac
+import hashlib
+
+def make_coefont_request(text: str, style_info: dict, language: str):
+    date = str(int(datetime.now(tz=timezone.utc).timestamp()))
+
+    data = json.dumps({
+        "coefont": "33e0a2ff-5050-434c-9506-defe97e52f15",  # Yuko Goto
+        "text": text
+    })
+
+    signature = hmac.new(
+        key=bytes(COEFONT_ACCESS_SECRET, "utf-8"),
+        msg=(date+data).encode("utf-8"),
+        digestmod=hashlib.sha256
+    ).hexdigest()
+
+    return httpx.Request(
+        method="post",
+        url="https://api.coefont.cloud/v2/text2speech",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": COEFONT_ACCESS_KEY,
+            "X-Coefont-Date": date,
+            "X-Coefont-Content": signature
+        },
+        data=data
+    )
+
+tts = create_instant_synthesizer(
+    request_maker=make_coefont_request,
+    follow_redirects=True
+)
 ```
 
 The `{text}` and `{language}` placeholders in params, headers, and json will be automatically replaced with the processed text and language values during synthesis.
