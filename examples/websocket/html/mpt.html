@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIAvatarKit MotionPNGTuber Example</title>
+    <style>
+        body {
+            background-color: #121212;
+            color: #E0E0E0;
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            text-align: center;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            color: #FFFFFF;
+            font-size: clamp(1.5rem, 4vw, 2rem);
+            margin: 0 0 20px 0;
+        }
+
+        .avatar-frame {
+            display: block;
+            width: clamp(180px, 40vw, 270px);
+            aspect-ratio: 9 / 16;
+            background: linear-gradient(45deg, #FF007F, #7F00FF);
+            border-radius: 16px;
+            padding: 4px;
+            transition: background 0.3s ease;
+            margin: 20px auto;
+        }
+
+        .avatar-container {
+            position: relative;
+            background: #000;
+            border-radius: 12px;
+            width: 100%;
+            height: 100%;
+            max-width: 270px;
+            max-height: 480px;
+            aspect-ratio: 9 / 16;
+            overflow: hidden;
+        }
+
+        .avatar-container video {
+            display: block;
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .avatar-container canvas {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .button-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            margin: 20px 0;
+        }
+
+        button {
+            background-color: #1E1E1E;
+            border: none;
+            padding: 12px 24px;
+            color: #E0E0E0;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 5px;
+            border-radius: 4px;
+            transition: background-color 0.3s ease;
+            min-height: 44px;
+        }
+
+        button:hover {
+            background-color: #333333;
+        }
+
+        .message-box {
+            position: relative;
+            margin: 20px auto 0;
+            width: clamp(200px, 80vw, 500px);
+            background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+            border: 2px solid #4a6fa5;
+            border-radius: 8px;
+            padding: 28px 12px 8px;
+            box-shadow: 0 0 10px rgba(74, 111, 165, 0.2);
+            font-family: "Hiragino Kaku Gothic ProN", "メイリオ", sans-serif;
+        }
+
+        .message-speaker {
+            position: absolute;
+            top: 0;
+            left: 0;
+            font-size: 10px;
+            font-weight: bold;
+            padding: 2px 8px;
+            border-radius: 6px 0 6px 0;
+        }
+
+        .message-speaker.user {
+            background: #2d5a27;
+            color: #8fbc8f;
+        }
+
+        .message-speaker.ai {
+            background: #5a2763;
+            color: #dda0dd;
+        }
+
+        .message-text {
+            font-size: 14px;
+            line-height: 1.5;
+            color: #ffffff;
+            min-height: 20px;
+            text-align: left;
+        }
+
+        .message-box.hidden {
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+
+        .message-box.visible {
+            opacity: 1;
+            transition: opacity 0.3s ease;
+        }
+
+        /* iOS-style toggle switch */
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .toggle-label {
+            color: #E0E0E0;
+            font-size: 14px;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 51px;
+            height: 31px;
+            appearance: none;
+            background-color: #39393D;
+            border-radius: 31px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            outline: none;
+            border: none;
+        }
+
+        .toggle-switch::before {
+            content: "";
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 27px;
+            height: 27px;
+            background-color: #fff;
+            border-radius: 50%;
+            transition: transform 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .toggle-switch:checked {
+            background-color: #34C759;
+        }
+
+        .toggle-switch:checked::before {
+            transform: translateX(20px);
+        }
+    </style>
+</head>
+
+<body>
+    <h1>AIAvatarKit MotionPNGTuber Example</h1>
+
+    <div class="avatar-frame" id="avatarFrame">
+        <div class="avatar-container" id="stage">
+            <video id="base-video" playsinline muted></video>
+            <canvas id="mouth-canvas"></canvas>
+        </div>
+    </div>
+
+    <div class="button-container">
+        <button id="chatBtn">Start</button>
+        <div class="toggle-container">
+            <span class="toggle-label">Barge-in</span>
+            <input type="checkbox" id="interruptToggle" class="toggle-switch">
+        </div>
+        <div class="toggle-container">
+            <span class="toggle-label">Camera</span>
+            <input type="checkbox" id="cameraToggle" class="toggle-switch">
+        </div>
+    </div>
+    
+    <div class="input-level" style="display: none;">
+        <span style="color: #E0E0E0;">Input: </span>
+        <span id="inputLevel">0.0 dB</span>
+    </div>
+
+    <div id="messageBox" class="message-box hidden">
+        <div id="messageSpeaker" class="message-speaker ai">AI</div>
+        <div id="messageText" class="message-text"></div>
+    </div>
+
+    <!-- Hidden camera elements -->
+    <video id="cameraVideo" style="display: none;" playsinline></video>
+    <canvas id="cameraCanvas" style="display: none;"></canvas>
+
+    <footer style="position: fixed; bottom: 0; left: 0; right: 0; padding: 10px; color: #888; font-size: 12px; background-color: #121212;">
+        <p style="margin: 0;">
+            Avatar powered by <a href="https://github.com/rotejin/MotionPNGTuber_Player" target="_blank" style="color: #4a9eff;">MotionPNGTuber Player</a> by rotejin | Voice chat powered by <a href="https://github.com/uezo/aiavatarkit" target="_blank" style="color: #4a9eff;">AIAvatarKit</a> by uezo
+        </p>
+    </footer>
+
+    <script src="aiavatar.js"></script>
+    <script src="camera.js"></script>
+    <script src="motionpngtuber/lipsync.js"></script>
+    <script>
+        const sessionId = crypto.randomUUID();
+        const userId = "user01";
+
+        // AIAvatar
+        const aiavatar = new AIAvatarClient({
+            webSocketUrl: "../ws"
+        });
+
+        // LipSync
+        const lipsyncEngine = new LipsyncEngine({
+            elements: {
+                video: document.getElementById("base-video"),
+                mouthCanvas: document.getElementById("mouth-canvas"),
+                stage: document.getElementById("stage")
+            },
+            assets: {
+                video: "motionpngtuber/assets/assets14/pinkchan_mouthless_h264.mp4",
+                track: "motionpngtuber/assets/assets14/mouth_track.json",
+                mouth_closed: "motionpngtuber/assets/assets14/mouth/closed.png",
+                mouth_open: "motionpngtuber/assets/assets14/mouth/open.png",
+                mouth_half: "motionpngtuber/assets/assets14/mouth/half.png",
+                mouth_e: "motionpngtuber/assets/assets14/mouth/e.png",
+                mouth_u: "motionpngtuber/assets/assets14/mouth/u.png"
+            },
+            options: {
+                hqAudioEnabled: true,   // HQ Audio Mode
+                sensitivity: 0,         // Set threshold to max because RMS values are large
+                debug: false
+            }
+        });
+
+        aiavatar.onPlaybackAnalyze = ({ rms, centroid01, tSec }) => {
+            lipsyncEngine.processAudioData({
+                rms: rms * 0.2,         // Scale down as values are still too large even at max threshold
+                high: centroid01,
+                low: 1 - centroid01
+            });
+        };
+        aiavatar.onResetFace = () => { lipsyncEngine.resetAudioStats(); };
+
+        // Close mouth on speech ends
+        aiavatar.onPlaybackEnd = () => {
+            if (lipsyncEngine) {
+                lipsyncEngine.volume = 0;
+                lipsyncEngine.smoothedHighRatio = 0;
+                lipsyncEngine.setMouthState("closed", true);
+            }
+        };
+
+        // Camera
+        const camera = new Camera({
+            videoElement: document.getElementById("cameraVideo"),
+            canvasElement: document.getElementById("cameraCanvas"),
+            onCapture: (imageDataUrl) => {
+                // Send captured image via WebSocket
+                const imageMessage = {
+                    type: "invoke",
+                    session_id: sessionId,
+                    user_id: userId,
+                    files: [{url: imageDataUrl}],
+                    allow_merge: false,
+                    wait_in_queue: true
+                };
+                aiavatar.ws.send(JSON.stringify(imageMessage));
+            }
+        });
+
+        // Example: Show microphone effect and input level
+        const avatarFrame = document.getElementById("avatarFrame");
+        const inputLevelElement = document.getElementById("inputLevel");
+        let rmsSum = 0;
+        let rmsCount = 0;
+        let lastUpdateTime = Date.now();
+        
+        aiavatar.onMicrophoneDataSend = (rms) => {
+            if (rms > 0.01) {
+                avatarFrame.style.background = "linear-gradient(45deg, #FF0000, #FF7F00)";
+            } else {
+                avatarFrame.style.background = "linear-gradient(45deg, #FF007F, #7F00FF)";
+            }
+            
+            // Accumulate RMS values for averaging
+            rmsSum += rms;
+            rmsCount++;
+            
+            // Update display every 0.5 seconds with average
+            const currentTime = Date.now();
+            if (currentTime - lastUpdateTime >= 500) {
+                const avgRms = rmsSum / rmsCount;
+                const dbLevel = avgRms > 0 ? 20 * Math.log10(avgRms) : -80;
+                inputLevelElement.textContent = `${dbLevel.toFixed(1)} dB`;
+                
+                // Reset for next interval
+                rmsSum = 0;
+                rmsCount = 0;
+                lastUpdateTime = currentTime;
+            }
+        }
+
+        // Custom response handling
+        aiavatar.onResponseReceived = (response) => {
+            // Example: Set microphone volume threshold for filtering noise
+            if (response.type == "connected") {
+                const configMessage = {
+                    type: "config",
+                    session_id: sessionId,
+                    user_id: userId,
+                    metadata: {"volume_db_threshold": -50}  // Detect voice over -50 dB
+                };
+                aiavatar.ws.send(JSON.stringify(configMessage));
+            }
+
+            // Example: response handling by type
+            if (response.type == "accepted") {
+                isServerProcessing = true;
+            } else if (response.type == "tool_call") {
+                console.log(response.metadata);
+            } else if (response.type == "final" || response.type == "error") {
+                isServerProcessing = false;
+            }
+
+            // Vision
+            if (response.type == "vision" && response.metadata !== null) {
+                if (response.metadata.source == "camera" && cameraEnabled) {
+                    camera.capture();
+                }
+            }
+
+            // Disconnect
+            if (response.text !== null && response.text.indexOf("[operation:hangup]") >= 0) {
+                // Wait for audio playback to finish before stopping
+                const waitForAudioEnd = () => {
+                    if (aiavatar.isAudioPlaying) {
+                        setTimeout(waitForAudioEnd, 100); // Check every 100ms
+                    } else {
+                        aiavatar.stopListening(sessionId);
+                        document.getElementById("inputLevel").textContent = "0.0 dB";
+                    }
+                };
+                setTimeout(waitForAudioEnd, 0);
+            }
+
+            // Show user"s partial speech recognition result
+            if (response.type === "info" && response.metadata && response.metadata.partial_request_text) {
+                updateMessage("user", response.metadata.partial_request_text, true);
+            }
+            // Show user"s final message
+            if (response.type === "start" && response.metadata && response.metadata.recognized_text) {
+                updateMessage("user", response.metadata.recognized_text, false);
+            }
+            // Stream AI response: show partial text, then finalize with voice_text
+            if (response.type === "chunk" && response.voice_text) {
+                updateMessage("ai", response.voice_text, true);
+            }
+            if (response.type === "final" && response.voice_text) {
+                updateMessage("ai", response.voice_text, false);
+            }
+            if (response.type === "error") {
+                updateMessage("ai", response.voice_text, false);
+            }
+        }
+
+        // Interrupt toggle functionality
+        let interruptEnabled = false;
+        const interruptToggle = document.getElementById("interruptToggle");
+
+        // Microphone mute logic
+        let isServerProcessing = false;
+        aiavatar.isMicrophoneMuted = () => {
+            if (interruptEnabled) {
+                return false;
+            }
+            if (aiavatar.isAudioPlaying) {
+                isServerProcessing = false;
+            }
+            return aiavatar.isAudioPlaying || isServerProcessing;
+        };
+
+        // Message box functions
+        const messageBox = document.getElementById("messageBox");
+        const messageSpeaker = document.getElementById("messageSpeaker");
+        const messageText = document.getElementById("messageText");
+        const SPEAKER_LABEL_USER = "User";
+        const SPEAKER_LABEL_AI = "AI";
+        let currentAIText = "";
+        let currentUserText = "";
+
+        function showMessage(speaker, text, isPartial = false) {
+            // Update speaker label
+            messageSpeaker.className = "message-speaker " + speaker;
+            messageSpeaker.textContent = speaker === "user" ? SPEAKER_LABEL_USER : SPEAKER_LABEL_AI;
+
+            // Update text
+            messageText.textContent = text;
+
+            // Show message box
+            messageBox.classList.remove("hidden");
+            messageBox.classList.add("visible");
+        }
+
+        function updateMessage(speaker, text, isPartial) {
+            // Update speaker label
+            messageSpeaker.className = "message-speaker " + speaker;
+            messageSpeaker.textContent = speaker === "user" ? SPEAKER_LABEL_USER : SPEAKER_LABEL_AI;
+
+            // Accumulate or finalize text
+            if (isPartial) {
+                if (speaker === "user") {
+                    currentUserText = text;
+                    messageText.textContent = currentUserText;
+                } else {
+                    currentAIText += text;
+                    messageText.textContent = currentAIText;
+                }
+            } else {
+                if (speaker === "user") {
+                    currentUserText = "";
+                } else {
+                    currentAIText = "";
+                }
+                messageText.textContent = text;
+            }
+
+            // Show message box
+            messageBox.classList.remove("hidden");
+            messageBox.classList.add("visible");
+        }
+
+        // UI event listener
+        interruptToggle.addEventListener("change", () => {
+            interruptEnabled = interruptToggle.checked;
+        });
+
+        // Camera toggle functionality
+        let cameraEnabled = false;
+        const cameraToggle = document.getElementById("cameraToggle");
+        cameraToggle.addEventListener("change", async () => {
+            if (cameraToggle.checked) {
+                const initialized = await camera.init();
+                if (initialized) {
+                    cameraEnabled = true;
+                } else {
+                    cameraToggle.checked = false;
+                }
+            } else {
+                camera.stop();
+                cameraEnabled = false;
+            }
+        });
+
+        let isChatActive = false;
+        const chatBtn = document.getElementById("chatBtn");
+        chatBtn.addEventListener("click", () => {
+            if (isChatActive) {
+                aiavatar.stopListening(sessionId);
+                chatBtn.textContent = "Start";
+                chatBtn.style.backgroundColor = "#1E1E1E";
+            } else {
+                aiavatar.startListening(sessionId, userId);
+                chatBtn.textContent = "Stop";
+                chatBtn.style.backgroundColor = "#C62828";
+            }
+            isChatActive = !isChatActive;
+        });
+    </script>
+</body>
+
+</html>
