@@ -210,6 +210,7 @@ class AIAvatarClient {
                         source.start(0);
                         source.onended = () => {
                             this.currentAudioSource = null;
+                            this.onPlaybackEnd?.();     // e.g. reset current volume
                             resolve();
                         };
                     },
@@ -235,6 +236,10 @@ class AIAvatarClient {
     }
 
     updateFace(faceName, faceDuration) {
+        if (this.faceImagePaths === undefined || this.faceImagePaths === null) {
+            return;
+        }
+
         const faceImagePath = this.faceImagePaths[faceName];
         if (faceImagePath === undefined || faceImagePath === null || faceImagePath === "") {
             return;
