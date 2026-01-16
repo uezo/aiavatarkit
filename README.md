@@ -461,22 +461,41 @@ AIAvatarKit provides text preprocessing functionality that transforms text befor
 
 #### Alphabet to Katakana Conversion
 
-Here's an example of a preprocessor that converts alphabet text to katakana:
+A preprocessor that converts alphabet text to katakana using LLM. Supports kana_map for storing word-to-reading mappings to reduce latency on repeated words.
 
 ```python
 from aiavatar.sts.tts.preprocessor.alphabet2kana import AlphabetToKanaPreprocessor
 
-# Create preprocessor
+# Create preprocessor with kana_map for pre-registered word-reading mappings
 alphabet2kana_preproc = AlphabetToKanaPreprocessor(
     openai_api_key=OPENAI_API_KEY,
     model="gpt-4o-mini",                      # Model to use (default: gpt-4.1-mini)
     alphabet_length=3,                        # Minimum alphabet length to convert (default: 3)
-    system_prompt="Convert foreign languages..." # Custom prompt (optional)
+    special_chars=".'-'−–",                   # Characters that connect words (default: ".'-'−–")
+    use_kana_map=True,                        # Enable kana_map mode (default: True)
+    kana_map={"GitHub": "ギットハブ"},         # Pre-registered word-reading mappings (optional)
+    debug=True,                               # Enable debug logging (default: False)
 )
 
 # Add to TTS
 tts.preprocessors.append(alphabet2kana_preproc)
+
+# Words converted by LLM are automatically added to kana_map
+# You can persist and restore kana_map for future sessions:
+import json
+# Save
+with open("kana_map.json", "w") as f:
+    json.dump(alphabet2kana_preproc.kana_map, f, ensure_ascii=False)
+# Load
+with open("kana_map.json") as f:
+    kana_map = json.load(f)
 ```
+
+Key features:
+- **kana_map**: Pre-register known word-reading mappings and automatically add LLM results to avoid repeated API calls
+- **special_chars**: Words containing these characters (e.g., `Mr.`, `You're`, `Wi-Fi`) are always processed regardless of `alphabet_length`
+- **Case-insensitive**: Matches `API`, `api`, and `Api` with a single kana_map entry
+- **debug mode**: Logs `[KanaMap]` for cached hits and `[LLM]` for new readings with elapsed time
 
 #### Pattern Match Conversion
 
