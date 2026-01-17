@@ -254,7 +254,8 @@ class STSPipeline:
             # Notify client that request is accepted (fire and forget to avoid blocking pipeline latency)
             asyncio.create_task(self.handle_response(STSResponse(
                 type="accepted",
-                session_id=request.session_id
+                session_id=request.session_id,
+                metadata={"block_barge_in": request.block_barge_in}
             )))
 
             start_time = time()
