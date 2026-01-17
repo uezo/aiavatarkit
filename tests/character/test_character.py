@@ -8,6 +8,7 @@ from aiavatar.character import (
     WeeklySchedule,
     DailySchedule,
     Diary,
+    ActivityRangeResult,
     CharacterRepository,
     ActivityRepository,
     CharacterService,
@@ -17,7 +18,7 @@ AIAVATAR_DB_PORT = os.getenv("AIAVATAR_DB_PORT", "5432")
 AIAVATAR_DB_USER = os.getenv("AIAVATAR_DB_USER", "postgres")
 AIAVATAR_DB_PASSWORD = os.getenv("AIAVATAR_DB_PASSWORD")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.2")
 
 
 class FixtureContext:
@@ -38,8 +39,8 @@ class FixtureContext:
         for character_id in self.created_character_ids:
             # Delete related data first (foreign key order)
             await self.service.activity.delete_weekly_schedule(character_id=character_id)
-            # Delete daily schedules and diaries for recent dates
-            for i in range(-1, 2):
+            # Delete daily schedules and diaries for recent dates (extended range for batch tests)
+            for i in range(-10, 2):
                 target_date = date.today() + timedelta(days=i)
                 await self.service.activity.delete_daily_schedule(
                     character_id=character_id, schedule_date=target_date
@@ -55,6 +56,7 @@ async def ctx():
     svc = CharacterService(
         openai_api_key=OPENAI_API_KEY,
         openai_model=OPENAI_MODEL,
+        openai_reasoning_effort="none",
         port=int(AIAVATAR_DB_PORT),
         user=AIAVATAR_DB_USER,
         password=AIAVATAR_DB_PASSWORD,
@@ -543,3 +545,146 @@ async def test_get_system_prompt_refresh_cache(ctx):
 
     assert prompt is not None
     assert character.id in ctx.service._system_prompt_cache
+
+
+# Batch operation tests
+
+@pytest.mark.asyncio
+async def test_create_activity_range_with_generation(ctx):
+    character = await ctx.create_character(
+        prompt="高校2年生の女子。部活は吹奏楽部でフルートを担当。"
+    )
+    await ctx.service.activity.create_weekly_schedule(
+        character_id=character.id,
+        content="| 時間帯 | 月曜 | 火曜 |\n|---|---|---|\n| 7:00-8:00 | 起床 | 起床 |"
+    )
+
+    start_date = date.today() - timedelta(days=2)
+    end_date = date.today()
+
+    results = await ctx.service.create_activity_range_with_generation(
+        character_id=character.id,
+        start_date=start_date,
+        end_date=end_date
+    )
+
+    assert len(results) == 3  # 3 days
+    for i, result in enumerate(results):
+        expected_date = start_date + timedelta(days=i)
+        assert isinstance(result, ActivityRangeResult)
+        assert result.target_date == expected_date
+        assert result.daily_schedule is not None
+        assert result.diary is not None
+        assert result.is_schedule_generated is True
+        assert result.is_diary_generated is True
+
+
+@pytest.mark.asyncio
+async def test_create_activity_range_with_generation_skip_existing(ctx):
+    character = await ctx.create_character(
+        prompt="高校2年生の女子。部活は吹奏楽部でフルートを担当。"
+    )
+    await ctx.service.activity.create_weekly_schedule(
+        character_id=character.id,
+        content="| 時間帯 | 月曜 | 火曜 |\n|---|---|---|\n| 7:00-8:00 | 起床 | 起床 |"
+    )
+
+    # Pre-create schedule and diary for today
+    today = date.today()
+    await ctx.service.activity.create_daily_schedule(
+        character_id=character.id,
+        schedule_date=today,
+        content="Existing schedule"
+    )
+    await ctx.service.activity.create_diary(
+        character_id=character.id,
+        diary_date=today,
+        content="Existing diary",
+        content_context={}
+    )
+
+    start_date = date.today() - timedelta(days=1)
+    end_date = date.today()
+
+    results = await ctx.service.create_activity_range_with_generation(
+        character_id=character.id,
+        start_date=start_date,
+        end_date=end_date,
+        overwrite=False
+    )
+
+    assert len(results) == 2
+
+    # Yesterday should be generated
+    assert results[0].target_date == start_date
+    assert results[0].is_schedule_generated is True
+    assert results[0].is_diary_generated is True
+
+    # Today should use existing
+    assert results[1].target_date == today
+    assert results[1].is_schedule_generated is False
+    assert results[1].is_diary_generated is False
+    assert results[1].daily_schedule.content == "Existing schedule"
+    assert results[1].diary.content == "Existing diary"
+
+
+@pytest.mark.asyncio
+async def test_create_activity_range_with_generation_overwrite(ctx):
+    character = await ctx.create_character(
+        prompt="高校2年生の女子。部活は吹奏楽部でフルートを担当。"
+    )
+    await ctx.service.activity.create_weekly_schedule(
+        character_id=character.id,
+        content="| 時間帯 | 月曜 | 火曜 |\n|---|---|---|\n| 7:00-8:00 | 起床 | 起床 |"
+    )
+
+    # Pre-create schedule and diary for today
+    today = date.today()
+    await ctx.service.activity.create_daily_schedule(
+        character_id=character.id,
+        schedule_date=today,
+        content="Old schedule"
+    )
+    await ctx.service.activity.create_diary(
+        character_id=character.id,
+        diary_date=today,
+        content="Old diary",
+        content_context={}
+    )
+
+    results = await ctx.service.create_activity_range_with_generation(
+        character_id=character.id,
+        start_date=today,
+        end_date=today,
+        overwrite=True
+    )
+
+    assert len(results) == 1
+    assert results[0].target_date == today
+    assert results[0].is_schedule_generated is True
+    assert results[0].is_diary_generated is True
+    # Content should be different from old values (generated new)
+    assert results[0].daily_schedule.content != "Old schedule"
+    assert results[0].diary.content != "Old diary"
+
+
+@pytest.mark.asyncio
+async def test_create_activity_range_with_generation_default_end_date(ctx):
+    character = await ctx.create_character(
+        prompt="高校2年生の女子。部活は吹奏楽部でフルートを担当。"
+    )
+    await ctx.service.activity.create_weekly_schedule(
+        character_id=character.id,
+        content="| 時間帯 | 月曜 | 火曜 |\n|---|---|---|\n| 7:00-8:00 | 起床 | 起床 |"
+    )
+
+    start_date = date.today()
+
+    # end_date not specified, should default to today
+    results = await ctx.service.create_activity_range_with_generation(
+        character_id=character.id,
+        start_date=start_date
+    )
+
+    assert len(results) == 1
+    assert results[0].target_date == date.today()

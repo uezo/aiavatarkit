@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta
 from typing import List, Dict, Tuple, Any, Optional
 import asyncpg
 import openai
-from .models import Character, WeeklySchedule, DailySchedule, Diary
+from .models import Character, WeeklySchedule, DailySchedule, Diary, ActivityRangeResult
 from .character import CharacterRepository
 from .activity import ActivityRepository
 from .memory import MemoryClientBase
@@ -201,8 +201,8 @@ class CharacterService:
         *,
         openai_api_key: str,
         openai_base_url: str = None,
-        openai_model: str = None,
-        openai_reasoning_effort: str = None,
+        openai_model: str = "gpt-5.2",
+        openai_reasoning_effort: str = "medium",
         weekly_schedule_generation_prompt: str = None,
         daily_schedule_generation_system_prompt: str = None,
         daily_schedule_generation_user_prompt: str = None,
@@ -220,7 +220,9 @@ class CharacterService:
         db_pool_min_size: int = 1,
         db_pool_max_size: int = 5,
         memory_client: MemoryClientBase = None,
+        debug: bool = False
     ):
+        self.debug = debug
         self.memory = memory_client
 
         self.client = openai.AsyncClient(
@@ -609,3 +611,89 @@ class CharacterService:
             daily_schedule=daily_schedule.content,
             username="{username}"
         )
+
+    # Batch operations
+
+    async def create_activity_range_with_generation(
+        self,
+        *,
+        character_id: str,
+        start_date: date,
+        end_date: date = None,
+        overwrite: bool = False
+    ) -> List[ActivityRangeResult]:
+        await self.get_pool()
+        end_date = end_date or date.today()
+        results: List[ActivityRangeResult] = []
+
+        logger.info(f"Processing activity range: {start_date} to {end_date}")
+
+        current_date = start_date
+        while current_date <= end_date:
+            logger.info(f"Processing date: {current_date}")
+            # Check existing records
+            existing_schedule = await self.activity.get_daily_schedule(
+                character_id=character_id,
+                schedule_date=current_date
+            )
+            existing_diary = await self.activity.get_diary(
+                character_id=character_id,
+                diary_date=current_date
+            )
+
+            is_schedule_generated = False
+            is_diary_generated = False
+
+            if overwrite:
+                # Delete existing records if overwrite is enabled
+                if existing_schedule:
+                    await self.activity.delete_daily_schedule(
+                        character_id=character_id,
+                        schedule_date=current_date
+                    )
+                    existing_schedule = None
+                if existing_diary:
+                    await self.activity.delete_diary(
+                        character_id=character_id,
+                        diary_date=current_date
+                    )
+                    existing_diary = None
+
+            # Generate daily schedule if needed
+            if existing_schedule:
+                daily_schedule = existing_schedule
+                if self.debug:
+                    logger.info(f"Using existing daily schedule for {current_date}")
+            else:
+                daily_schedule = await self.create_daily_schedule_with_generation(
+                    character_id=character_id,
+                    schedule_date=current_date
+                )
+                is_schedule_generated = True
+                if self.debug:
+                    logger.info(f"Generated daily schedule for {current_date}")
+
+            # Generate diary if needed
+            if existing_diary:
+                diary = existing_diary
+                if self.debug:
+                    logger.info(f"Using existing diary for {current_date}")
+            else:
+                diary = await self.create_diary_with_generation(
+                    character_id=character_id,
+                    diary_date=current_date
+                )
+                is_diary_generated = True
+                if self.debug:
+                    logger.info(f"Generated diary for {current_date}")
+
+            results.append(ActivityRangeResult(
+                target_date=current_date,
+                daily_schedule=daily_schedule,
+                diary=diary,
+                is_schedule_generated=is_schedule_generated,
+                is_diary_generated=is_diary_generated
+            ))
+            current_date += timedelta(days=1)
+
+        return results
