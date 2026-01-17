@@ -43,3 +43,11 @@ class Diary(BaseModel):
 class MemorySearchResult(BaseModel):
     answer: Optional[str]
     retrieved_data: Optional[str]
+
+
+class ActivityRangeResult(BaseModel):
+    target_date: date
+    daily_schedule: DailySchedule
+    diary: Diary
+    is_schedule_generated: bool
+    is_diary_generated: bool

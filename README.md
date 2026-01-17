@@ -114,6 +114,7 @@ This change ensures compatibility with the new internal structure and removes th
     - [Updating Diaries](#updating-diaries)
     - [Updating Schedules](#updating-schedules)
     - [Automated Daily Updates](#automated-daily-updates)
+    - [Batch Generation](#batch-generation)
     - [Long-term Memory](#long-term-memory)
 
 - [🧩 API](#-api)
@@ -978,6 +979,21 @@ async def main():
 
 asyncio.run(main())
 ```
+
+### Batch Generation
+
+You can batch generate daily schedules and diaries for a date range using `create_activity_range_with_generation`.
+
+```python
+await character_service.create_activity_range_with_generation(
+    character_id=YOUR_CHARACTER_ID,
+    start_date=date(2026, 1, 8),
+    end_date=date(2026, 1, 16),  # Defaults to today if omitted
+    overwrite=False,
+)
+```
+
+This is useful for recovering data when automatic updates were stopped, or for building up initial data when creating a new character.
 
 ### Long-term Memory
 
