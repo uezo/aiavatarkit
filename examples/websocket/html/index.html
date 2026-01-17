@@ -340,8 +340,12 @@
             // Example: response handling by type
             if (response.type == "accepted") {
                 isServerProcessing = true;
+                if (response.metadata && response.metadata.block_barge_in) {
+                    isBargeInBlocked = true;
+                }
             } else if (response.type == "start") {
-                aiavatar.updateFace("eyes_closed", 10);
+                // Uncomment to change to thinking face
+                // aiavatar.updateFace("eyes_closed", 10);
             } else if (response.type == "chunk" && response.metadata.is_first_chunk) {
                 aiavatar.updateFace("neutral", 0);
             } else if (response.type == "tool_call") {
@@ -397,12 +401,22 @@
 
         // Microphone mute logic
         let isServerProcessing = false;
+        let isBargeInBlocked = false;
         aiavatar.isMicrophoneMuted = () => {
-            if (interruptEnabled) {
-                return false;
-            }
+            // Update states
             if (aiavatar.isAudioPlaying) {
                 isServerProcessing = false;
+            }
+            if (!aiavatar.isAudioPlaying && !isServerProcessing) {
+                isBargeInBlocked = false;
+            }
+
+            // Evaluate mute condition
+            if (isBargeInBlocked) {
+                return true;
+            }
+            if (interruptEnabled) {
+                return false;
             }
             return aiavatar.isAudioPlaying || isServerProcessing;
         };
