@@ -893,6 +893,9 @@ async def get_system_prompt(context_id: str, user_id: str, system_prompt_params:
     )
 ```
 
+This system prompt includes not only the character settings from `character_prompt`, but also the schedule for the day.
+
+
 ### Updating Diaries
 
 Diaries can be automatically generated using `create_diary_with_generation`. The following information is used:
@@ -909,6 +912,20 @@ diary = await character_service.create_diary_with_generation(
     diary_date=date.today()
 )
 ```
+
+The generated diary can be used as context for the LLM using `GetDiaryTool`. By setting `include_schedule=True`, the schedule information for the day is also retrieved (default is `True`).
+
+```python
+from aiavatar.character.tools import GetDiaryTool
+llm.add_tool(
+    GetDiaryTool(
+        character_service=character_service,
+        character_id=YOUR_CHARACTER_ID,
+        include_schedule=True
+    )
+)
+```
+
 
 ### Updating Schedules
 
