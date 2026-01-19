@@ -1,29 +1,27 @@
 from datetime import date, timedelta
 import os
+import tempfile
 from uuid import uuid4
 import pytest
 import pytest_asyncio
 from aiavatar.character import (
     Character,
-    WeeklySchedule,
-    DailySchedule,
-    Diary,
     ActivityRangeResult,
-    CharacterRepository,
-    ActivityRepository,
     CharacterService,
 )
+from aiavatar.character.repository.sqlite import (
+    SQLiteActivityRepository,
+    SQLiteCharacterRepository
+)
 
-AIAVATAR_DB_PORT = os.getenv("AIAVATAR_DB_PORT", "5432")
-AIAVATAR_DB_USER = os.getenv("AIAVATAR_DB_USER", "postgres")
-AIAVATAR_DB_PASSWORD = os.getenv("AIAVATAR_DB_PASSWORD")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.2")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
 
 class FixtureContext:
-    def __init__(self, service: CharacterService):
+    def __init__(self, service: CharacterService, db_path: str):
         self.service = service
+        self.db_path = db_path
         self.created_character_ids: list[str] = []
 
     async def create_character(self, **kwargs) -> Character:
@@ -53,20 +51,33 @@ class FixtureContext:
 
 @pytest_asyncio.fixture
 async def ctx():
+    # Create a temporary database file
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+
     svc = CharacterService(
         openai_api_key=OPENAI_API_KEY,
         openai_model=OPENAI_MODEL,
-        openai_reasoning_effort="none",
-        port=int(AIAVATAR_DB_PORT),
-        user=AIAVATAR_DB_USER,
-        password=AIAVATAR_DB_PASSWORD,
+        openai_reasoning_effort=None,
+        db_connection_str=db_path,
     )
-    await svc.get_pool()
-    test_ctx = FixtureContext(svc)
+    test_ctx = FixtureContext(svc, db_path)
     yield test_ctx
     await test_ctx.cleanup()
-    if svc._pool is not None:
-        await svc._pool.close()
+    # Remove the temporary database file
+    if os.path.exists(db_path):
+        os.remove(db_path)
+
+
+# Repository type verification tests
+
+@pytest.mark.asyncio
+async def test_repository_types_are_sqlite(ctx):
+    """Verify that SQLite repositories are being used, not PostgreSQL."""
+    assert isinstance(ctx.service.character, SQLiteCharacterRepository), \
+        f"Expected SQLiteCharacterRepository, got {type(ctx.service.character).__name__}"
+    assert isinstance(ctx.service.activity, SQLiteActivityRepository), \
+        f"Expected SQLiteActivityRepository, got {type(ctx.service.activity).__name__}"
 
 
 # CharacterRepository tests

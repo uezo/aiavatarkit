@@ -1,12 +1,10 @@
-import asyncio
 import logging
 from datetime import date, datetime, timedelta
 from typing import List, Dict, Tuple, Any, Optional
-import asyncpg
 import openai
+from ..database import PoolProvider
 from .models import Character, WeeklySchedule, DailySchedule, Diary, ActivityRangeResult
-from .character import CharacterRepository
-from .activity import ActivityRepository
+from .repository import CharacterRepositoryBase, SQLiteCharacterRepository, ActivityRepositoryBase, SQLiteActivityRepository
 from .memory import MemoryClientBase
 
 logger = logging.getLogger(__name__)
@@ -211,14 +209,12 @@ class CharacterService:
         system_prompt_template: str = None,
         news_country: str = "JP",
         news_language: str = "ja",
-        host: str = "localhost",
-        port: int = 5432,
-        dbname: str = "aiavatar",
-        user: str = "postgres",
-        password: str = None,
-        connection_str: str = None,
-        db_pool_min_size: int = 1,
-        db_pool_max_size: int = 5,
+        # Repositories (if provided, db settings are ignored)
+        character_repository: CharacterRepositoryBase = None,
+        activity_repository: ActivityRepositoryBase = None,
+        # Database settings
+        db_pool_provider: PoolProvider = None,
+        db_connection_str: str = "aiavatar.db",
         memory_client: MemoryClientBase = None,
         debug: bool = False
     ):
@@ -243,63 +239,32 @@ class CharacterService:
         self.news_country = news_country
         self.news_language = news_language
 
-        self.host = host
-        self.port = port
-        self.dbname = dbname
-        self.user = user
-        self.password = password
-        self.connection_str = connection_str
-        self.db_pool_min_size = db_pool_min_size
-        self.db_pool_max_size = db_pool_max_size
-        self._pool: asyncpg.Pool = None
+        # Character repo
+        if character_repository:
+            self.character = character_repository
+        elif db_pool_provider:
+            from .repository.postgres import PostgreSQLCharacterRepository
+            self.character = PostgreSQLCharacterRepository(get_pool=db_pool_provider.get_pool)
+        elif db_connection_str.startswith("postgresql://"):
+            from .repository.postgres import PostgreSQLCharacterRepository
+            self.character = PostgreSQLCharacterRepository(connection_str=db_connection_str)
+        else:
+            self.character = SQLiteCharacterRepository(db_connection_str)
 
-        # Repositories (initialized after pool creation)
-        self.character: CharacterRepository = None
-        self.activity: ActivityRepository = None
+        # Activity repo
+        if activity_repository:
+            self.activity = activity_repository
+        elif db_pool_provider:
+            from .repository.postgres import PostgreSQLActivityRepository
+            self.activity = PostgreSQLActivityRepository(get_pool=db_pool_provider.get_pool)
+        elif db_connection_str.startswith("postgresql://"):
+            from .repository.postgres import PostgreSQLActivityRepository
+            self.activity = PostgreSQLActivityRepository(connection_str=db_connection_str)
+        else:
+            self.activity = SQLiteActivityRepository(db_connection_str)
 
         # Cache for system prompts: {character_id: (cached_date, base_prompt)}
         self._system_prompt_cache: Dict[str, Tuple[date, str]] = {}
-
-        # Lock for pool initialization
-        self._pool_lock = asyncio.Lock()
-
-    async def get_pool(self) -> asyncpg.Pool:
-        if self._pool is not None:
-            return self._pool
-
-        async with self._pool_lock:
-            if self._pool is not None:
-                return self._pool
-
-            if self.connection_str:
-                self._pool = await asyncpg.create_pool(
-                    dsn=self.connection_str,
-                    min_size=self.db_pool_min_size,
-                    max_size=self.db_pool_max_size,
-                )
-            else:
-                self._pool = await asyncpg.create_pool(
-                    host=self.host,
-                    port=self.port,
-                    database=self.dbname,
-                    user=self.user,
-                    password=self.password,
-                    min_size=self.db_pool_min_size,
-                    max_size=self.db_pool_max_size,
-                )
-            # Initialize repositories
-            self.character = CharacterRepository(self._pool)
-            self.activity = ActivityRepository(self._pool)
-            await self.init_db()
-
-        return self._pool
-
-    async def init_db(self):
-        try:
-            await self.character.init_table()
-            await self.activity.init_tables()
-        except Exception:
-            logger.exception("Error at init_db")
 
     async def _generate(self, system_content: str, user_content: str = None, messages: List[Dict[str, str]] = None) -> str:
         _messages = [{"role": "system", "content": system_content}]
@@ -447,7 +412,6 @@ class CharacterService:
         character_prompt: str,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Tuple[Character, WeeklySchedule, DailySchedule]:
-        await self.get_pool()
         character = await self.character.create(name=name, prompt=character_prompt, metadata=metadata)
         weekly_schedule = await self.create_weekly_schedule_with_generation(character_id=character.id)
         daily_schedule = await self.create_daily_schedule_with_generation(character_id=character.id, schedule_date=date.today())
@@ -458,7 +422,6 @@ class CharacterService:
         *,
         character_id: str
     ) -> WeeklySchedule:
-        await self.get_pool()
         character = await self.character.get(character_id=character_id)
         if not character:
             raise Exception(f"Character not found: {character_id}")
@@ -471,7 +434,6 @@ class CharacterService:
         character_id: str,
         schedule_date: date
     ) -> DailySchedule:
-        await self.get_pool()
         character = await self.character.get(character_id=character_id)
         if not character:
             raise Exception(f"Character not found: {character_id}")
@@ -510,7 +472,6 @@ class CharacterService:
         character_id: str,
         diary_date: date
     ) -> Diary:
-        await self.get_pool()
         character = await self.character.get(character_id=character_id)
         if not character:
             raise Exception(f"Character not found: {character_id}")
@@ -563,7 +524,6 @@ class CharacterService:
         generate_schedule: bool = True,
         refresh_cache: bool = False
     ) -> str:
-        await self.get_pool()
         today = date.today()
 
         cached = self._system_prompt_cache.get(character_id)
@@ -622,7 +582,6 @@ class CharacterService:
         end_date: date = None,
         overwrite: bool = False
     ) -> List[ActivityRangeResult]:
-        await self.get_pool()
         end_date = end_date or date.today()
         results: List[ActivityRangeResult] = []
 
