@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 import json
 import logging
-from typing import List, Dict, Union
+from typing import List, Dict, Union, Callable, Awaitable
 import asyncpg
 from ..base import ContextManager
 
@@ -13,6 +13,7 @@ class PostgreSQLContextManager(ContextManager):
     def __init__(
         self,
         *,
+        get_pool: Callable[[], Awaitable[asyncpg.Pool]] = None,
         host: str = "localhost",
         port: int = 5432,
         dbname: str = "aiavatar",
@@ -23,6 +24,7 @@ class PostgreSQLContextManager(ContextManager):
         db_pool_min_size: int = 1,
         db_pool_max_size: int = 5
     ):
+        self._get_pool_func = get_pool
         self.host = host
         self.port = port
         self.dbname = dbname
@@ -34,8 +36,20 @@ class PostgreSQLContextManager(ContextManager):
         self.db_pool_max_size = db_pool_max_size
         self._pool: asyncpg.Pool = None
         self._pool_lock = asyncio.Lock()
+        self._db_initialized = False
 
     async def get_pool(self) -> asyncpg.Pool:
+        # Use shared pool if provided
+        if self._get_pool_func is not None:
+            pool = await self._get_pool_func()
+            if not self._db_initialized:
+                async with self._pool_lock:
+                    if not self._db_initialized:
+                        await self.init_db(pool)
+                        self._db_initialized = True
+            return pool
+
+        # Otherwise, create own pool (backward compatible)
         if self._pool is not None:
             return self._pool
 
@@ -59,12 +73,12 @@ class PostgreSQLContextManager(ContextManager):
                     min_size=self.db_pool_min_size,
                     max_size=self.db_pool_max_size,
                 )
-            await self.init_db()
+            await self.init_db(self._pool)
+            self._db_initialized = True
 
         return self._pool
 
-    async def init_db(self):
-        pool = self._pool
+    async def init_db(self, pool: asyncpg.Pool):
         async with pool.acquire() as conn:
             try:
                 # Create table
