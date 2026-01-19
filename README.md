@@ -870,8 +870,7 @@ from aiavatar.character import CharacterService
 
 # Initialize service
 character_service = CharacterService(
-    openai_api_key="YOUR_API_KEY",
-    connection_str="postgresql://user:pass@localhost/aiavatar"
+    openai_api_key="YOUR_API_KEY"
 )
 
 # Initialize a new character with weekly and daily schedules
@@ -969,8 +968,7 @@ from aiavatar.character import CharacterService
 
 async def main():
     character_service = CharacterService(
-        openai_api_key="YOUR_API_KEY",
-        connection_str="postgresql://user:pass@localhost/aiavatar"
+        openai_api_key="YOUR_API_KEY"
     )
     await character_service.create_daily_schedule_with_generation(
         character_id="YOUR_CHARACTER_ID",
@@ -1006,7 +1004,6 @@ memory_client = MemoryClient(base_url="http://memory-service:8000")
 
 character_service = CharacterService(
     openai_api_key="YOUR_API_KEY",
-    connection_str="postgresql://user:pass@localhost/aiavatar",
     memory_client=memory_client
 )
 ```
@@ -2399,21 +2396,40 @@ Advanced usases.
 
 You can use PostgreSQL instead of the default SQLite. We strongly recommend using PostgreSQL in production environments for its scalability and performance benefits from asynchronous processing.
 
-To use PostgreSQL, install asyncpg and pass the database connection string as `db_connection_str` when initializing each component.
+To use PostgreSQL, install asyncpg and create a `PostgreSQLPoolProvider` to manage the shared connection pool. Then pass it to the constructors of the components that need database access.
+
 
 ```sh
 pip install asyncpg
 ```
 
 ```python
-# DB_CONNECTION_STR = "postgresql://{user}:{password}@{host}:{port}/{database-name}"
+# DB_CONNECTION_STR = "postgresql://{user}:{password}@{host}:{port}/{databasename}"
 DB_CONNECTION_STR = "postgresql://postgres:postgres@127.0.0.1:5432/aiavatar"
 
+# PoolProvider
+from aiavatar.database.postgres import PostgreSQLPoolProvider
+pool_provider = PostgreSQLPoolProvider(
+    connection_str=DB_CONNECTION_STR,
+    # max_size=20,  # Max connection count (default: 20)
+    # min_size=5    # Min connection count (default: 5)
+)
+
+# Character
+from aiavatar.character import CharacterService
+character_service = CharacterService(
+    openai_api_key=OPENAI_API_KEY,
+    db_pool_provider=pool_provider,     # Creates PostgreSQLCharacterRepository and PostgreSQLActivityRepository internally
+)
+
 # LLM
+from aiavatar.sts.llm.context_manager.postgres import PostgreSQLContextManager
 llm = ChatGPTService(
     openai_api_key=OPENAI_API_KEY,
     system_prompt=SYSTEM_PROMPT,
-    db_connection_str=DB_CONNECTION_STR,    # <- for ContextManager
+    context_manager=PostgreSQLContextManager(
+        get_pool=pool_provider.get_pool # Set `get_pool` to PostgreSQLContextManager
+    )
 )
 
 # Adapter (Create pipeline internally)
@@ -2422,53 +2438,13 @@ ws_app = AIAvatarWebSocketServer(
     stt=stt,
     llm=llm,
     tts=tts,
-    db_connection_str=DB_CONNECTION_STR,    # <- for SessionStateManager and PerformanceRecorder
+    db_pool_provider=pool_provider,     # Creates PostgreSQLSessionStateManager and PostgreSQLPerformanceRecorder internally
 )
 ```
 
-You can also specify the number of connections in the connection pool for each component. When running AIAvatar in a multi-process configuration, be careful that the total does not exceed the maximum number of connections allowed by the database server.
+**NOTE**: You can also pass PostgreSQL connection settings directly to each component's constructor to manage and use individual connections separately from the shared connection pool. However, this makes it difficult to manage the total number of connections, especially when using multiple workers. We recommend using the shared pool unless you have a specific reason not to.
 
-Note that the number of connections cannot be changed after initialization. Create the PostgreSQL components with the desired connection count and pass them to the components that will use them.
-
-```python
-from aiavatar.sts.llm.context_manager.postgres import PostgreSQLContextManager
-context_manager = PostgreSQLContextManager(
-    connection_str=DB_CONNECTION_STR,
-    db_pool_max_size=10,    # <- Default: 5
-)
-
-from aiavatar.sts.llm.chatgpt import ChatGPTService
-llm = ChatGPTService(
-    openai_api_key=OPENAI_API_KEY,
-    system_prompt=SYSTEM_PROMPT,
-    voice_text_tag="answer",
-    context_manager=context_manager,    # <- Set PostgreSQLContextManager
-)
-
-from aiavatar.sts.session_state_manager.postgres import PostgreSQLSessionStateManager
-session_state_manager = PostgreSQLSessionStateManager(
-    connection_str=DB_CONNECTION_STR,
-    db_pool_max_size=10,    # <- Default: 5
-)
-
-from aiavatar.sts.performance_recorder.postgres import PostgreSQLPerformanceRecorder
-performance_recorder = PostgreSQLPerformanceRecorder(
-    connection_str=DB_CONNECTION_STR,
-    db_pool_size=3,         # <- Default: 2
-)
-
-from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer
-ws_app = AIAvatarWebSocketServer(
-    vad=vad,
-    stt=stt,
-    llm=llm,
-    tts=tts,
-    session_state_manager=session_state_manager,    # <- Set SessionStateManager
-    performance_recorder=performance_recorder,      # <- Set PerformanceRecorder
-)
-```
-
-**NOTE**: `PerformanceRecorder` runs in a separate thread and writes performance information serially as it receives it through a queue, so it basically uses only a single connection. We recommend not changing this unless you have a specific reason.
+**NOTE**: `PerformanceRecorder` runs in a separate thread from the main thread, so it does not use the shared connection pool. Instead, it retrieves only the connection information from the PoolProvider and creates its own dedicated connection pool. It writes performance information serially as it receives it through a queue, so it basically uses only a single connection. We recommend not changing this unless you have a specific reason.
 
 
 ### 👀 Vision

@@ -6,6 +6,7 @@ import re
 import wave
 from typing import List, Dict
 from fastapi import APIRouter, WebSocket
+from ...database import PoolProvider
 from ...sts.models import STSRequest, STSResponse
 from ...sts.pipeline import STSPipeline
 from ...sts.vad import SpeechDetector
@@ -71,6 +72,7 @@ class AIAvatarWebSocketServer(Adapter):
         timestamp_prefix: str = "$Current date and time: ",
         timestamp_timezone: str = "UTC",
         mute_on_barge_in: bool = False,
+        db_pool_provider: PoolProvider = None,
         db_connection_str: str = "aiavatar.db",
         session_state_manager: SessionStateManager = None,
         performance_recorder: PerformanceRecorder = None,
@@ -117,6 +119,7 @@ class AIAvatarWebSocketServer(Adapter):
             timestamp_interval_seconds=timestamp_interval_seconds,
             timestamp_prefix=timestamp_prefix,
             timestamp_timezone=timestamp_timezone,
+            db_pool_provider=db_pool_provider,
             db_connection_str=db_connection_str,
             session_state_manager=session_state_manager,
             performance_recorder=performance_recorder,

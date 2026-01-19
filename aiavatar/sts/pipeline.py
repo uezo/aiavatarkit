@@ -8,6 +8,7 @@ from time import time
 import traceback
 from typing import AsyncGenerator, Tuple, List, Optional
 from uuid import uuid4
+from ..database import PoolProvider
 from .models import STSRequest, STSResponse
 from .vad import SpeechDetector
 from .vad.silero import SileroSpeechDetector
@@ -22,7 +23,7 @@ from .performance_recorder import PerformanceRecord, PerformanceRecorder
 from .performance_recorder.sqlite import SQLitePerformanceRecorder
 from .voice_recorder import VoiceRecorder, RequestVoice, ResponseVoices
 from .voice_recorder.file import FileVoiceRecorder
-from .session_state_manager import SessionState, SessionStateManager, SQLiteSessionStateManager
+from .session_state_manager import SessionStateManager, SQLiteSessionStateManager
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ class STSPipeline:
         timestamp_interval_seconds: float = 0.0,
         timestamp_prefix: str = "$Current date and time: ",
         timestamp_timezone: str = "UTC",
+        db_pool_provider: PoolProvider = None,
         db_connection_str: str = "aiavatar.db",
         session_state_manager: SessionStateManager = None,
         performance_recorder: PerformanceRecorder = None,
@@ -70,15 +72,26 @@ class STSPipeline:
         self.debug = debug
         self.use_invoke_queue = use_invoke_queue
 
+        # Database connection pool
+        if db_pool_provider:
+            if db_pool_provider.db_type == "postgresql":
+                self.db_pool_provider = db_pool_provider
+            else:
+                raise ValueError(f"Unsupported db_type: {db_pool_provider.db_type}")
+        elif db_connection_str.startswith("postgresql://"):
+            from ..database.postgres import PostgreSQLPoolProvider
+            self.db_pool_provider = PostgreSQLPoolProvider(connection_str=db_connection_str)
+        else:
+            self.db_pool_provider = None
+
         # Session state management
         if session_state_manager:
             self.session_state_manager = session_state_manager
+        elif self.db_pool_provider:
+            from .session_state_manager.postgres import PostgreSQLSessionStateManager
+            self.session_state_manager = PostgreSQLSessionStateManager(get_pool=self.db_pool_provider.get_pool)
         else:
-            if db_connection_str.startswith("postgresql://"):
-                from .session_state_manager.postgres import PostgreSQLSessionStateManager
-                self.session_state_manager = PostgreSQLSessionStateManager(connection_str=db_connection_str)
-            else:
-                self.session_state_manager = SQLiteSessionStateManager(db_path=db_connection_str)
+            self.session_state_manager = SQLiteSessionStateManager(db_path=db_connection_str)
 
         # VAD
         self.vad = vad or SileroSpeechDetector(
@@ -114,12 +127,20 @@ class STSPipeline:
         if llm:
             self.llm = llm
         else:
+            _context_managaer = None
+            if llm_context_manager:
+                _context_managaer = llm_context_manager
+            else:
+                if self.db_pool_provider:
+                    from .llm.context_manager.postgres import PostgreSQLContextManager
+                    _context_managaer = PostgreSQLContextManager(get_pool=self.db_pool_provider.get_pool)
+
             self.llm = ChatGPTService(
                 openai_api_key=llm_openai_api_key,
                 base_url=llm_base_url,
                 model=llm_model,
                 system_prompt=llm_system_prompt,
-                context_manager=llm_context_manager,
+                context_manager=_context_managaer,
                 db_connection_str=db_connection_str,
                 debug=debug
             )
@@ -153,9 +174,9 @@ class STSPipeline:
         if performance_recorder:
             self.performance_recorder = performance_recorder
         else:
-            if db_connection_str.startswith("postgresql://"):
+            if self.db_pool_provider:
                 from .performance_recorder.postgres import PostgreSQLPerformanceRecorder
-                self.performance_recorder = PostgreSQLPerformanceRecorder(connection_str=db_connection_str)
+                self.performance_recorder = PostgreSQLPerformanceRecorder(connection_str=self.db_pool_provider.connection_str)
             else:
                 self.performance_recorder = SQLitePerformanceRecorder(db_path=db_connection_str)
 
