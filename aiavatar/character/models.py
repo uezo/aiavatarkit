@@ -12,6 +12,14 @@ class Character(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+class User(BaseModel):
+    id: str
+    created_at: datetime
+    updated_at: datetime
+    name: str
+    metadata: Optional[Dict[str, Any]] = None
+
+
 class WeeklySchedule(BaseModel):
     id: str
     created_at: datetime

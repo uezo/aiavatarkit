@@ -1,2 +1,2 @@
-from .base import CharacterRepositoryBase, ActivityRepositoryBase
-from .sqlite import SQLiteCharacterRepository, SQLiteActivityRepository
+from .base import CharacterRepositoryBase, ActivityRepositoryBase, UserRepository
+from .sqlite import SQLiteCharacterRepository, SQLiteActivityRepository, SQLiteUserRepository
