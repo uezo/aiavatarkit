@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from datetime import date
 from typing import Dict, Any, Optional
-from ..models import Character, WeeklySchedule, DailySchedule, Diary
+from ..models import Character, WeeklySchedule, DailySchedule, Diary, User
 
 
 class CharacterRepositoryBase(ABC):
@@ -145,4 +145,33 @@ class ActivityRepositoryBase(ABC):
         character_id: str,
         diary_date: date
     ) -> bool:
+        pass
+
+
+class UserRepository(ABC):
+    @abstractmethod
+    async def create(
+        self,
+        *,
+        name: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> User:
+        pass
+
+    @abstractmethod
+    async def get(self, *, user_id: str) -> Optional[User]:
+        pass
+
+    @abstractmethod
+    async def update(
+        self,
+        *,
+        user_id: str,
+        name: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Optional[User]:
+        pass
+
+    @abstractmethod
+    async def delete(self, *, user_id: str) -> bool:
         pass

@@ -4,7 +4,7 @@ from typing import List, Dict, Tuple, Any, Optional
 import openai
 from ..database import PoolProvider
 from .models import Character, WeeklySchedule, DailySchedule, Diary, ActivityRangeResult
-from .repository import CharacterRepositoryBase, SQLiteCharacterRepository, ActivityRepositoryBase, SQLiteActivityRepository
+from .repository import CharacterRepositoryBase, SQLiteCharacterRepository, ActivityRepositoryBase, SQLiteActivityRepository, UserRepository, SQLiteUserRepository
 from .memory import MemoryClientBase
 
 logger = logging.getLogger(__name__)
@@ -212,6 +212,7 @@ class CharacterService:
         # Repositories (if provided, db settings are ignored)
         character_repository: CharacterRepositoryBase = None,
         activity_repository: ActivityRepositoryBase = None,
+        user_repository: UserRepository = None,
         # Database settings
         db_pool_provider: PoolProvider = None,
         db_connection_str: str = "aiavatar.db",
@@ -262,6 +263,18 @@ class CharacterService:
             self.activity = PostgreSQLActivityRepository(connection_str=db_connection_str)
         else:
             self.activity = SQLiteActivityRepository(db_connection_str)
+
+        # User repo
+        if user_repository:
+            self.user = user_repository
+        elif db_pool_provider:
+            from .repository.postgres import PostgreSQLUserRepository
+            self.user = PostgreSQLUserRepository(get_pool=db_pool_provider.get_pool)
+        elif db_connection_str.startswith("postgresql://"):
+            from .repository.postgres import PostgreSQLUserRepository
+            self.user = PostgreSQLUserRepository(connection_str=db_connection_str)
+        else:
+            self.user = SQLiteUserRepository(db_connection_str)
 
         # Cache for system prompts: {character_id: (cached_date, base_prompt)}
         self._system_prompt_cache: Dict[str, Tuple[date, str]] = {}

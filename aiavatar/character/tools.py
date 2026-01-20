@@ -123,3 +123,50 @@ class MemorySearchTool(Tool):
             logger.info(f"Result from search_memory: {result}")
 
         return result.model_dump()
+
+
+class UpdateUsernameTool(Tool):
+    def __init__(
+        self,
+        *,
+        character_service: CharacterService,
+        name: str = None,
+        spec: str = None,
+        instruction: str = None,
+        is_dynamic: bool = False,
+        debug: bool = False
+    ):
+        self.character_service = character_service
+        self.debug = debug
+
+        super().__init__(
+            name or "update_username",
+            spec or {
+                "type": "function",
+                "function": {
+                    "name": name or "update_username",
+                    "description": "Update username for the specific user. Use this tool when the user says 'Remember my name' or something like that.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "username": {"type": "string"},
+                        },
+                        "required": ["username"]
+                    },
+                }
+            },
+            self.update_username,
+            instruction,
+            is_dynamic
+        )
+
+    async def update_username(self, username: str, metadata: dict):
+        try:
+            user_id = metadata["user_id"]
+            await self.character_service.user.update(user_id=user_id, name=username)
+            if self.debug:
+                logger.info(f"Set username '{username}' for user_id: {user_id}")
+            return {"username": username}
+        except Exception as ex:
+            logger.error(f"Error at updating username: {ex}")
+            return {"result": "error"}

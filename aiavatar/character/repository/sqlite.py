@@ -3,8 +3,8 @@ import sqlite3
 from datetime import datetime, timezone, date
 from typing import Dict, Any, Optional, List
 from uuid import uuid4
-from .base import CharacterRepositoryBase, ActivityRepositoryBase
-from ..models import Character, WeeklySchedule, DailySchedule, Diary
+from .base import CharacterRepositoryBase, ActivityRepositoryBase, UserRepository
+from ..models import Character, WeeklySchedule, DailySchedule, Diary, User
 
 
 class SQLiteCharacterRepository(CharacterRepositoryBase):
@@ -661,6 +661,172 @@ class SQLiteActivityRepository(ActivityRepositoryBase):
                     WHERE character_id = ? AND diary_date = ?
                     """,
                     (character_id, diary_date.isoformat())
+                )
+                return cursor.rowcount == 1
+        finally:
+            conn.close()
+
+
+class SQLiteUserRepository(UserRepository):
+    TABLE_NAME = "users"
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self.init_db()
+
+    def init_db(self) -> None:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            with conn:
+                conn.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self.TABLE_NAME} (
+                        id TEXT PRIMARY KEY,
+                        created_at TIMESTAMP NOT NULL,
+                        updated_at TIMESTAMP NOT NULL,
+                        name TEXT NOT NULL,
+                        metadata JSON NOT NULL DEFAULT '{{}}'
+                    )
+                    """
+                )
+        finally:
+            conn.close()
+
+    async def create(
+        self,
+        *,
+        name: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> User:
+        now = datetime.now(timezone.utc)
+        user_id = str(uuid4())
+        metadata_json = json.dumps(metadata or {})
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            with conn:
+                conn.execute(
+                    f"""
+                    INSERT INTO {self.TABLE_NAME} (id, created_at, updated_at, name, metadata)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (user_id, now.isoformat(), now.isoformat(), name, metadata_json)
+                )
+        finally:
+            conn.close()
+
+        return User(
+            id=user_id,
+            created_at=now,
+            updated_at=now,
+            name=name,
+            metadata=metadata
+        )
+
+    async def get(self, *, user_id: str) -> Optional[User]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, created_at, updated_at, name, metadata
+                FROM {self.TABLE_NAME}
+                WHERE id = ?
+                """,
+                (user_id,)
+            )
+            row = cursor.fetchone()
+        finally:
+            conn.close()
+
+        if row is None:
+            return None
+
+        metadata = row["metadata"]
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+
+        return User(
+            id=row["id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            name=row["name"],
+            metadata=metadata
+        )
+
+    async def update(
+        self,
+        *,
+        user_id: str,
+        name: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Optional[User]:
+        now = datetime.now(timezone.utc)
+
+        updates = ["updated_at = ?"]
+        params: List[Any] = [now.isoformat()]
+
+        if name is not None:
+            updates.append("name = ?")
+            params.append(name)
+
+        if metadata is not None:
+            updates.append("metadata = ?")
+            params.append(json.dumps(metadata))
+
+        params.append(user_id)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            with conn:
+                conn.execute(
+                    f"""
+                    UPDATE {self.TABLE_NAME}
+                    SET {", ".join(updates)}
+                    WHERE id = ?
+                    """,
+                    tuple(params)
+                )
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    SELECT id, created_at, updated_at, name, metadata
+                    FROM {self.TABLE_NAME}
+                    WHERE id = ?
+                    """,
+                    (user_id,)
+                )
+                row = cursor.fetchone()
+        finally:
+            conn.close()
+
+        if row is None:
+            return None
+
+        row_metadata = row["metadata"]
+        if isinstance(row_metadata, str):
+            row_metadata = json.loads(row_metadata)
+
+        return User(
+            id=row["id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            name=row["name"],
+            metadata=row_metadata
+        )
+
+    async def delete(self, *, user_id: str) -> bool:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            with conn:
+                cursor = conn.execute(
+                    f"""
+                    DELETE FROM {self.TABLE_NAME}
+                    WHERE id = ?
+                    """,
+                    (user_id,)
                 )
                 return cursor.rowcount == 1
         finally:
