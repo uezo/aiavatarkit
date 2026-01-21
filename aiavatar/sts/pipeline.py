@@ -335,7 +335,8 @@ class STSPipeline:
                 )
 
             last_created_at = await self.llm.context_manager.get_last_created_at(request.context_id)
-            if self.is_awake(request, last_created_at):
+            is_awake = self.is_awake(request, last_created_at)
+            if is_awake:
                 # Get context
                 if request.context_id:
                     if last_created_at == datetime.min.replace(tzinfo=timezone.utc):
@@ -366,7 +367,7 @@ class STSPipeline:
             performance.context_id = request.context_id
 
             # Stop on-going response before new response
-            if not self.use_invoke_queue or not request.wait_in_queue:
+            if is_awake and (not self.use_invoke_queue or not request.wait_in_queue):
                 await self.stop_response(request.session_id, request.context_id)
             performance.stop_response_time = time() - start_time
 
