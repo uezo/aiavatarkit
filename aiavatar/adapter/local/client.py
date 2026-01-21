@@ -1,7 +1,6 @@
 import logging
-import re
 from typing import List
-from ...sts.models import STSRequest, STSResponse
+from ...database import PoolProvider
 from ...sts.pipeline import STSPipeline
 from ...sts.vad import SpeechDetector
 from ...sts.stt import SpeechRecognizer
@@ -13,8 +12,8 @@ from ...sts.session_state_manager import SessionStateManager
 from ...sts.performance_recorder import PerformanceRecorder
 from ...sts.voice_recorder import VoiceRecorder
 from ...device import NoiseLevelDetector
-from ..models import AvatarControlRequest, AIAvatarResponse, AIAvatarException
-from ..client import AIAvatarClientBase
+from ..client import AIAvatarClientBase, AIAvatarRequest
+from .server import AIAvatarLocalServer
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +56,11 @@ class AIAvatar(AIAvatarClientBase):
         wakeword_timeout: float = 60.0,
         merge_request_threshold: float = 0.0,
         merge_request_prefix: str = "$Previous user's request and your response have been canceled. Please respond again to the following request:\n\n",
+        timestamp_interval_seconds: float = 0.0,
+        timestamp_prefix: str = "$Current date and time: ",
+        timestamp_timezone: str = "UTC",
         mute_on_barge_in: bool = False,
+        db_pool_provider: PoolProvider = None,
         db_connection_str: str = "aiavatar.db",
         session_state_manager: SessionStateManager = None,
         performance_recorder: PerformanceRecorder = None,
@@ -98,8 +101,9 @@ class AIAvatar(AIAvatarClientBase):
             debug=debug
         )
 
-        # Speech-to-Speech pipeline
-        self.sts = sts or STSPipeline(
+        self.local_server = AIAvatarLocalServer(
+            response_queue=self.response_queue,
+
             # VAD
             vad=vad,
             vad_volume_db_threshold=vad_volume_db_threshold or volume_db_threshold,
@@ -126,6 +130,11 @@ class AIAvatar(AIAvatarClientBase):
             wakeword_timeout=wakeword_timeout,
             merge_request_threshold=merge_request_threshold,
             merge_request_prefix=merge_request_prefix,
+            timestamp_interval_seconds=timestamp_interval_seconds,
+            timestamp_prefix=timestamp_prefix,
+            timestamp_timezone=timestamp_timezone,
+            mute_on_barge_in=mute_on_barge_in,
+            db_pool_provider=db_pool_provider,
             db_connection_str=db_connection_str,
             session_state_manager=session_state_manager,
             performance_recorder=performance_recorder,
@@ -137,99 +146,32 @@ class AIAvatar(AIAvatarClientBase):
             use_invoke_queue=use_invoke_queue,
             debug=debug
         )
-        self.sts.handle_response = self.handle_response
-        self.sts.stop_response = self.stop_response
 
         # Noise filter
         self.auto_noise_filter_threshold = auto_noise_filter_threshold
         self.noise_margin = noise_margin
 
-        # Mute immediately on barge-in
-        if mute_on_barge_in:
-            @self.sts.vad.on_recording_started
-            async def mute_on_barge_in(session_id: str):
-                await self.stop_response(session_id, "")
-
-    async def send_request(self, request):
-        async for r in self.sts.invoke(STSRequest(
-            type=request.type,
-            session_id=request.session_id,
-            user_id=request.user_id,
-            context_id=request.context_id,
-            text=request.text,
-            audio_data=request.audio_data,
-            files=request.files,
-            system_prompt_params=request.system_prompt_params,
-            allow_merge=request.allow_merge,
-            wait_in_queue=request.wait_in_queue
-        )):
-            await self.sts.handle_response(r)
+    async def send_request(self, request: AIAvatarRequest):
+        await self.local_server.send_request(request)
 
     async def send_microphone_data(self, audio_bytes, session_id):
-        await self.sts.vad.process_samples(samples=audio_bytes, session_id=session_id)
-
-    def parse_avatar_control_request(self, text: str) -> AvatarControlRequest:
-        avreq = AvatarControlRequest()
-
-        if text:
-            # Face
-            face_pattarn = r"\[face:(\w+)\]"
-            faces = re.findall(face_pattarn, text)
-            if faces:
-                avreq.face_name = faces[0]
-                avreq.face_duration = 4.0
-
-            # Animation
-            animation_pattarn = r"\[animation:(\w+)\]"
-            animations = re.findall(animation_pattarn, text)
-            if animations:
-                avreq.animation_name = animations[0]
-                avreq.animation_duration = 4.0
-
-        return avreq
-
-    async def handle_response(self, response: STSResponse):
-        aiavatar_response = AIAvatarResponse(
-            type=response.type,
-            session_id=response.session_id,
-            user_id=response.user_id,
-            context_id=response.context_id,
-            text=response.text,
-            voice_text=response.voice_text,
-            audio_data=response.audio_data,
-            metadata=response.metadata or {}
-        )
-
-        if response.type == "chunk":
-            # Stop response if guardrail triggered
-            if response.metadata.get("is_guardrail_triggered"):
-                await self.stop_response(response.session_id, response.context_id)
-            # Parse avatar control
-            aiavatar_response.avatar_control_request = self.parse_avatar_control_request(response.text)
-
-        elif response.type == "final":
-            if response.text:
-                if image_source_match := re.search(r"\[vision:(\w+)\]", response.text):
-                    aiavatar_response.type = "vision"
-                    aiavatar_response.metadata={"source": image_source_match.group(1)}
-
-        elif response.type == "error":
-            raise AIAvatarException(
-                message=response.metadata.get("error", "Error in processing pipeline"),
-                response=response
-            )
-
-        await self.response_queue.put(aiavatar_response)
+        await self.local_server.handle_microphone_data(audio_bytes=audio_bytes, session_id=session_id)
 
     async def initialize_session(self, session_id: str, user_id: str, context_id: str):
         if user_id:
-            self.sts.vad.set_session_data(session_id, "user_id", user_id, True)
+            self.local_server.set_session_data(session_id, "user_id", user_id, True)
         if context_id:
-            self.sts.vad.set_session_data(session_id, "context_id", context_id, True)
+            self.local_server.set_session_data(session_id, "context_id", context_id, True)
 
     async def start_listening(self, session_id: str = "local_session", user_id: str = "local_user", context_id: str = None):
+        start_response = await self.local_server.start_session(
+            session_id=session_id,
+            user_id=user_id,
+            context_id=context_id
+        )
+
         # Set noise filter
-        if hasattr(self.sts.vad, "set_volume_db_threshold"):
+        if hasattr(self.local_server.sts.vad, "set_volume_db_threshold"):
             if self.auto_noise_filter_threshold:
                 noise_level_detector = NoiseLevelDetector(
                     rate=self.audio_recorder.sample_rate,
@@ -240,8 +182,14 @@ class AIAvatar(AIAvatarClientBase):
                 volume_threshold_db = int(noise_level) + self.noise_margin
 
                 logger.info(f"Set volume threshold: {volume_threshold_db}dB")
-                self.sts.vad.set_volume_db_threshold(session_id, volume_threshold_db)
+                self.local_server.sts.vad.set_volume_db_threshold(
+                    start_response.session_id, volume_threshold_db
+                )
             else:
-                logger.info(f"Set volume threshold: {self.sts.vad.volume_db_threshold}dB")
+                logger.info(f"Set volume threshold: {self.local_server.sts.vad.volume_db_threshold}dB")
 
-        await super().start_listening(session_id, user_id, context_id)
+        await super().start_listening(
+            session_id=start_response.session_id,
+            user_id=start_response.user_id,
+            context_id=start_response.context_id
+        )

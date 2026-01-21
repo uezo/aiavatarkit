@@ -67,6 +67,10 @@ class AIAvatarClientBase:
         self.response_queue: asyncio.Queue[AIAvatarResponse] = asyncio.Queue()
         self._on_responses = {}
 
+        # Message display
+        self.username = None
+        self.charactername = None
+
         # Debug
         self.debug = debug
         self.last_responses: List[AIAvatarResponse] = []
@@ -112,7 +116,17 @@ class AIAvatarClientBase:
                 if on_response_func := self._on_responses.get(response.type):
                     await on_response_func(response)
 
-                if response.type == "connected":
+                if (response.type == "connected" or response.type == "tool_call") and response.metadata:
+                    if username := response.metadata.get("username"):
+                        self.username = username
+                    if charactername := response.metadata.get("charactername"):
+                        self.charactername = charactername
+
+                if response.type == "start":
+                    if request_text := response.metadata.get("request_text"):
+                        print(f"\033[1;32m{self.username or 'User'}:\033[0m {request_text}")
+
+                elif response.type == "connected":
                     logger.info(f"Connected: {response.session_id}")
 
                 elif response.type == "chunk":
@@ -128,6 +142,10 @@ class AIAvatarClientBase:
                             context_id=response.context_id,
                             files=[{"type": "image", "url": image_url}]
                         ))
+
+                elif response.type == "final":
+                    if response_text := response.voice_text:
+                        print(f"\033[1;35m{self.charactername or 'AI'}:\033[0m {response_text}")
 
                 elif response.type == "stop":
                     await self.stop_response(response.session_id, response.context_id)
@@ -167,13 +185,24 @@ class AIAvatarClientBase:
             logger.error(f"Error processing response: {ex}", exc_info=True)
 
     async def stop_response(self, session_id: str, context_id: str):
-        # Clear queues
+        # Clear queues, preserving items from "start" onwards
+        preserved_items = []
+        found_start = False
         while not self.response_queue.empty():
             try:
-                _ = self.response_queue.get_nowait()
-                self.response_queue.task_done()
+                resp = self.response_queue.get_nowait()
+                if resp.type == "start":
+                    found_start = True
+                if found_start:
+                    preserved_items.append(resp)
+                else:
+                    self.response_queue.task_done()
             except:
                 break
+
+        # Put back preserved items in order
+        for item in preserved_items:
+            await self.response_queue.put(item)
 
         self.audio_player.stop()
 

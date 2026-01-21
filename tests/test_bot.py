@@ -216,8 +216,8 @@ async def test_chat_wakeword(aiavatar_app: AIAvatar):
     user_id = "test_chat_wakeword_user"
     task = asyncio.create_task(aiavatar_app.start_listening(session_id=session_id, user_id=user_id))
 
-    aiavatar_app.sts.wakewords = ["こんにちは", "こんにちわ"]
-    aiavatar_app.sts.wakeword_timeout = 10
+    aiavatar_app.local_server.sts.wakewords = ["こんにちは", "こんにちわ"]
+    aiavatar_app.local_server.sts.wakeword_timeout = 10
 
     try:
         # Not triggered chat
@@ -279,7 +279,8 @@ async def test_chat_vision(aiavatar_app: AIAvatar):
 
         # Check `aiavatar_app.last_response`, not response from chat
         response = await chat(aiavatar_app, text="画面を見て。今見えているアプリケーションは何かな？", session_id=session_id)
-        assert "visual" in response.text.lower()  # Run test on Visual Studio Code
+        response_text = response.text.lower()
+        assert "visual" in response_text    # Run test on Visual Studio Code
 
     finally:
         await aiavatar_app.stop_listening(session_id)
@@ -306,7 +307,7 @@ async def test_chat_function(aiavatar_app: AIAvatar):
                 },
             }
         }
-        @aiavatar_app.sts.llm.tool(weather_tool_spec)
+        @aiavatar_app.local_server.sts.llm.tool(weather_tool_spec)
         async def get_weather(location: str = None):
             return {"weather": "clear", "temperature": 23.4}
 
