@@ -4,7 +4,7 @@ import io
 import logging
 import re
 import wave
-from typing import List, Dict
+from typing import List, Dict, Callable, Awaitable
 from fastapi import APIRouter, WebSocket
 from ...database import PoolProvider
 from ...sts.models import STSRequest, STSResponse
@@ -138,8 +138,8 @@ class AIAvatarWebSocketServer(Adapter):
         self.sessions: Dict[str, WebSocketSessionData] = {}
 
         # Callbacks
-        self._on_connect = None
-        self._on_disconnect = None
+        self._on_connect: Callable[[AIAvatarRequest, WebSocketSessionData], Awaitable[None]] = None
+        self._on_disconnect: Callable[[WebSocketSessionData], Awaitable[None]] = None
 
         # WebSocket processing
         self.response_audio_chunk_size = response_audio_chunk_size
@@ -154,11 +154,11 @@ class AIAvatarWebSocketServer(Adapter):
         self.debug = debug
         self.last_response = None
 
-    def on_connect(self, func) -> dict:
+    def on_connect(self, func: Callable[[AIAvatarRequest, WebSocketSessionData], Awaitable[None]]):
         self._on_connect = func
         return func
 
-    def on_disconnect(self, func) -> dict:
+    def on_disconnect(self, func: Callable[[WebSocketSessionData], Awaitable[None]]):
         self._on_disconnect = func
         return func
 
@@ -179,11 +179,18 @@ class AIAvatarWebSocketServer(Adapter):
             await websocket.close()
             return
 
+        # Callback for request
+        for on_req in self._on_request_handlers:
+            await on_req(request)
+
         if request.type == "start":
             self.websockets[request.session_id] = websocket
             session_data.id = request.session_id
 
             logger.info(f"WebSocket connected for session: {request.session_id}")
+
+            for on_session_start in self._on_session_start_handlers:
+                await on_session_start(request, session_data)
 
             # Store session data to initialize
             if request.user_id:
@@ -193,7 +200,7 @@ class AIAvatarWebSocketServer(Adapter):
             session_data.data["metadata"] = request.metadata
             self.sessions[session_data.id] = session_data
 
-            await self.send_response(AIAvatarResponse(
+            await self.handle_response(AIAvatarResponse(
                 type="connected",
                 session_id=request.session_id,
                 user_id=request.user_id,
@@ -276,6 +283,10 @@ class AIAvatarWebSocketServer(Adapter):
             audio_data=response.audio_data,
             metadata=response.metadata or {}
         )
+
+        # Callback for each response chunk
+        for on_resp in self._on_response_handlers:
+            await on_resp(aiavatar_response, response)
 
         if response.type == "chunk":
             # Stop response if guardrail triggered
