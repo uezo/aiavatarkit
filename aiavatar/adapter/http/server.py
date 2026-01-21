@@ -2,7 +2,7 @@ import base64
 import logging
 import re
 import time
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Callable, Awaitable
 from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, status, Request, File, UploadFile, Form
 from fastapi.responses import JSONResponse, Response
@@ -200,19 +200,12 @@ class AIAvatarHttpServer(Adapter):
         # Optional components
         self.speaker_registry = speaker_registry
 
-        # Custom logic
-        self._on_response_chunk = None
-
         # Debug
         self.debug = debug
 
         # API Key
         self.api_key = api_key
         self._bearer_scheme = HTTPBearer(auto_error=False)
-
-    def on_response_chunk(self, func):
-        self._on_response_chunk = func
-        return func
 
     def api_key_auth(self, credentials: HTTPAuthorizationCredentials):
         if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != self.api_key:
@@ -248,6 +241,34 @@ class AIAvatarHttpServer(Adapter):
         router = APIRouter()
         bearer_scheme = HTTPBearer(auto_error=False)
 
+        @router.post("/start")
+        async def post_start(
+            request: AIAvatarRequest,
+            credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
+        ):
+            if not request.session_id:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "session_id is required."}
+                )
+
+            if self.api_key:
+                self.api_key_auth(credentials)
+
+            for on_session_start in self._on_session_start_handlers:
+                await on_session_start(request, None)
+
+            async def stream_response():
+                yield AIAvatarResponse(
+                    type="connected",
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    context_id=request.context_id,
+                    metadata={}
+                ).model_dump_json()
+
+            return EventSourceResponse(stream_response())
+
         @router.post(path)
         async def post_chat(
             request: AIAvatarRequest,
@@ -261,6 +282,10 @@ class AIAvatarHttpServer(Adapter):
 
             if self.api_key:
                 self.api_key_auth(credentials)
+
+            # Callback for request
+            for on_req in self._on_request_handlers:
+                await on_req(request)
 
             async def stream_response():
                 if request.audio_data:
@@ -288,8 +313,9 @@ class AIAvatarHttpServer(Adapter):
                         metadata=response.metadata or {}
                     )
 
-                    if self._on_response_chunk:
-                        await self._on_response_chunk(aiavatar_response)
+                    # Callback for each response chunk
+                    for on_resp in self._on_response_handlers:
+                        await on_resp(aiavatar_response, response)
 
                     if response.type == "chunk":
                         # Language
@@ -320,12 +346,16 @@ class AIAvatarHttpServer(Adapter):
             return EventSourceResponse(stream_response())
 
         @router.post("/chat-messages", response_model=PostChatMessagesResponse, summary="Dify-compatible endpoint")
-        async def post_chat(
+        async def post_chat_messages(
             request: PostChatMessagesRequest,
             credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
         ):
             if self.api_key:
                 self.api_key_auth(credentials)
+
+            # Callback for request
+            for on_req in self._on_request_handlers:
+                await on_req(request)
 
             message_id = f"message_{uuid4()}"
             async def stream_response():
@@ -342,8 +372,9 @@ class AIAvatarHttpServer(Adapter):
                     if not created_at_int:
                         created_at_int = int(time.time())
 
-                    if self._on_response_chunk:
-                        await self._on_response_chunk(response) # Handle STSResponse instead
+                    # Callback for each response chunk
+                    for on_resp in self._on_response_handlers:
+                        await on_resp(None, response)
 
                     if response.type == "chunk":
                         chat_messages_response = PostChatMessagesResponse(
