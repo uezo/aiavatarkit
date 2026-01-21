@@ -116,6 +116,7 @@ This change ensures compatibility with the new internal structure and removes th
     - [Automated Daily Updates](#automated-daily-updates)
     - [Batch Generation](#batch-generation)
     - [Long-term Memory](#long-term-memory)
+    - [Binding to Adapter](#binding-to-adapter)
 
 - [🧩 API](#-api)
     - [💫 RESTful API (SSE)](#-restful-api-sse)
@@ -1020,6 +1021,37 @@ result = await character_service.memory.search(
 ```
 
 The default `MemoryClient` uses [ChatMemory](https://github.com/uezo/chatmemory) as its backend, but you can also use other long-term memory services by inheriting from `MemoryClientBase`.
+
+
+### Binding to Adapter
+
+The `bind_character` function provides a convenient way to integrate character management with your AIAvatar application. It automatically configures the system prompt, user management, and character-related tools in a single call.
+
+```python
+from aiavatar.character import CharacterService
+from aiavatar.character.binding import bind_character
+
+character_service = CharacterService(
+    openai_api_key="YOUR_API_KEY"
+)
+
+bind_character(
+    adapter=aiavatar_app,
+    character_service=character_service,
+    character_id="YOUR_CHARACTER_ID",
+    default_user_name="You"
+)
+```
+
+This single function call sets up:
+
+- **System prompt**: Automatically retrieves the character's system prompt with user-specific parameters
+- **User management**: Creates a new user with `default_user_name` if the user doesn't exist
+- **Username sync**: Sends the username and character name to the client on connection, and updates when changed
+- **Tools**: Registers the following tools automatically:
+  - `UpdateUsernameTool`: Allows the character to update the user's name during conversation
+  - `GetDiaryTool`: Retrieves the character's diary and schedule
+  - `MemorySearchTool`: Searches long-term memory (only if `memory_client` is configured)
 
 
 ## 🧩 API
