@@ -746,6 +746,10 @@ You can also make custom VAD components by implementing `SpeechDetector` interfa
 
 `AzureStreamSpeechDetector` uses Azure's streaming speech recognition service for both speech detection and transcription. Audio is continuously streamed to Azure, and speech boundaries are determined by Azure's recognition events.
 
+```sh
+pip install azure-cognitiveservices-speech
+```
+
 ```python
 from aiavatar.sts.vad.azure_stream import AzureStreamSpeechDetector
 vad = AzureStreamSpeechDetector(
@@ -2477,6 +2481,30 @@ ws_app = AIAvatarWebSocketServer(
 **NOTE**: You can also pass PostgreSQL connection settings directly to each component's constructor to manage and use individual connections separately from the shared connection pool. However, this makes it difficult to manage the total number of connections, especially when using multiple workers. We recommend using the shared pool unless you have a specific reason not to.
 
 **NOTE**: `PerformanceRecorder` runs in a separate thread from the main thread, so it does not use the shared connection pool. Instead, it retrieves only the connection information from the PoolProvider and creates its own dedicated connection pool. It writes performance information serially as it receives it through a queue, so it basically uses only a single connection. We recommend not changing this unless you have a specific reason.
+
+
+### ⚠️ LLM Error Handling
+
+You can handle errors that occur during LLM API calls by using the `on_error` decorator. This is useful for customizing avatar responses when content filters are triggered or when API errors occur.
+
+```python
+from aiavatar.sts.llm import LLMResponse
+
+@llm.on_error
+async def on_error(llm_response: LLMResponse):
+    ex = llm_response.error_info.get("exception")   # Get exception
+    error_json = llm_response.error_info.get("response_json", {})   # Get response JSON from OpenAI
+
+    # Make response
+    if error_json.get("error", {}).get("code") == "content_filter":
+        llm_response.text = "[face:angry]You shouldn't say that!"
+        llm_response.voice_text = "You shouldn't say that!"
+    else:
+        llm_response.text = "[face:sorrow]An error occurred"
+        llm_response.voice_text = "An error occurred"
+```
+
+**NOTE**: When an error occurs, the conversation context is not updated. This is intentional because including the programmatically overwritten response in the context may cause unexpected LLM behavior in subsequent conversations.
 
 
 ### 👀 Vision

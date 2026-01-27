@@ -52,12 +52,13 @@ class Guardrail(ABC):
 
 
 class LLMResponse:
-    def __init__(self, context_id: str, text: str = None, voice_text: str = None, tool_call: ToolCall = None, guradrail_name: str = None):
+    def __init__(self, context_id: str, text: str = None, voice_text: str = None, tool_call: ToolCall = None, guradrail_name: str = None, error_info: dict = None):
         self.context_id = context_id
         self.text = text
         self.voice_text = voice_text
         self.tool_call = tool_call
         self.guradrail_name = guradrail_name
+        self.error_info = error_info or {}
 
 
 class Tool:
@@ -211,6 +212,7 @@ The list of tools is as follows:
                 self.context_manager = SQLiteContextManager(db_path=db_connection_str)
         self.shared_context_ids = shared_context_ids
         self.guardrails = guardrails or []
+        self._on_error = None
         self.debug = debug
 
     # Decorators
@@ -245,6 +247,10 @@ The list of tools is as follows:
 
     async def on_before_tool_calls_default(self, tool_calls: List[ToolCall]):
         pass
+
+    def on_error(self, func):
+        self._on_error = func
+        return func
 
     def replace_last_option_split_char(self, original):
         return re.sub(self.option_split_chars_regex, r"\1|", original)
@@ -415,6 +421,13 @@ The list of tools is as follows:
             return None
 
         async for chunk in self.get_llm_stream_response(context_id, user_id, messages, system_prompt_params):
+            if chunk.error_info:
+                if self._on_error:
+                    await self._on_error(chunk)
+                yield chunk
+                # Skip update_context on error
+                return
+
             if chunk.tool_call:
                 if stream_buffer:
                     # Yield text content before tool call
