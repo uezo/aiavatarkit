@@ -267,7 +267,23 @@ class ChatGPTService(LLMService):
             logger.info(f"Request to ChatGPT: {chat_completion_params}")
 
         # Send request
-        stream_resp = await self.openai_client.chat.completions.create(**chat_completion_params)
+        try:
+            stream_resp = await self.openai_client.chat.completions.create(**chat_completion_params)
+
+        except openai_module.APIStatusError as aserr:
+            response_json = None
+            try:
+                response_json = aserr.response.json()
+            except:
+                pass
+            logger.warning(f"APIStatusError from OpenAI: {aserr}")
+            yield LLMResponse(context_id=context_id, error_info={"exception": aserr, "response_json": response_json})
+            return
+
+        except Exception as ex:
+            logger.warning(f"Error from OpenAI: {ex}")
+            yield LLMResponse(context_id=context_id, error_info={"exception": ex, "response_json": None})
+            return
 
         tool_calls: List[ToolCall] = []
         try_dynamic_tools = False
