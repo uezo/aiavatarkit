@@ -1,6 +1,7 @@
 import logging
 from datetime import date, datetime, timedelta
 from typing import List, Dict, Tuple, Any, Optional
+from urllib.parse import urlparse, parse_qs
 import openai
 from ..database import PoolProvider
 from .models import Character, WeeklySchedule, DailySchedule, Diary, ActivityRangeResult
@@ -222,11 +223,19 @@ class CharacterService:
         self.debug = debug
         self.memory = memory_client
 
-        self.client = openai.AsyncClient(
-            api_key=openai_api_key,
-            base_url=openai_base_url,
-            timeout=120.0
-        )
+        if "azure" in openai_model:
+            api_version = parse_qs(urlparse(openai_base_url).query).get("api-version", [None])[0]
+            self.client = openai.AsyncAzureOpenAI(
+                api_key=openai_api_key,
+                api_version=api_version,
+                base_url=openai_base_url
+            )
+        else:
+            self.client = openai.AsyncClient(
+                api_key=openai_api_key,
+                base_url=openai_base_url,
+                timeout=120.0
+            )
         self.openai_model = openai_model
         self.openai_reasoning_effort = openai_reasoning_effort
         self.weekly_schedule_generation_prompt = weekly_schedule_generation_prompt or self.DEFAULT_WEEKLY_SCHEDULE_GENERATION_PROMPT
@@ -573,6 +582,7 @@ class CharacterService:
         )
         if not daily_schedule:
             if generate_schedule:
+                logger.info("Generate daily schedule before building system prompt.")
                 daily_schedule = await self.create_daily_schedule_with_generation(
                     character_id=character_id, schedule_date=schedule_date
                 )
