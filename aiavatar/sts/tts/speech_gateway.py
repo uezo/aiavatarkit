@@ -40,7 +40,8 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
         if not text or not text.strip():
             return bytes()
 
-        logger.info(f"Speech synthesize: {text}")
+        if self.debug:
+            logger.info(f"Speech synthesize: {text}")
 
         # Preprocess
         processed_text = await self.preprocess(text, style_info, language)
