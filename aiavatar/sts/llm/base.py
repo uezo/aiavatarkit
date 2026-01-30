@@ -212,6 +212,7 @@ The list of tools is as follows:
                 self.context_manager = SQLiteContextManager(db_path=db_connection_str)
         self.shared_context_ids = shared_context_ids
         self.guardrails = guardrails or []
+        self._print_chat = None
         self._on_error = None
         self.debug = debug
 
@@ -247,6 +248,10 @@ The list of tools is as follows:
 
     async def on_before_tool_calls_default(self, tool_calls: List[ToolCall]):
         pass
+
+    def print_chat(self, func):
+        self._print_chat = func
+        return func
 
     def on_error(self, func):
         self._on_error = func
@@ -352,7 +357,10 @@ The list of tools is as follows:
         return None
 
     async def chat_stream(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
-        logger.info(f"User: {text}")
+        if self._print_chat:
+            self._print_chat("user", context_id, user_id, text, files)
+        else:
+            logger.info(f"User: {text}")
         if self._request_filter:
             text = self._request_filter(text)
             logger.info(f"User(Filtered): {text}")
@@ -490,7 +498,10 @@ The list of tools is as follows:
                 guradrail_name=response_guardrail_response.guardrail_name
             )
 
-        logger.info(f"AI: {response_text}")
+        if self._print_chat:
+            self._print_chat("ai", context_id, user_id, response_text, None)
+        else:
+            logger.info(f"AI: {response_text}")
         if len(messages) > message_length_at_start:
             await self.update_context(
                 context_id,
