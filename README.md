@@ -2507,6 +2507,29 @@ async def on_error(llm_response: LLMResponse):
 **NOTE**: When an error occurs, the conversation context is not updated. This is intentional because including the programmatically overwritten response in the context may cause unexpected LLM behavior in subsequent conversations.
 
 
+### 🖍️ Custom Chat Logging
+
+Use the `print_chat` decorator to customize how user/AI conversation turns are logged.
+
+```python
+@llm.print_chat
+def print_chat(role, context_id, user_id, text, files):
+    if role == "user":
+        logger.info(f"\033[1;32mUser:\033[0m {text}")
+    else:
+        think_match = re.search(r"<think>(.*?)</think>", text, re.DOTALL)
+        answer_match = re.search(r"<answer>(.*?)</answer>", text, re.DOTALL)
+        if think_match or answer_match:
+            if think_match:
+                logger.info(f"\033[3;38;5;246mThinking: {think_match.group(1).strip()}\033[0m")
+            logger.info(f"\033[1;35mAI:\033[0m {answer_match.group(1).strip() if answer_match else text}")
+        else:
+            logger.info(f"\033[1;35mAI:\033[0m {text}")
+```
+
+**NOTE**: This example uses ANSI escape sequences optimized for console output. These escape codes will appear as noise in log files.
+
+
 ### 👀 Vision
 
 AIAvatarKit captures and sends image to AI dynamically when the AI determine that vision is required to process the request. This gives "eyes" to your AIAvatar in metaverse platforms like VRChat.
