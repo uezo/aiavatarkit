@@ -23,6 +23,8 @@ class AIAvatarClient {
         this.analyser = null;
         this.onPlaybackAnalyze = null;
         this.isMicrophoneMuted = () => this.isAudioPlaying;
+        this.volume = 1.0;
+        this.gainNode = null;
     }
 
     async startListening(sessionId, userId) {
@@ -46,6 +48,7 @@ class AIAvatarClient {
                     this.messageQueue.push(msg);
                     if (!this.processingQueue) this.processQueue();
                 } else if (msg.type === "connected") {
+                    userId = msg.user_id;   // Update userId (Created on server if not exists)
                     console.log(`Session: sessionId=${msg.session_id}, userId=${msg.user_id}, contextId=${msg.context_id}`);
                 } else if (msg.type === "stop") {
                     this.messageQueue.length = 0;
@@ -106,6 +109,13 @@ class AIAvatarClient {
             // Connect to dest to fire onaudioprocess event
             this.scriptNode.connect(this.audioContext.destination);
 
+            // Setup gain node for volume control
+            if (!this.gainNode) {
+                this.gainNode = this.audioContext.createGain();
+                this.gainNode.gain.value = this.volume;
+                this.gainNode.connect(this.audioContext.destination);
+            }
+
             // Setup analyzer
             if (!this.analyser) {
                 const a = this.audioContext.createAnalyser();
@@ -162,10 +172,11 @@ class AIAvatarClient {
                         const source = this.audioContext.createBufferSource();
                         source.buffer = decodedData;
 
+                        const dest = this.gainNode || this.audioContext.destination;
                         const canAnalyze = this.analyser && typeof this.onPlaybackAnalyze === "function";
                         if (canAnalyze) {
                             source.connect(this.analyser);
-                            this.analyser.connect(this.audioContext.destination);
+                            this.analyser.connect(dest);  // analyser -> gainNode -> destination
 
                             // Analyze audio
                             const freqData = new Float32Array(this.analyser.frequencyBinCount);
@@ -203,7 +214,7 @@ class AIAvatarClient {
                             requestAnimationFrame(tick);
                         } else {
                             // No analyzer or callback: connect directly and skip analysis loop
-                            source.connect(this.audioContext.destination);
+                            source.connect(dest);
                         }
 
                         this.currentAudioSource = source;
@@ -224,6 +235,13 @@ class AIAvatarClient {
         });
     }
 
+    setVolume(value) {
+        this.volume = Math.max(0, Math.min(1, value));
+        if (this.gainNode) {
+            this.gainNode.gain.value = this.volume;
+        }
+    }
+
     stopAudio() {
         if (this.currentAudioSource) {
             try {
@@ -240,6 +258,7 @@ class AIAvatarClient {
             return;
         }
 
+        faceName = faceName.toLowerCase();
         const faceImagePath = this.faceImagePaths[faceName];
         if (faceImagePath === undefined || faceImagePath === null || faceImagePath === "") {
             return;
@@ -299,6 +318,7 @@ class AIAvatarClient {
         if (this.audioContext) {
             await this.audioContext.close();
             this.analyser = null;
+            this.gainNode = null;
             this.isAudioPlaying = false;
         }
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
