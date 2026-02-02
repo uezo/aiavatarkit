@@ -621,65 +621,75 @@
         <!-- Controls -->
         <div class="flex items-center justify-between mb-6">
           <h2 class="font-medium text-gray-700">Users</h2>
-          <button @click="loadCharUsers" :disabled="charUsersLoading" :class="[
-            'px-4 py-1.5 text-sm rounded-md transition-colors',
-            charUsersLoading ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-gray-700 text-white hover:bg-gray-800'
-          ]">{{ charUsersLoading ? 'Loading...' : 'Refresh' }}</button>
+          <div class="flex space-x-2">
+            <button @click="charShowNewUser = !charShowNewUser" class="px-4 py-1.5 text-sm rounded-md transition-colors border border-gray-300 text-gray-600 hover:bg-gray-100">{{ charShowNewUser ? 'Cancel' : 'New User' }}</button>
+            <button @click="loadCharUsers" :disabled="charUsersLoading" :class="[
+              'px-4 py-1.5 text-sm rounded-md transition-colors',
+              charUsersLoading ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-gray-700 text-white hover:bg-gray-800'
+            ]">{{ charUsersLoading ? 'Loading...' : 'Refresh' }}</button>
+          </div>
+        </div>
+
+        <!-- New User Form -->
+        <div v-if="charShowNewUser" class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
+          <h3 class="text-sm font-medium text-gray-700 mb-3">Create New User</h3>
+          <div class="space-y-3">
+            <div>
+              <label class="text-xs text-gray-500">Name</label>
+              <input v-model="charNewUserName" class="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="User name">
+            </div>
+            <div>
+              <label class="text-xs text-gray-500">Metadata (JSON)</label>
+              <textarea v-model="charNewUserMetadata" rows="3" class="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono" placeholder="{}"></textarea>
+            </div>
+            <div class="flex justify-end">
+              <button @click="createCharUser" :disabled="charNewUserCreating || !charNewUserName.trim()" :class="[
+                'px-4 py-1.5 text-sm rounded-md transition-colors',
+                charNewUserName.trim() && !charNewUserCreating ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+              ]">{{ charNewUserCreating ? 'Creating...' : 'Create' }}</button>
+            </div>
+          </div>
         </div>
 
         <div v-if="charUsersLoading" class="text-center py-12 text-gray-400">Loading...</div>
         <div v-else-if="charUsersList.length === 0" class="text-center py-12 text-gray-400 text-sm">No users found.</div>
 
-        <div v-else class="grid grid-cols-3 gap-4">
-          <!-- User list -->
-          <div class="col-span-1 bg-white rounded-lg shadow-sm border border-gray-200">
-            <div class="px-4 py-3 border-b border-gray-100">
-              <div class="text-xs font-medium text-gray-500 uppercase tracking-wide">{{ charUsersList.length }} user(s)</div>
-            </div>
-            <div class="max-h-96 overflow-y-auto">
-              <div v-for="u in charUsersList" :key="u.id"
-                @click="selectCharUser(u.id)"
-                :class="[
-                  'px-4 py-3 border-b border-gray-50 cursor-pointer transition-colors',
-                  charSelectedUserId === u.id ? 'bg-blue-50' : 'hover:bg-gray-50'
-                ]"
-              >
-                <div class="text-sm font-medium text-gray-700">{{ u.name }}</div>
-                <div class="text-xs text-gray-400 font-mono truncate">{{ u.id }}</div>
-                <div class="text-xs text-gray-400">{{ formatUserTime(u.created_at) }}</div>
+        <!-- User list (expandable rows) -->
+        <div v-else class="space-y-2">
+          <div v-for="u in charUsersList" :key="u.id" class="bg-white rounded-lg shadow-sm border border-gray-200">
+            <!-- Collapsed row -->
+            <div @click="toggleCharUser(u.id)" class="px-5 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-50 transition-colors">
+              <div class="flex items-center space-x-4 min-w-0">
+                <svg :class="['w-4 h-4 text-gray-400 transition-transform flex-shrink-0', charExpandedUserId === u.id ? 'rotate-90' : '']" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <div class="min-w-0">
+                  <span class="text-sm font-medium text-gray-700">{{ u.name }}</span>
+                  <span class="text-xs text-gray-400 font-mono ml-3">{{ u.id }}</span>
+                </div>
               </div>
+              <div class="text-xs text-gray-400 flex-shrink-0">{{ formatUserTime(u.created_at) }}</div>
             </div>
-          </div>
 
-          <!-- User detail -->
-          <div class="col-span-2">
-            <div v-if="!charSelectedUserId" class="bg-white rounded-lg shadow-sm border border-gray-200 px-5 py-12 text-center text-gray-400 text-sm">
-              Select a user from the list.
-            </div>
-            <div v-else class="bg-white rounded-lg shadow-sm border border-gray-200">
-              <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-                <h3 class="font-medium text-gray-700 text-sm">User Detail</h3>
-                <div class="flex space-x-2">
-                  <button @click="charUserReset" v-if="charUserChanged" class="px-3 py-1 text-sm rounded-md text-gray-600 hover:bg-gray-100 transition-colors">Reset</button>
-                  <button @click="charUserSave" :disabled="charUserSaving || !charUserChanged" :class="[
-                    'px-4 py-1 text-sm rounded-md transition-colors',
-                    charUserChanged && !charUserSaving ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                  ]">{{ charUserSaving ? 'Saving...' : 'Save' }}</button>
-                </div>
-              </div>
-              <div v-if="charUserLoading" class="px-5 py-8 text-center text-gray-400">Loading...</div>
-              <div v-else-if="charUser.id" class="px-5 py-4 space-y-4">
-                <div class="grid grid-cols-4 gap-4 items-start">
-                  <label class="text-sm text-gray-600 pt-2 font-mono">id</label>
-                  <div class="col-span-3 text-sm text-gray-500 pt-2 font-mono break-all">{{ charUser.id }}</div>
-                </div>
-                <div class="grid grid-cols-4 gap-4 items-start">
+            <!-- Expanded detail -->
+            <div v-if="charExpandedUserId === u.id" class="border-t border-gray-100 px-5 py-4">
+              <div v-if="charUserLoading" class="text-center py-4 text-gray-400">Loading...</div>
+              <div v-else-if="charUser.id" class="space-y-4">
+                <div class="grid grid-cols-6 gap-4 items-start">
                   <label class="text-sm text-gray-600 pt-2 font-mono">name</label>
-                  <input v-model="charUserEdit.name" class="col-span-3 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                  <input v-model="charUserEdit.name" class="col-span-5 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
                 </div>
-                <div class="grid grid-cols-4 gap-4 items-start">
+                <div class="grid grid-cols-6 gap-4 items-start">
                   <label class="text-sm text-gray-600 pt-2 font-mono">metadata</label>
-                  <textarea v-model="charUserMetadataJson" rows="8" class="col-span-3 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono" placeholder="{}"></textarea>
+                  <textarea v-model="charUserMetadataJson" rows="6" class="col-span-5 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono" placeholder="{}"></textarea>
+                </div>
+                <div class="flex items-center justify-between">
+                  <button @click="deleteCharUser(u.id)" class="px-3 py-1 text-sm rounded-md text-red-600 hover:bg-red-50 transition-colors">Delete</button>
+                  <div class="flex space-x-2">
+                    <button @click="charUserReset" v-if="charUserChanged" class="px-3 py-1 text-sm rounded-md text-gray-600 hover:bg-gray-100 transition-colors">Reset</button>
+                    <button @click="charUserSave" :disabled="charUserSaving || !charUserChanged" :class="[
+                      'px-4 py-1 text-sm rounded-md transition-colors',
+                      charUserChanged && !charUserSaving ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    ]">{{ charUserSaving ? 'Saving...' : 'Save' }}</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1902,12 +1912,16 @@ createApp({
     // --- Users ---
     const charUsersList = ref([]);
     const charUsersLoading = ref(false);
-    const charSelectedUserId = ref(null);
+    const charExpandedUserId = ref(null);
     const charUser = reactive({ id: '', name: '', metadata: null });
     const charUserEdit = reactive({ name: '' });
     const charUserMetadataJson = ref('{}');
     const charUserLoading = ref(false);
     const charUserSaving = ref(false);
+    const charShowNewUser = ref(false);
+    const charNewUserName = ref('');
+    const charNewUserMetadata = ref('{}');
+    const charNewUserCreating = ref(false);
 
     const charUserChanged = computed(() => {
       if (!charUser.id) return false;
@@ -1938,8 +1952,13 @@ createApp({
       charUsersLoading.value = false;
     };
 
-    const selectCharUser = async (userId) => {
-      charSelectedUserId.value = userId;
+    const toggleCharUser = async (userId) => {
+      if (charExpandedUserId.value === userId) {
+        charExpandedUserId.value = null;
+        Object.assign(charUser, { id: '', name: '', metadata: null });
+        return;
+      }
+      charExpandedUserId.value = userId;
       charUserLoading.value = true;
       try {
         const data = await apiFetch(`/character/user/${userId}`);
@@ -1969,12 +1988,47 @@ createApp({
         if (Object.keys(payload).length === 0) { charUserSaving.value = false; return; }
         await apiFetch(`/character/user/${charUser.id}`, { method: 'POST', body: JSON.stringify(payload) });
         showToast('User updated');
-        await selectCharUser(charUser.id);
+        await toggleCharUser(charUser.id);  // collapse
         await loadCharUsers();
+        await toggleCharUser(charUser.id);  // re-expand with fresh data
       } catch (e) {
         showToast('Failed to save: ' + e.message, 'error');
       }
       charUserSaving.value = false;
+    };
+
+    const createCharUser = async () => {
+      charNewUserCreating.value = true;
+      try {
+        let meta = undefined;
+        if (charNewUserMetadata.value.trim()) {
+          try { meta = JSON.parse(charNewUserMetadata.value); } catch { showToast('Invalid metadata JSON', 'error'); charNewUserCreating.value = false; return; }
+        }
+        const payload = { name: charNewUserName.value.trim() };
+        if (meta) payload.metadata = meta;
+        await apiFetch('/character/users', { method: 'POST', body: JSON.stringify(payload) });
+        showToast('User created');
+        charNewUserName.value = '';
+        charNewUserMetadata.value = '{}';
+        charShowNewUser.value = false;
+        await loadCharUsers();
+      } catch (e) {
+        showToast('Failed to create user: ' + e.message, 'error');
+      }
+      charNewUserCreating.value = false;
+    };
+
+    const deleteCharUser = async (userId) => {
+      if (!confirm('Are you sure you want to delete this user?')) return;
+      try {
+        await apiFetch(`/character/user/${userId}`, { method: 'DELETE' });
+        showToast('User deleted');
+        charExpandedUserId.value = null;
+        Object.assign(charUser, { id: '', name: '', metadata: null });
+        await loadCharUsers();
+      } catch (e) {
+        showToast('Failed to delete user: ' + e.message, 'error');
+      }
     };
 
     // --- Calendar ---
@@ -2253,9 +2307,10 @@ createApp({
       charInfoReset, charInfoSave,
       charWs, charWsEdit, charWsLoading, charWsSaving, charWsGenerating, charWsChanged,
       charWsReset, charWsSave, charWsGenerate,
-      charUsersList, charUsersLoading, charSelectedUserId,
+      charUsersList, charUsersLoading, charExpandedUserId,
       charUser, charUserEdit, charUserMetadataJson, charUserLoading, charUserSaving, charUserChanged,
-      loadCharUsers, selectCharUser, charUserReset, charUserSave,
+      charShowNewUser, charNewUserName, charNewUserMetadata, charNewUserCreating,
+      loadCharUsers, toggleCharUser, charUserReset, charUserSave, createCharUser, deleteCharUser,
       charYear, charMonth, charLoading, charDays, charCalendarCells,
       charSelectedDate, charDetailLoading,
       charScheduleDetail, charDiaryDetail,

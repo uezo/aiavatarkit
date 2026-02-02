@@ -40,6 +40,11 @@ class UserResponse(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+class UserCreateRequest(BaseModel):
+    name: str
+    metadata: Optional[Dict[str, Any]] = None
+
+
 class UserUpdateRequest(BaseModel):
     name: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
@@ -578,6 +583,44 @@ class CharacterAPI:
                 raise
             except Exception as ex:
                 logger.error(f"Error updating user: {ex}")
+                raise HTTPException(status_code=500, detail="Internal server error")
+
+        @router.post(
+            "/character/users",
+            response_model=UserResponse,
+            tags=["Character"],
+            summary="Create user",
+        )
+        async def create_user(request: UserCreateRequest) -> UserResponse:
+            try:
+                user = await self.service.user.create(
+                    name=request.name,
+                    metadata=request.metadata,
+                )
+                return UserResponse(
+                    id=user.id,
+                    name=user.name,
+                    metadata=user.metadata,
+                )
+            except Exception as ex:
+                logger.error(f"Error creating user: {ex}")
+                raise HTTPException(status_code=500, detail="Internal server error")
+
+        @router.delete(
+            "/character/user/{user_id}",
+            tags=["Character"],
+            summary="Delete user",
+        )
+        async def delete_user(user_id: str):
+            try:
+                deleted = await self.service.user.delete(user_id=user_id)
+                if not deleted:
+                    raise HTTPException(status_code=404, detail="User not found")
+                return {"ok": True}
+            except HTTPException:
+                raise
+            except Exception as ex:
+                logger.error(f"Error deleting user: {ex}")
                 raise HTTPException(status_code=500, detail="Internal server error")
 
         return router
