@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 import aiofiles
 from . import VoiceRecorder
 
@@ -14,3 +15,11 @@ class FileVoiceRecorder(VoiceRecorder):
         file_extension = self.to_extension(audio_format)
         async with aiofiles.open(self.record_dir / f"{id}.{file_extension}", "wb") as f:
             await f.write(voice_bytes)
+
+    async def get_voice(self, id: str) -> Optional[bytes]:
+        for ext in ("wav", "mp3", "ogg"):
+            file_path = self.record_dir / f"{id}.{ext}"
+            if file_path.exists():
+                async with aiofiles.open(file_path, "rb") as f:
+                    return await f.read()
+        return None

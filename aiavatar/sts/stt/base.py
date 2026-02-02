@@ -42,6 +42,43 @@ class SpeechRecognizer(ABC):
 
         self.debug = debug
 
+    def get_config(self) -> dict:
+        return {
+            "language": self.language,
+            "alternative_languages": self.alternative_languages,
+            "timeout": getattr(self.http_client.timeout, "read", None) if self.http_client else None,
+            "max_retries": self.max_retries,
+            "debug": self.debug,
+        }
+
+    def set_config(self, config: dict) -> dict:
+        allowed_keys = self.get_config().keys()
+        updated = {}
+        for k, v in config.items():
+            if v is None:
+                continue
+            if k not in allowed_keys:
+                continue
+            if k == "timeout":
+                if self.http_client:
+                    import httpx
+                    self.http_client = httpx.AsyncClient(
+                        follow_redirects=self.http_client._follow_redirects,
+                        timeout=httpx.Timeout(v),
+                        limits=httpx.Limits(
+                            max_connections=self.http_client._pool._max_connections,
+                            max_keepalive_connections=self.http_client._pool._max_keepalive_connections
+                        )
+                    )
+                    updated[k] = v
+            else:
+                try:
+                    setattr(self, k, v)
+                    updated[k] = v
+                except Exception:
+                    pass
+        return updated
+
     def preprocess(self, func) -> dict:
         self._preprocess = func
         return func

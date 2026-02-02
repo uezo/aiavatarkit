@@ -137,6 +137,11 @@ class AIAvatarLocalServer(Adapter):
         self.debug = debug
         self.last_response = None
 
+    def get_config(self) -> dict:
+        return {
+            "debug": self.debug,
+        }
+
     async def start_session(self, session_id: str, user_id: str, context_id: str) -> AIAvatarResponse:
         request = AIAvatarRequest(
             type="start",

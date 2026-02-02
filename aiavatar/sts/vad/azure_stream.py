@@ -64,6 +64,17 @@ class AzureStreamSpeechDetector(SpeechDetector):
             self._on_recording_started.append(on_recording_started)
         self._on_speech_detecting: Callable[[str, RecordingSession], Awaitable[None]] = None
 
+    def get_config(self) -> dict:
+        return {
+            "azure_language": self.azure_language,
+            "silence_duration_threshold": self.silence_duration_threshold,
+            "max_duration": self.max_duration,
+            "sample_rate": self.sample_rate,
+            "channels": self.channels,
+            "preroll_buffer_sec": self.preroll_buffer_sec,
+            "debug": self.debug,
+        }
+
     def _calculate_preroll_buffer_size(self, chunk_bytes: int) -> int:
         """Calculate preroll buffer size based on chunk size and desired duration"""
         # bytes per second = sample_rate * channels * 2 (16-bit)
@@ -169,6 +180,8 @@ class AzureStreamSpeechDetector(SpeechDetector):
                     if self.debug:
                         logger.debug("Azure: No speech recognized")
                     session.reset()
+                else:
+                    logger.info(f"Azure on_recognized: reason={evt.result.reason}, text='{evt.result.text}'")
 
             def on_canceled(evt):
                 if self.debug:

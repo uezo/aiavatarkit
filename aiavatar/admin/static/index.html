@@ -1,0 +1,2277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ADMIN_TITLE}}</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    [v-cloak] { display: none; }
+    .fade-enter-active, .fade-leave-active { transition: opacity 0.15s; }
+    .fade-enter-from, .fade-leave-to { opacity: 0; }
+    textarea { resize: vertical; }
+    .min-h-16 { min-height: 4rem; }
+    .toast {
+      position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 50;
+      padding: 0.75rem 1.25rem; border-radius: 0.5rem; color: #fff;
+      font-size: 0.875rem; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      transition: opacity 0.3s, transform 0.3s;
+    }
+    .toast-success { background: #059669; }
+    .toast-error { background: #dc2626; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+<div id="app" v-cloak>
+  <!-- Header -->
+  <header class="bg-white shadow-sm border-b border-gray-200">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+      <h1 class="text-lg font-semibold text-gray-700">{{ADMIN_TITLE}}</h1>
+      <div class="flex items-center space-x-4">
+        <div class="flex space-x-1">
+          <button
+            v-for="tab in tabs" :key="tab.id"
+            @click="activeTab = tab.id"
+            :class="[
+              'px-3 py-1.5 text-sm rounded-md transition-colors',
+              activeTab === tab.id
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-600 hover:bg-gray-100'
+            ]"
+          >{{ tab.label }}</button>
+        </div>
+        <div class="flex items-center space-x-1">
+          <input
+            v-model="apiKey"
+            type="password"
+            placeholder="API Key"
+            class="border border-gray-300 rounded-md px-2 py-1 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          >
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main -->
+  <main class="max-w-6xl mx-auto px-4 py-6">
+    <!-- Config Tab -->
+    <div v-if="activeTab === 'config'">
+      <!-- Sub-navigation -->
+      <div class="flex space-x-1 mb-6 flex-wrap">
+        <button
+          v-for="section in configSections" :key="section.id"
+          @click="activeConfigSection = section.id"
+          :class="[
+            'px-3 py-1.5 text-sm rounded-md transition-colors mb-1',
+            activeConfigSection === section.id
+              ? 'bg-gray-700 text-white'
+              : 'text-gray-600 hover:bg-gray-200 bg-gray-100'
+          ]"
+        >{{ section.label }}</button>
+      </div>
+
+      <!-- Loading -->
+      <div v-if="configLoading" class="text-center py-12 text-gray-400">
+        Loading...
+      </div>
+
+      <!-- Pipeline Config -->
+      <config-panel
+        v-else-if="activeConfigSection === 'pipeline'"
+        title="Pipeline"
+        :config="pipelineConfig"
+        :fields="pipelineFields"
+        @save="savePipelineConfig"
+        :saving="saving"
+      ></config-panel>
+
+      <!-- VAD Config -->
+      <config-panel
+        v-else-if="activeConfigSection === 'vad'"
+        :title="'VAD' + (vadType ? ' (' + vadType + ')' : '')"
+        :config="vadConfig"
+        :fields="vadFields"
+        @save="saveVadConfig"
+        :saving="saving"
+      ></config-panel>
+
+      <!-- STT Config -->
+      <config-panel
+        v-else-if="activeConfigSection === 'stt'"
+        :title="'STT' + (sttType ? ' (' + sttType + ')' : '')"
+        :config="sttConfig"
+        :fields="sttFields"
+        @save="saveSttConfig"
+        :saving="saving"
+      ></config-panel>
+
+      <!-- LLM Config -->
+      <config-panel
+        v-else-if="activeConfigSection === 'llm'"
+        :title="'LLM' + (llmType ? ' (' + llmType + ')' : '')"
+        :config="llmConfig"
+        :fields="llmFields"
+        @save="saveLlmConfig"
+        :saving="saving"
+      ></config-panel>
+
+      <!-- TTS Config -->
+      <config-panel
+        v-else-if="activeConfigSection === 'tts'"
+        :title="'TTS' + (ttsType ? ' (' + ttsType + ')' : '')"
+        :config="ttsConfig"
+        :fields="ttsFields"
+        @save="saveTtsConfig"
+        :saving="saving"
+      ></config-panel>
+
+      <!-- Adapters Config -->
+      <div v-else-if="activeConfigSection === 'adapters'">
+        <div v-if="adapters.length === 0" class="text-center py-12 text-gray-400">
+          No adapters registered
+        </div>
+        <div v-for="adapter in adapters" :key="adapter.name" class="mb-6">
+          <config-panel
+            :title="adapter.name + ' (' + adapter.type + ')'"
+            :config="adapter.config"
+            :fields="adapterFields"
+            @save="(cfg) => saveAdapterConfig(adapter.name, cfg)"
+            :saving="saving"
+          ></config-panel>
+        </div>
+      </div>
+
+      <!-- Volatility notice -->
+      <div class="mt-6 px-4 py-3 bg-amber-50 border border-amber-200 rounded-md text-sm text-amber-800">
+        <strong>Note:</strong> Configuration changes made here are applied in-memory only and are <strong>not persisted</strong>. All changes will be lost when the server restarts.
+      </div>
+    </div>
+
+    <!-- Evaluation Tab -->
+    <div v-if="activeTab === 'evaluation'">
+      <!-- Unavailable message -->
+      <div v-if="tabAvailability.evaluation === 'unavailable'" class="bg-white rounded-lg shadow-sm border border-gray-200 px-8 py-16 text-center">
+        <div class="text-gray-400 text-4xl mb-4">&#128203;</div>
+        <p class="text-gray-600 font-medium mb-2">Evaluation is not configured</p>
+        <p class="text-sm text-gray-400">{{ tabSetupMessages.evaluation }}</p>
+      </div>
+      <template v-else>
+      <!-- Scenario Editor -->
+      <div class="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+        <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+          <h2 class="font-medium text-gray-700">Scenarios</h2>
+          <div class="flex space-x-2">
+            <label class="px-3 py-1 text-sm rounded-md text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer border border-gray-300">
+              Import JSON
+              <input type="file" accept=".json" @change="importScenarios" class="hidden">
+            </label>
+            <button @click="exportScenarios" v-if="evalScenarios.length > 0" class="px-3 py-1 text-sm rounded-md text-gray-600 hover:bg-gray-100 transition-colors border border-gray-300">Export JSON</button>
+            <button @click="addScenario" class="px-3 py-1 text-sm rounded-md bg-gray-700 text-white hover:bg-gray-800 transition-colors">+ Scenario</button>
+          </div>
+        </div>
+
+        <div v-if="evalScenarios.length === 0" class="px-5 py-8 text-center text-gray-400 text-sm">
+          No scenarios. Click "+ Scenario" or "Import JSON" to get started.
+        </div>
+
+        <!-- Scenario list -->
+        <div v-for="(scenario, sIdx) in evalScenarios" :key="sIdx" class="border-b border-gray-100 last:border-b-0">
+          <div class="px-5 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-50" @click="toggleScenario(sIdx)">
+            <div class="flex items-center space-x-3">
+              <span class="text-gray-400 text-xs">{{ expandedScenarios[sIdx] ? '&#9660;' : '&#9654;' }}</span>
+              <span class="font-medium text-sm text-gray-700">{{ scenario.name || 'Scenario ' + (sIdx + 1) }}</span>
+              <span class="text-xs text-gray-400">{{ scenario.turns.length }} turn(s)</span>
+              <!-- Scenario evaluation badge -->
+              <span v-if="scenario.scenario_evaluation_result" :class="[
+                'text-xs px-2 py-0.5 rounded-full',
+                scenario.scenario_evaluation_result.result ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+              ]">{{ scenario.scenario_evaluation_result.result ? 'PASS' : 'FAIL' }}</span>
+              <span v-else-if="scenario.error" class="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">ERROR</span>
+            </div>
+            <button @click.stop="removeScenario(sIdx)" class="text-red-400 hover:text-red-600 text-sm px-2">&times;</button>
+          </div>
+
+          <!-- Expanded scenario -->
+          <div v-if="expandedScenarios[sIdx]" class="px-5 pb-4 space-y-3 bg-gray-50">
+            <div class="grid grid-cols-6 gap-3">
+              <div class="col-span-2">
+                <label class="text-xs text-gray-500">Name</label>
+                <input v-model="scenario.name" class="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="Scenario name">
+              </div>
+              <div class="col-span-3">
+                <label class="text-xs text-gray-500">Goal</label>
+                <input v-model="scenario.goal" class="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="What should be achieved overall">
+              </div>
+              <div class="col-span-1">
+                <label class="text-xs text-gray-500">User ID</label>
+                <input v-model="scenario.user_id" class="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="Optional">
+              </div>
+            </div>
+
+            <!-- Scenario error -->
+            <div v-if="scenario.error" class="p-3 rounded-md bg-yellow-50 border border-yellow-200">
+              <div class="flex items-center space-x-2 mb-1">
+                <span class="text-sm font-medium text-yellow-700">Error</span>
+              </div>
+              <p class="text-xs text-gray-600 whitespace-pre-wrap">{{ scenario.error }}</p>
+            </div>
+
+            <!-- Scenario evaluation result -->
+            <div v-if="scenario.scenario_evaluation_result" class="p-3 rounded-md" :class="scenario.scenario_evaluation_result.result ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'">
+              <div class="flex items-center space-x-2 mb-1">
+                <span class="text-sm font-medium" :class="scenario.scenario_evaluation_result.result ? 'text-green-700' : 'text-red-700'">
+                  Scenario: {{ scenario.scenario_evaluation_result.result ? 'PASS' : 'FAIL' }}
+                </span>
+              </div>
+              <p class="text-xs text-gray-600 whitespace-pre-wrap">{{ scenario.scenario_evaluation_result.reason }}</p>
+            </div>
+
+            <!-- Turns -->
+            <div v-for="(turn, tIdx) in scenario.turns" :key="tIdx" class="bg-white rounded-md border border-gray-200 p-3 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-gray-500">Turn {{ tIdx + 1 }}</span>
+                <div class="flex items-center space-x-2">
+                  <!-- Turn evaluation badge -->
+                  <span v-if="turn.evaluation_result" :class="[
+                    'text-xs px-2 py-0.5 rounded-full',
+                    turn.evaluation_result.result ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                  ]">{{ turn.evaluation_result.result ? 'PASS' : 'FAIL' }}</span>
+                  <button @click="removeTurn(sIdx, tIdx)" class="text-red-400 hover:text-red-600 text-xs">&times;</button>
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="text-xs text-gray-500">Input Text</label>
+                  <input v-model="turn.input_text" class="w-full border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="User message">
+                </div>
+                <div>
+                  <label class="text-xs text-gray-500">Expected Output (reference)</label>
+                  <input v-model="turn.expected_output_text" class="w-full border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="Optional expected response">
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="text-xs text-gray-500">Evaluation Criteria</label>
+                  <textarea v-model="turn.evaluation_criteria" rows="2" class="w-full border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="How to evaluate this turn"></textarea>
+                </div>
+                <div>
+                  <label class="text-xs text-gray-500">Evaluation Function</label>
+                  <input v-model="turn.evaluation_function_name" class="w-full border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="Optional function name">
+                </div>
+              </div>
+
+              <!-- Actual results (read-only, shown after execution) -->
+              <div v-if="turn.actual_output_text" class="mt-2 pt-2 border-t border-gray-100">
+                <label class="text-xs text-gray-500">Actual Output</label>
+                <div class="text-sm text-gray-700 bg-gray-50 rounded px-2 py-1 whitespace-pre-wrap">{{ turn.actual_output_text }}</div>
+              </div>
+              <div v-if="turn.actual_tool_call" class="mt-1">
+                <label class="text-xs text-gray-500">Tool Call</label>
+                <div class="text-xs text-gray-600 bg-gray-50 rounded px-2 py-1 font-mono whitespace-pre-wrap">{{ JSON.stringify(turn.actual_tool_call, null, 2) }}</div>
+              </div>
+              <!-- Turn evaluation reason -->
+              <div v-if="turn.evaluation_result" class="mt-1 p-2 rounded" :class="turn.evaluation_result.result ? 'bg-green-50' : 'bg-red-50'">
+                <p class="text-xs text-gray-600 whitespace-pre-wrap">{{ turn.evaluation_result.reason }}</p>
+              </div>
+            </div>
+
+            <button @click="addTurn(sIdx)" class="text-sm text-blue-600 hover:text-blue-800">+ Add Turn</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Run evaluation -->
+      <div class="flex items-center justify-between">
+        <div class="flex items-center space-x-4">
+          <button
+            @click="runEvaluation"
+            :disabled="evalRunning || evalScenarios.length === 0"
+            :class="[
+              'px-5 py-2 text-sm rounded-md transition-colors font-medium',
+              !evalRunning && evalScenarios.length > 0
+                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+            ]"
+          >{{ evalRunning ? 'Running...' : 'Run Evaluation' }}</button>
+          <button
+            @click="clearResults"
+            v-if="evalSummary && !evalRunning"
+            class="px-4 py-2 text-sm rounded-md transition-colors font-medium border border-gray-300 text-gray-600 hover:bg-gray-100"
+          >Clear Results</button>
+          <span v-if="evalRunning" class="text-sm text-gray-500">
+            ID: {{ currentEvalId }} &mdash; polling for results...
+          </span>
+        </div>
+        <!-- Summary -->
+        <div v-if="evalSummary" class="text-sm text-gray-600">
+          Scenarios: <span :class="evalSummary.scenariosPassed === evalSummary.scenariosTotal ? 'text-green-600 font-medium' : 'text-red-600 font-medium'">{{ evalSummary.scenariosPassed }}/{{ evalSummary.scenariosTotal }}</span>
+          <span v-if="evalSummary.scenariosErrored" class="text-yellow-600 font-medium">({{ evalSummary.scenariosErrored }} error)</span>
+          &nbsp;|&nbsp;
+          Turns: <span :class="evalSummary.turnsPassed === evalSummary.turnsTotal ? 'text-green-600 font-medium' : 'text-red-600 font-medium'">{{ evalSummary.turnsPassed }}/{{ evalSummary.turnsTotal }}</span>
+          <span v-if="evalSummary.turnsErrored" class="text-yellow-600 font-medium">({{ evalSummary.turnsErrored }} error)</span>
+        </div>
+      </div>
+
+      <!-- Load previous results -->
+      <div class="mt-4">
+        <div class="flex items-center space-x-2">
+          <input v-model="loadEvalId" placeholder="Evaluation ID" class="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent w-80">
+          <button @click="loadEvaluationResults" :disabled="!loadEvalId" :class="[
+            'px-3 py-1.5 text-sm rounded-md transition-colors',
+            loadEvalId ? 'bg-gray-700 text-white hover:bg-gray-800' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+          ]">Load Results</button>
+        </div>
+      </div>
+      </template>
+    </div>
+
+    <!-- Metrics Tab -->
+    <div v-if="activeTab === 'metrics'">
+      <!-- Controls -->
+      <div class="flex items-center justify-between mb-6">
+        <div class="flex items-center space-x-3">
+          <label class="text-sm text-gray-600">Period:</label>
+          <select v-model="metricsPeriod" @change="onPeriodChange" class="border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+            <option value="1h">Last 1 hour</option>
+            <option value="6h">Last 6 hours</option>
+            <option value="24h">Last 24 hours</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+          </select>
+          <label class="text-sm text-gray-600 ml-2">Interval:</label>
+          <select v-model="metricsInterval" @change="loadMetrics" class="border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+            <option value="1m">1 min</option>
+            <option value="5m">5 min</option>
+            <option value="15m">15 min</option>
+            <option value="1h">1 hour</option>
+            <option value="1d">1 day</option>
+          </select>
+        </div>
+        <button @click="loadMetrics" :disabled="metricsLoading" :class="[
+          'px-4 py-1.5 text-sm rounded-md transition-colors',
+          metricsLoading ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-gray-700 text-white hover:bg-gray-800'
+        ]">{{ metricsLoading ? 'Loading...' : 'Refresh' }}</button>
+      </div>
+
+      <!-- Summary Cards -->
+      <div v-if="metricsSummary" class="grid grid-cols-4 gap-4 mb-6">
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+          <div class="text-xs text-gray-500 uppercase tracking-wide">Total Requests</div>
+          <div class="text-2xl font-semibold text-gray-800 mt-1">{{ metricsSummary.total_requests }}</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+          <div class="text-xs text-gray-500 uppercase tracking-wide">Avg Response Time</div>
+          <div class="text-2xl font-semibold text-gray-800 mt-1">{{ formatMs(metricsSummary.avg_tts_first_chunk_time) }}</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+          <div class="text-xs text-gray-500 uppercase tracking-wide">p50 Response Time</div>
+          <div class="text-2xl font-semibold text-gray-800 mt-1">{{ formatMs(metricsSummary.p50_tts_first_chunk_time) }}</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+          <div class="text-xs text-gray-500 uppercase tracking-wide">p95 Response Time</div>
+          <div class="text-2xl font-semibold text-gray-800 mt-1">{{ formatMs(metricsSummary.p95_tts_first_chunk_time) }}</div>
+        </div>
+      </div>
+
+      <!-- Charts -->
+      <div class="space-y-6">
+        <!-- Request Volume Chart -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+          <h3 class="text-sm font-medium text-gray-700 mb-3">Request Volume</h3>
+          <div style="height: 200px; position: relative;">
+            <canvas ref="volumeChartCanvas"></canvas>
+          </div>
+        </div>
+
+        <!-- Response Time Chart -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+          <h3 class="text-sm font-medium text-gray-700 mb-3">Response Time (tts_first_chunk_time)</h3>
+          <div style="height: 250px; position: relative;">
+            <canvas ref="responseTimeChartCanvas"></canvas>
+          </div>
+        </div>
+
+        <!-- Phase Breakdown Chart -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+          <h3 class="text-sm font-medium text-gray-700 mb-3">Phase Breakdown (avg)</h3>
+          <div style="height: 250px; position: relative;">
+            <canvas ref="breakdownChartCanvas"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- No data -->
+      <div v-if="!metricsLoading && metricsSummary && metricsSummary.total_requests === 0" class="text-center py-12 text-gray-400 text-sm">
+        No data for the selected period.
+      </div>
+    </div>
+
+    <!-- Control Tab -->
+    <div v-if="activeTab === 'control'">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Perform Section -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+          <h3 class="text-sm font-medium text-gray-700 mb-1">Perform</h3>
+          <p class="text-xs text-gray-400 mb-3">Synthesize speech with face/animation control tags and send to client.</p>
+          <div class="space-y-3">
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Session ID <span class="text-gray-300">(optional)</span></label>
+              <input
+                v-model="ctrlSessionId"
+                type="text"
+                placeholder="e.g. local_session"
+                class="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Text</label>
+              <textarea
+                v-model="ctrlPerformText"
+                rows="4"
+                placeholder="[face:joy]Hello! [animation:wave_hands]Nice to meet you!"
+                class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent min-h-16"
+              ></textarea>
+            </div>
+            <div class="flex items-center justify-between">
+              <div class="text-xs text-gray-400">
+                Tags: <code class="bg-gray-100 px-1 rounded">[face:name]</code> <code class="bg-gray-100 px-1 rounded">[animation:name]</code>
+              </div>
+              <button
+                @click="ctrlPerform"
+                :disabled="!ctrlPerformText.trim() || ctrlPerformLoading"
+                :class="[
+                  'px-4 py-1.5 text-sm rounded-md transition-colors',
+                  !ctrlPerformText.trim() || ctrlPerformLoading
+                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    : 'bg-blue-600 text-white hover:bg-blue-700'
+                ]"
+              >{{ ctrlPerformLoading ? 'Sending...' : 'Perform' }}</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Conversation Section -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+          <h3 class="text-sm font-medium text-gray-700 mb-1">Conversation</h3>
+          <p class="text-xs text-gray-400 mb-3">Send text to the STS pipeline. The avatar processes it like voice input.</p>
+          <div class="space-y-3">
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs text-gray-500 mb-1">Session ID <span class="text-gray-300">(optional)</span></label>
+                <input
+                  v-model="ctrlSessionId"
+                  type="text"
+                  placeholder="e.g. local_session"
+                  class="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+              </div>
+              <div>
+                <label class="block text-xs text-gray-500 mb-1">User ID <span class="text-gray-300">(optional)</span></label>
+                <input
+                  v-model="ctrlUserId"
+                  type="text"
+                  placeholder="e.g. user_001"
+                  class="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Message</label>
+              <textarea
+                v-model="ctrlConvText"
+                rows="4"
+                placeholder="Hello! What's the weather like today?"
+                class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent min-h-16"
+                @keydown.ctrl.enter="ctrlConversation"
+                @keydown.meta.enter="ctrlConversation"
+              ></textarea>
+            </div>
+            <div class="flex items-center justify-between">
+              <div class="text-xs text-gray-400">Ctrl+Enter to send</div>
+              <button
+                @click="ctrlConversation"
+                :disabled="!ctrlConvText.trim() || ctrlConvLoading"
+                :class="[
+                  'px-4 py-1.5 text-sm rounded-md transition-colors',
+                  !ctrlConvText.trim() || ctrlConvLoading
+                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    : 'bg-green-600 text-white hover:bg-green-700'
+                ]"
+              >{{ ctrlConvLoading ? 'Processing...' : 'Send' }}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- History -->
+      <div v-if="ctrlHistory.length > 0" class="mt-6">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-medium text-gray-700">History</h3>
+          <button @click="ctrlHistory.length = 0" class="text-xs text-gray-400 hover:text-gray-600">Clear</button>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 divide-y divide-gray-100">
+          <div v-for="(entry, idx) in ctrlHistory" :key="idx" class="px-4 py-3">
+            <div class="flex items-center space-x-2 mb-1">
+              <span :class="[
+                'inline-block px-1.5 py-0.5 text-xs rounded font-medium',
+                entry.type === 'perform' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'
+              ]">{{ entry.type === 'perform' ? 'Perform' : 'Conversation' }}</span>
+              <span class="text-xs text-gray-400">{{ entry.time }}</span>
+              <span v-if="entry.sessionId" class="text-xs text-gray-400">session: {{ entry.sessionId }}</span>
+              <span v-if="entry.userId" class="text-xs text-gray-400">user: {{ entry.userId }}</span>
+              <span :class="[
+                'text-xs font-medium',
+                entry.success ? 'text-green-600' : 'text-red-500'
+              ]">{{ entry.success ? 'OK' : 'Error' }}</span>
+            </div>
+            <div class="text-sm text-gray-700 whitespace-pre-wrap">{{ entry.text }}</div>
+            <div v-if="!entry.success && entry.error" class="text-xs text-red-500 mt-1">{{ entry.error }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Character Tab -->
+    <div v-if="activeTab === 'character'">
+      <!-- Unavailable message -->
+      <div v-if="tabAvailability.character === 'unavailable'" class="bg-white rounded-lg shadow-sm border border-gray-200 px-8 py-16 text-center">
+        <div class="text-gray-400 text-4xl mb-4">&#128100;</div>
+        <p class="text-gray-600 font-medium mb-2">Character is not configured</p>
+        <p class="text-sm text-gray-400">{{ tabSetupMessages.character }}</p>
+      </div>
+      <template v-else>
+      <!-- Sub-navigation -->
+      <div class="flex space-x-1 mb-6">
+        <button
+          v-for="sub in charSubTabs" :key="sub.id"
+          @click="charActiveSubTab = sub.id"
+          :class="[
+            'px-3 py-1.5 text-sm rounded-md transition-colors',
+            charActiveSubTab === sub.id
+              ? 'bg-gray-700 text-white'
+              : 'text-gray-600 hover:bg-gray-200 bg-gray-100'
+          ]"
+        >{{ sub.label }}</button>
+      </div>
+
+      <!-- Settings Sub-tab -->
+      <div v-if="charActiveSubTab === 'settings'">
+        <!-- Character Info -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+          <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+            <h2 class="font-medium text-gray-700">Character Info</h2>
+            <div class="flex space-x-2">
+              <button @click="charInfoReset" v-if="charInfoChanged" class="px-3 py-1 text-sm rounded-md text-gray-600 hover:bg-gray-100 transition-colors">Reset</button>
+              <button @click="charInfoSave" :disabled="charInfoSaving || !charInfoChanged" :class="[
+                'px-4 py-1 text-sm rounded-md transition-colors',
+                charInfoChanged && !charInfoSaving ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+              ]">{{ charInfoSaving ? 'Saving...' : 'Save' }}</button>
+            </div>
+          </div>
+          <div v-if="charInfoLoading" class="px-5 py-8 text-center text-gray-400">Loading...</div>
+          <div v-else class="px-5 py-4 space-y-4">
+            <div class="grid grid-cols-3 gap-4 items-start">
+              <label class="text-sm text-gray-600 pt-2 font-mono">id</label>
+              <div class="col-span-2 text-sm text-gray-500 pt-2 font-mono">{{ charInfo.id }}</div>
+            </div>
+            <div class="grid grid-cols-3 gap-4 items-start">
+              <label class="text-sm text-gray-600 pt-2 font-mono">name</label>
+              <input v-model="charInfoEdit.name" class="col-span-2 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+            </div>
+            <div class="grid grid-cols-3 gap-4 items-start">
+              <label class="text-sm text-gray-600 pt-2 font-mono">prompt</label>
+              <textarea v-model="charInfoEdit.prompt" rows="8" class="col-span-2 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"></textarea>
+            </div>
+            <div class="grid grid-cols-3 gap-4 items-start">
+              <label class="text-sm text-gray-600 pt-2 font-mono">metadata</label>
+              <textarea v-model="charInfoMetadataJson" rows="4" class="col-span-2 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono" placeholder="{}"></textarea>
+            </div>
+          </div>
+        </div>
+
+        <!-- Weekly Schedule -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+          <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+            <h2 class="font-medium text-gray-700">Weekly Schedule</h2>
+            <div class="flex space-x-2">
+              <button @click="charWsGenerate" :disabled="charWsGenerating" :class="[
+                'px-3 py-1 text-sm rounded-md transition-colors',
+                charWsGenerating ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700'
+              ]">{{ charWsGenerating ? 'Generating...' : (charWs.exists ? 'Regenerate' : 'Generate') }}</button>
+              <button @click="charWsReset" v-if="charWsChanged" class="px-3 py-1 text-sm rounded-md text-gray-600 hover:bg-gray-100 transition-colors">Reset</button>
+              <button @click="charWsSave" :disabled="charWsSaving || !charWsChanged" :class="[
+                'px-4 py-1 text-sm rounded-md transition-colors',
+                charWsChanged && !charWsSaving ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+              ]">{{ charWsSaving ? 'Saving...' : 'Save' }}</button>
+            </div>
+          </div>
+          <div v-if="charWsLoading" class="px-5 py-8 text-center text-gray-400">Loading...</div>
+          <div v-else class="px-5 py-4">
+            <div v-if="!charWs.exists && !charWsEdit.content" class="text-sm text-gray-400">No weekly schedule. Click "Generate" to create one.</div>
+            <textarea v-else v-model="charWsEdit.content" rows="10" class="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"></textarea>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Users Sub-tab -->
+      <div v-if="charActiveSubTab === 'users'">
+        <!-- Controls -->
+        <div class="flex items-center justify-between mb-6">
+          <h2 class="font-medium text-gray-700">Users</h2>
+          <button @click="loadCharUsers" :disabled="charUsersLoading" :class="[
+            'px-4 py-1.5 text-sm rounded-md transition-colors',
+            charUsersLoading ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-gray-700 text-white hover:bg-gray-800'
+          ]">{{ charUsersLoading ? 'Loading...' : 'Refresh' }}</button>
+        </div>
+
+        <div v-if="charUsersLoading" class="text-center py-12 text-gray-400">Loading...</div>
+        <div v-else-if="charUsersList.length === 0" class="text-center py-12 text-gray-400 text-sm">No users found.</div>
+
+        <div v-else class="grid grid-cols-3 gap-4">
+          <!-- User list -->
+          <div class="col-span-1 bg-white rounded-lg shadow-sm border border-gray-200">
+            <div class="px-4 py-3 border-b border-gray-100">
+              <div class="text-xs font-medium text-gray-500 uppercase tracking-wide">{{ charUsersList.length }} user(s)</div>
+            </div>
+            <div class="max-h-96 overflow-y-auto">
+              <div v-for="u in charUsersList" :key="u.id"
+                @click="selectCharUser(u.id)"
+                :class="[
+                  'px-4 py-3 border-b border-gray-50 cursor-pointer transition-colors',
+                  charSelectedUserId === u.id ? 'bg-blue-50' : 'hover:bg-gray-50'
+                ]"
+              >
+                <div class="text-sm font-medium text-gray-700">{{ u.name }}</div>
+                <div class="text-xs text-gray-400 font-mono truncate">{{ u.id }}</div>
+                <div class="text-xs text-gray-400">{{ formatUserTime(u.created_at) }}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- User detail -->
+          <div class="col-span-2">
+            <div v-if="!charSelectedUserId" class="bg-white rounded-lg shadow-sm border border-gray-200 px-5 py-12 text-center text-gray-400 text-sm">
+              Select a user from the list.
+            </div>
+            <div v-else class="bg-white rounded-lg shadow-sm border border-gray-200">
+              <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+                <h3 class="font-medium text-gray-700 text-sm">User Detail</h3>
+                <div class="flex space-x-2">
+                  <button @click="charUserReset" v-if="charUserChanged" class="px-3 py-1 text-sm rounded-md text-gray-600 hover:bg-gray-100 transition-colors">Reset</button>
+                  <button @click="charUserSave" :disabled="charUserSaving || !charUserChanged" :class="[
+                    'px-4 py-1 text-sm rounded-md transition-colors',
+                    charUserChanged && !charUserSaving ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  ]">{{ charUserSaving ? 'Saving...' : 'Save' }}</button>
+                </div>
+              </div>
+              <div v-if="charUserLoading" class="px-5 py-8 text-center text-gray-400">Loading...</div>
+              <div v-else-if="charUser.id" class="px-5 py-4 space-y-4">
+                <div class="grid grid-cols-4 gap-4 items-start">
+                  <label class="text-sm text-gray-600 pt-2 font-mono">id</label>
+                  <div class="col-span-3 text-sm text-gray-500 pt-2 font-mono break-all">{{ charUser.id }}</div>
+                </div>
+                <div class="grid grid-cols-4 gap-4 items-start">
+                  <label class="text-sm text-gray-600 pt-2 font-mono">name</label>
+                  <input v-model="charUserEdit.name" class="col-span-3 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                </div>
+                <div class="grid grid-cols-4 gap-4 items-start">
+                  <label class="text-sm text-gray-600 pt-2 font-mono">metadata</label>
+                  <textarea v-model="charUserMetadataJson" rows="8" class="col-span-3 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono" placeholder="{}"></textarea>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Calendar Sub-tab -->
+      <div v-if="charActiveSubTab === 'calendar'">
+      <!-- Month Navigation -->
+      <div class="flex items-center justify-between mb-6">
+        <div class="flex items-center space-x-3">
+          <button @click="charPrevMonth" class="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-600 hover:bg-gray-100 transition-colors">&larr;</button>
+          <span class="text-lg font-medium text-gray-700 w-40 text-center">{{ charYear }}-{{ String(charMonth).padStart(2, '0') }}</span>
+          <button @click="charNextMonth" class="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-600 hover:bg-gray-100 transition-colors">&rarr;</button>
+        </div>
+        <div class="flex items-center space-x-2">
+          <button @click="charShowBatchForm = !charShowBatchForm" class="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-600 hover:bg-gray-100 transition-colors">Batch Generate</button>
+          <button @click="loadCharActivities" :disabled="charLoading" :class="[
+            'px-4 py-1.5 text-sm rounded-md transition-colors',
+            charLoading ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-gray-700 text-white hover:bg-gray-800'
+          ]">{{ charLoading ? 'Loading...' : 'Refresh' }}</button>
+        </div>
+      </div>
+
+      <!-- Batch Generate Form -->
+      <div v-if="charShowBatchForm" class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
+        <h3 class="text-sm font-medium text-gray-700 mb-3">Batch Generate Schedules & Diaries</h3>
+        <div class="flex items-end space-x-4">
+          <div>
+            <label class="text-xs text-gray-500">Start Date</label>
+            <input type="date" v-model="charBatchStart" class="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+          </div>
+          <div>
+            <label class="text-xs text-gray-500">End Date</label>
+            <input type="date" v-model="charBatchEnd" class="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+          </div>
+          <label class="inline-flex items-center cursor-pointer">
+            <input type="checkbox" v-model="charBatchOverwrite" class="h-4 w-4 text-blue-600 rounded border-gray-300">
+            <span class="ml-2 text-sm text-gray-600">Overwrite existing</span>
+          </label>
+          <button @click="charBatchGenerate" :disabled="charBatchRunning" :class="[
+            'px-4 py-1.5 text-sm rounded-md transition-colors',
+            charBatchRunning ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'
+          ]">{{ charBatchRunning ? 'Generating...' : 'Generate' }}</button>
+        </div>
+      </div>
+
+      <!-- Loading -->
+      <div v-if="charLoading" class="text-center py-12 text-gray-400">Loading...</div>
+
+      <!-- Calendar Grid -->
+      <div v-else class="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+        <!-- Day headers -->
+        <div class="grid grid-cols-7 border-b border-gray-200">
+          <div v-for="d in ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']" :key="d" class="text-center text-xs font-medium text-gray-500 py-2">{{ d }}</div>
+        </div>
+        <!-- Calendar cells -->
+        <div class="grid grid-cols-7">
+          <div v-for="(cell, idx) in charCalendarCells" :key="idx"
+            :class="[
+              'min-h-16 border-b border-r border-gray-100 p-1 cursor-pointer transition-colors',
+              cell.day ? 'hover:bg-blue-50' : '',
+              cell.day && charSelectedDate === cell.dateStr ? 'bg-blue-50 ring-2 ring-blue-300 ring-inset' : '',
+              !cell.day ? 'bg-gray-50' : ''
+            ]"
+            @click="cell.day && selectCharDate(cell.dateStr)"
+          >
+            <div v-if="cell.day" class="text-xs text-gray-600 mb-1">{{ cell.day }}</div>
+            <div v-if="cell.day" class="flex space-x-1">
+              <span v-if="cell.hasSchedule" class="w-2 h-2 rounded-full bg-green-400 inline-block" title="Schedule"></span>
+              <span v-if="cell.hasDiary" class="w-2 h-2 rounded-full bg-blue-400 inline-block" title="Diary"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detail Panel -->
+      <div v-if="charSelectedDate" class="grid grid-cols-2 gap-4">
+        <!-- Schedule -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+          <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+            <h3 class="font-medium text-gray-700 text-sm">Daily Schedule — {{ charSelectedDate }}</h3>
+            <button @click="charGenerateSchedule" :disabled="charGenScheduleRunning" :class="[
+              'px-3 py-1 text-xs rounded-md transition-colors',
+              charGenScheduleRunning ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700'
+            ]">{{ charScheduleDetail.exists ? (charGenScheduleRunning ? 'Regenerating...' : 'Regenerate') : (charGenScheduleRunning ? 'Generating...' : 'Generate') }}</button>
+          </div>
+          <div class="px-5 py-4">
+            <div v-if="charDetailLoading" class="text-gray-400 text-sm">Loading...</div>
+            <div v-else-if="charScheduleDetail.exists">
+              <div class="text-sm text-gray-800 whitespace-pre-wrap bg-gray-50 rounded px-3 py-2 mb-3 max-h-80 overflow-y-auto">{{ charScheduleDetail.content }}</div>
+              <div v-if="charScheduleDetail.content_context">
+                <button @click="charShowScheduleCtx = !charShowScheduleCtx" class="text-xs text-gray-500 hover:text-gray-700">{{ charShowScheduleCtx ? '&#9660; Details' : '&#9654; Details' }}</button>
+                <div v-if="charShowScheduleCtx" class="mt-2 space-y-2">
+                  <div v-for="(val, key) in charScheduleDetail.content_context" :key="key">
+                    <div class="text-xs font-medium text-gray-500">{{ key }}</div>
+                    <div class="text-xs text-gray-600 bg-gray-50 rounded px-2 py-1 whitespace-pre-wrap max-h-40 overflow-y-auto">{{ val }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-else class="text-sm text-gray-400">No schedule for this date.</div>
+          </div>
+        </div>
+
+        <!-- Diary -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+          <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+            <h3 class="font-medium text-gray-700 text-sm">Diary — {{ charSelectedDate }}</h3>
+            <button @click="charGenerateDiary" :disabled="charGenDiaryRunning" :class="[
+              'px-3 py-1 text-xs rounded-md transition-colors',
+              charGenDiaryRunning ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'
+            ]">{{ charDiaryDetail.exists ? (charGenDiaryRunning ? 'Regenerating...' : 'Regenerate') : (charGenDiaryRunning ? 'Generating...' : 'Generate') }}</button>
+          </div>
+          <div class="px-5 py-4">
+            <div v-if="charDetailLoading" class="text-gray-400 text-sm">Loading...</div>
+            <div v-else-if="charDiaryDetail.exists">
+              <div class="text-sm text-gray-800 whitespace-pre-wrap bg-gray-50 rounded px-3 py-2 mb-3 max-h-80 overflow-y-auto">{{ charDiaryDetail.content }}</div>
+              <div v-if="charDiaryDetail.content_context">
+                <button @click="charShowDiaryCtx = !charShowDiaryCtx" class="text-xs text-gray-500 hover:text-gray-700">{{ charShowDiaryCtx ? '&#9660; Details' : '&#9654; Details' }}</button>
+                <div v-if="charShowDiaryCtx" class="mt-2 space-y-2">
+                  <div v-for="(val, key) in charDiaryDetail.content_context" :key="key">
+                    <div class="text-xs font-medium text-gray-500">{{ key }}</div>
+                    <div class="text-xs text-gray-600 bg-gray-50 rounded px-2 py-1 whitespace-pre-wrap max-h-40 overflow-y-auto">{{ val }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-else class="text-sm text-gray-400">No diary for this date.</div>
+          </div>
+        </div>
+      </div>
+      </div><!-- end calendar sub-tab -->
+      </template>
+    </div>
+
+    <!-- Logs Tab -->
+    <div v-if="activeTab === 'logs'">
+      <!-- Controls -->
+      <div class="flex items-center justify-between mb-6">
+        <div class="flex items-center space-x-3">
+          <label class="text-sm text-gray-600">Max records:</label>
+          <select v-model.number="logsLimit" class="border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+            <option :value="50">50</option>
+            <option :value="100">100</option>
+            <option :value="200">200</option>
+            <option :value="500">500</option>
+            <option :value="1000">1000</option>
+          </select>
+        </div>
+        <button @click="loadLogs" :disabled="logsLoading" :class="[
+          'px-4 py-1.5 text-sm rounded-md transition-colors',
+          logsLoading ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-gray-700 text-white hover:bg-gray-800'
+        ]">{{ logsLoading ? 'Loading...' : 'Refresh' }}</button>
+      </div>
+
+      <!-- Loading -->
+      <div v-if="logsLoading" class="text-center py-12 text-gray-400">Loading...</div>
+
+      <!-- No data -->
+      <div v-else-if="logsGroups.length === 0" class="text-center py-12 text-gray-400 text-sm">
+        No conversation logs found.
+      </div>
+
+      <!-- Conversation groups -->
+      <div v-else class="space-y-3">
+        <div v-for="(group, gIdx) in logsGroups" :key="gIdx" class="bg-white rounded-lg shadow-sm border border-gray-200">
+          <!-- Group header -->
+          <div class="px-5 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-50" @click="toggleLogGroup(gIdx)">
+            <div class="flex items-center space-x-3">
+              <span class="text-gray-400 text-xs">{{ expandedLogGroups[gIdx] ? '&#9660;' : '&#9654;' }}</span>
+              <span class="text-sm font-medium text-gray-700 font-mono">{{ group.context_id || '(no context)' }}</span>
+              <span class="text-xs text-gray-400">{{ group.logs.length }} message(s)</span>
+              <span v-if="group.logs.length > 0" class="text-xs text-gray-400">{{ formatLogTime(group.logs[0].created_at) }} ~ {{ formatLogTime(group.logs[group.logs.length - 1].created_at) }}</span>
+            </div>
+            <div class="flex items-center space-x-2">
+              <span v-if="group.logs[0] && group.logs[0].user_id" class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">{{ group.logs[0].user_id }}</span>
+            </div>
+          </div>
+
+          <!-- Expanded logs -->
+          <div v-if="expandedLogGroups[gIdx]" class="border-t border-gray-100">
+            <div v-for="(log, lIdx) in group.logs" :key="lIdx" class="px-5 py-3 border-b border-gray-50 last:border-b-0">
+              <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center space-x-3">
+                  <span class="text-xs text-gray-400">{{ formatLogTime(log.created_at) }}</span>
+                  <span v-if="log.tts_first_chunk_time != null" class="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">{{ (log.tts_first_chunk_time * 1000).toFixed(0) }} ms</span>
+                  <span v-if="log.transaction_id" class="text-xs text-gray-300 font-mono">{{ log.transaction_id }}</span>
+                </div>
+              </div>
+              <!-- Request -->
+              <div v-if="log.request_text" class="mb-2">
+                <div class="flex items-center space-x-1.5 mb-0.5">
+                  <span class="text-xs text-gray-500">Request</span>
+                  <button v-if="voiceRecorderEnabled && log.transaction_id" @click="playVoice(log.transaction_id, 'request', $event)" class="text-gray-400 hover:text-blue-600 transition-colors" title="Play request voice">
+                    <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+                  </button>
+                </div>
+                <div class="text-sm text-gray-800 bg-gray-50 rounded px-3 py-2 whitespace-pre-wrap">{{ log.request_text }}</div>
+              </div>
+              <div v-if="log.request_files" class="mb-2">
+                <div class="text-xs text-gray-500 mb-0.5">Files</div>
+                <div class="text-xs text-gray-600 bg-gray-50 rounded px-3 py-1 font-mono">{{ log.request_files }}</div>
+              </div>
+              <!-- Response -->
+              <div v-if="log.response_text" class="mb-2">
+                <div class="flex items-center space-x-1.5 mb-0.5">
+                  <span class="text-xs text-gray-500">Response</span>
+                  <button v-if="voiceRecorderEnabled && log.transaction_id" @click="playVoice(log.transaction_id, 'response', $event)" class="text-gray-400 hover:text-blue-600 transition-colors" title="Play response voice">
+                    <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+                  </button>
+                </div>
+                <div class="text-sm text-gray-800 bg-blue-50 rounded px-3 py-2 whitespace-pre-wrap">{{ log.response_text }}</div>
+              </div>
+              <div v-if="log.response_voice_text && log.response_voice_text !== log.response_text" class="mb-2">
+                <div class="flex items-center space-x-1.5 mb-0.5">
+                  <span class="text-xs text-gray-500">Voice Text</span>
+                  <button v-if="voiceRecorderEnabled && log.transaction_id" @click="playVoice(log.transaction_id, 'response', $event)" class="text-gray-400 hover:text-blue-600 transition-colors" title="Play response voice">
+                    <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+                  </button>
+                </div>
+                <div class="text-sm text-gray-700 bg-purple-50 rounded px-3 py-2 whitespace-pre-wrap">{{ log.response_voice_text }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Toast -->
+  <transition name="fade">
+    <div v-if="toast.show" :class="['toast', toast.type === 'error' ? 'toast-error' : 'toast-success']">
+      {{ toast.message }}
+    </div>
+  </transition>
+</div>
+
+<script>
+const { createApp, ref, reactive, computed, watch, onMounted, nextTick } = Vue;
+
+// Config Panel Component
+const ConfigPanel = {
+  props: ['title', 'config', 'fields', 'saving'],
+  emits: ['save'],
+  setup(props, { emit }) {
+    const editConfig = reactive({});
+
+    const resetEdit = () => {
+      Object.keys(editConfig).forEach(k => delete editConfig[k]);
+      if (props.config) {
+        Object.keys(props.config).forEach(k => {
+          editConfig[k] = props.config[k];
+        });
+      }
+    };
+
+    watch(() => props.config, resetEdit, { immediate: true, deep: true });
+
+    const visibleFields = computed(() => {
+      if (!props.config) return [];
+      const configKeys = Object.keys(props.config);
+      if (props.fields) {
+        return props.fields.filter(f => configKeys.includes(f.key));
+      }
+      return configKeys.map(k => ({ key: k, label: k, type: guessType(props.config[k]) }));
+    });
+
+    const guessType = (val) => {
+      if (typeof val === 'boolean') return 'boolean';
+      if (typeof val === 'number') return Number.isInteger(val) ? 'integer' : 'number';
+      if (Array.isArray(val)) return 'list';
+      if (typeof val === 'string' && val.length > 80) return 'textarea';
+      return 'text';
+    };
+
+    const handleSave = () => {
+      const payload = {};
+      for (const f of visibleFields.value) {
+        const k = f.key;
+        const v = editConfig[k];
+        const orig = props.config[k];
+        if (JSON.stringify(v) !== JSON.stringify(orig)) {
+          payload[k] = v;
+        }
+      }
+      if (Object.keys(payload).length === 0) return;
+      emit('save', payload);
+    };
+
+    const hasChanges = computed(() => {
+      if (!props.config) return false;
+      for (const f of visibleFields.value) {
+        if (JSON.stringify(editConfig[f.key]) !== JSON.stringify(props.config[f.key])) return true;
+      }
+      return false;
+    });
+
+    return { editConfig, visibleFields, handleSave, hasChanges, resetEdit };
+  },
+  template: `
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+      <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+        <h2 class="font-medium text-gray-700">{{ title }}</h2>
+        <div class="flex space-x-2">
+          <button
+            @click="resetEdit"
+            v-if="hasChanges"
+            class="px-3 py-1 text-sm rounded-md text-gray-600 hover:bg-gray-100 transition-colors"
+          >Reset</button>
+          <button
+            @click="handleSave"
+            :disabled="saving || !hasChanges"
+            :class="[
+              'px-4 py-1 text-sm rounded-md transition-colors',
+              hasChanges && !saving
+                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+            ]"
+          >{{ saving ? 'Saving...' : 'Save' }}</button>
+        </div>
+      </div>
+      <div class="px-5 py-4 space-y-4">
+        <div v-for="field in visibleFields" :key="field.key" class="grid grid-cols-3 gap-4 items-start">
+          <label class="text-sm text-gray-600 pt-2 font-mono">{{ field.key }}</label>
+          <div class="col-span-2">
+            <!-- Boolean -->
+            <label v-if="field.type === 'boolean'" class="inline-flex items-center cursor-pointer">
+              <input type="checkbox" v-model="editConfig[field.key]" class="h-4 w-4 text-blue-600 rounded border-gray-300">
+              <span class="ml-2 text-sm text-gray-600">{{ editConfig[field.key] ? 'Enabled' : 'Disabled' }}</span>
+            </label>
+            <!-- Number -->
+            <input
+              v-else-if="field.type === 'number' || field.type === 'integer'"
+              type="number"
+              :step="field.type === 'integer' ? 1 : 0.01"
+              v-model.number="editConfig[field.key]"
+              class="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+            <!-- Textarea -->
+            <textarea
+              v-else-if="field.type === 'textarea'"
+              v-model="editConfig[field.key]"
+              rows="4"
+              class="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
+            ></textarea>
+            <!-- List (string[]) -->
+            <div v-else-if="field.type === 'list'">
+              <div v-for="(item, idx) in (editConfig[field.key] || [])" :key="idx" class="flex items-center mb-1">
+                <input
+                  type="text"
+                  :value="item"
+                  @input="editConfig[field.key] = editConfig[field.key].map((v, i) => i === idx ? $event.target.value : v)"
+                  class="flex-1 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                <button @click="editConfig[field.key] = editConfig[field.key].filter((_, i) => i !== idx)" class="ml-1 text-red-400 hover:text-red-600 text-sm px-1">&times;</button>
+              </div>
+              <button @click="editConfig[field.key] = [...(editConfig[field.key] || []), '']" class="text-sm text-blue-600 hover:text-blue-800">+ Add item</button>
+            </div>
+            <!-- JSON (dict) -->
+            <div v-else-if="field.type === 'json'">
+              <textarea
+                :value="JSON.stringify(editConfig[field.key], null, 2)"
+                @input="tryParseJson(field.key, $event.target.value)"
+                rows="4"
+                class="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
+              ></textarea>
+            </div>
+            <!-- Text (default) -->
+            <input
+              v-else
+              type="text"
+              v-model="editConfig[field.key]"
+              class="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+          </div>
+        </div>
+        <div v-if="visibleFields.length === 0" class="text-gray-400 text-sm text-center py-4">
+          No configurable parameters
+        </div>
+      </div>
+    </div>
+  `,
+  methods: {
+    tryParseJson(key, val) {
+      try { this.editConfig[key] = JSON.parse(val); } catch {}
+    }
+  }
+};
+
+// Main App
+createApp({
+  components: { ConfigPanel },
+  setup() {
+    const apiKey = ref('');
+
+    const activeTab = ref('metrics');
+    const tabs = [
+      { id: 'metrics', label: 'Metrics' },
+      { id: 'logs', label: 'Logs' },
+      { id: 'control', label: 'Control' },
+      { id: 'character', label: 'Character' },
+      { id: 'config', label: 'Config' },
+      { id: 'evaluation', label: 'Evaluation' },
+    ];
+
+    // Tab availability: tracks whether optional APIs are set up
+    const tabAvailability = reactive({
+      character: 'unknown',  // 'unknown' | 'available' | 'unavailable'
+      evaluation: 'unknown',
+    });
+    const tabSetupMessages = {
+      character: 'Character features are not configured. To use this tab, set up CharacterService and call setup_character_api().',
+      evaluation: 'Evaluation features are not configured. To use this tab, set up an Evaluator and call setup_evaluation_api().',
+    };
+    const probeTab = async (tabId) => {
+      // character: GET /character/info returns 200 if set up, 404 if not
+      // evaluation: GET /evaluate returns 405 (Method Not Allowed) if set up, 404 if not
+      const probeEndpoints = {
+        character: '/character/info',
+        evaluation: '/evaluate',
+      };
+      const endpoint = probeEndpoints[tabId];
+      if (!endpoint) return;
+      try {
+        const headers = {};
+        if (apiKey.value) headers['Authorization'] = `Bearer ${apiKey.value}`;
+        const res = await fetch(apiBase + endpoint, { headers });
+        // 404 = route not registered (unavailable)
+        // 405 = route exists but wrong method (available — e.g. evaluation POST-only)
+        // 2xx/4xx(other)/5xx = route exists (available)
+        if (res.status === 404) {
+          // Double-check: FastAPI default 404 returns {"detail":"Not Found"}
+          try {
+            const body = await res.json();
+            if (body.detail === 'Not Found') {
+              tabAvailability[tabId] = 'unavailable';
+              return;
+            }
+          } catch {}
+        }
+        tabAvailability[tabId] = 'available';
+      } catch {
+        tabAvailability[tabId] = 'available'; // network error — let normal flow handle it
+      }
+    };
+
+    // Config sections
+    const activeConfigSection = ref('pipeline');
+    const configSections = [
+      { id: 'pipeline', label: 'Pipeline' },
+      { id: 'vad', label: 'VAD' },
+      { id: 'stt', label: 'STT' },
+      { id: 'llm', label: 'LLM' },
+      { id: 'tts', label: 'TTS' },
+      { id: 'adapters', label: 'Adapters' },
+    ];
+
+    const configLoading = ref(false);
+    const saving = ref(false);
+    const toast = reactive({ show: false, message: '', type: 'success' });
+    let toastTimer = null;
+
+    const showToast = (message, type = 'success') => {
+      toast.show = true;
+      toast.message = message;
+      toast.type = type;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toast.show = false; }, 2500);
+    };
+
+    // API helper
+    const apiBase = window.location.origin;
+    const apiFetch = async (path, options = {}) => {
+      const headers = { 'Content-Type': 'application/json', ...options.headers };
+      if (apiKey.value) {
+        headers['Authorization'] = `Bearer ${apiKey.value}`;
+      }
+      const res = await fetch(apiBase + path, {
+        headers,
+        ...options,
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`${res.status}: ${body}`);
+      }
+      return res.json();
+    };
+
+    // ---------- Pipeline ----------
+    const pipelineConfig = ref(null);
+    const pipelineFields = [
+      { key: 'wakewords', label: 'Wakewords', type: 'list' },
+      { key: 'wakeword_timeout', label: 'Wakeword Timeout', type: 'number' },
+      { key: 'merge_request_threshold', label: 'Merge Request Threshold', type: 'number' },
+      { key: 'merge_request_prefix', label: 'Merge Request Prefix', type: 'text' },
+      { key: 'timestamp_interval_seconds', label: 'Timestamp Interval', type: 'number' },
+      { key: 'timestamp_prefix', label: 'Timestamp Prefix', type: 'text' },
+      { key: 'timestamp_timezone', label: 'Timestamp Timezone', type: 'text' },
+      { key: 'voice_recorder_enabled', label: 'Voice Recorder', type: 'boolean' },
+      { key: 'invoke_queue_idle_timeout', label: 'Invoke Queue Idle Timeout', type: 'number' },
+      { key: 'invoke_timeout', label: 'Invoke Timeout', type: 'number' },
+      { key: 'use_invoke_queue', label: 'Use Invoke Queue', type: 'boolean' },
+      { key: 'debug', label: 'Debug', type: 'boolean' },
+    ];
+
+    const loadPipelineConfig = async () => {
+      try {
+        const data = await apiFetch('/config/pipeline');
+        pipelineConfig.value = data.config;
+      } catch (e) { showToast('Failed to load pipeline config', 'error'); }
+    };
+
+    const savePipelineConfig = async (payload) => {
+      saving.value = true;
+      try {
+        await apiFetch('/config/pipeline', { method: 'POST', body: JSON.stringify({ config: payload }) });
+        await loadPipelineConfig();
+        showToast('Pipeline config updated');
+      } catch (e) { showToast('Failed to save: ' + e.message, 'error'); }
+      saving.value = false;
+    };
+
+    // ---------- VAD ----------
+    const vadConfig = ref(null);
+    const vadType = ref('');
+    const vadFields = [
+      { key: 'volume_db_threshold', label: 'Volume dB Threshold', type: 'number' },
+      { key: 'silence_duration_threshold', label: 'Silence Duration Threshold', type: 'number' },
+      { key: 'max_duration', label: 'Max Duration', type: 'number' },
+      { key: 'min_duration', label: 'Min Duration', type: 'number' },
+      { key: 'sample_rate', label: 'Sample Rate', type: 'integer' },
+      { key: 'channels', label: 'Channels', type: 'integer' },
+      { key: 'preroll_buffer_count', label: 'Preroll Buffer Count', type: 'integer' },
+      { key: 'debug', label: 'Debug', type: 'boolean' },
+    ];
+
+    const loadVadConfig = async () => {
+      try {
+        const data = await apiFetch('/config/vad');
+        vadConfig.value = data.config;
+        vadType.value = data.type || '';
+      } catch (e) { showToast('Failed to load VAD config', 'error'); }
+    };
+
+    const saveVadConfig = async (payload) => {
+      saving.value = true;
+      try {
+        await apiFetch('/config/vad', { method: 'POST', body: JSON.stringify({ config: payload }) });
+        await loadVadConfig();
+        showToast('VAD config updated');
+      } catch (e) { showToast('Failed to save: ' + e.message, 'error'); }
+      saving.value = false;
+    };
+
+    // ---------- STT ----------
+    const sttConfig = ref(null);
+    const sttType = ref('');
+    const sttFields = [
+      { key: 'language', label: 'Language', type: 'text' },
+      { key: 'alternative_languages', label: 'Alternative Languages', type: 'list' },
+      { key: 'timeout', label: 'Timeout', type: 'number' },
+      { key: 'max_retries', label: 'Max Retries', type: 'integer' },
+      { key: 'debug', label: 'Debug', type: 'boolean' },
+    ];
+
+    const loadSttConfig = async () => {
+      try {
+        const data = await apiFetch('/config/stt');
+        sttConfig.value = data.config;
+        sttType.value = data.type || '';
+      } catch (e) { showToast('Failed to load STT config', 'error'); }
+    };
+
+    const saveSttConfig = async (payload) => {
+      saving.value = true;
+      try {
+        await apiFetch('/config/stt', { method: 'POST', body: JSON.stringify({ config: payload }) });
+        await loadSttConfig();
+        showToast('STT config updated');
+      } catch (e) { showToast('Failed to save: ' + e.message, 'error'); }
+      saving.value = false;
+    };
+
+    // ---------- LLM ----------
+    const llmConfig = ref(null);
+    const llmType = ref('');
+    const llmFields = [
+      { key: 'system_prompt', label: 'System Prompt', type: 'textarea' },
+      { key: 'model', label: 'Model', type: 'text' },
+      { key: 'temperature', label: 'Temperature', type: 'number' },
+      { key: 'split_chars', label: 'Split Chars', type: 'list' },
+      { key: 'option_split_chars', label: 'Option Split Chars', type: 'list' },
+      { key: 'option_split_threshold', label: 'Option Split Threshold', type: 'integer' },
+      { key: 'split_on_control_tags', label: 'Split on Control Tags', type: 'boolean' },
+      { key: 'voice_text_tag', label: 'Voice Text Tag', type: 'text' },
+      { key: 'initial_messages', label: 'Initial Messages', type: 'json' },
+      { key: 'use_dynamic_tools', label: 'Use Dynamic Tools', type: 'boolean' },
+      { key: 'debug', label: 'Debug', type: 'boolean' },
+    ];
+
+    const loadLlmConfig = async () => {
+      try {
+        const data = await apiFetch('/config/llm');
+        llmConfig.value = data.config;
+        llmType.value = data.type || '';
+      } catch (e) { showToast('Failed to load LLM config', 'error'); }
+    };
+
+    const saveLlmConfig = async (payload) => {
+      saving.value = true;
+      try {
+        await apiFetch('/config/llm', { method: 'POST', body: JSON.stringify({ config: payload }) });
+        await loadLlmConfig();
+        showToast('LLM config updated');
+      } catch (e) { showToast('Failed to save: ' + e.message, 'error'); }
+      saving.value = false;
+    };
+
+    // ---------- TTS ----------
+    const ttsConfig = ref(null);
+    const ttsType = ref('');
+    const ttsFields = [
+      { key: 'speaker', label: 'Speaker', type: 'text' },
+      { key: 'default_language', label: 'Default Language', type: 'text' },
+      { key: 'audio_format', label: 'Audio Format', type: 'text' },
+      { key: 'model', label: 'Model', type: 'text' },
+      { key: 'instructions', label: 'Instructions', type: 'textarea' },
+      { key: 'base_url', label: 'Base URL', type: 'text' },
+      { key: 'service_name', label: 'Service Name', type: 'text' },
+      { key: 'speed', label: 'Speed', type: 'number' },
+      { key: 'tts_url', label: 'TTS URL', type: 'text' },
+      { key: 'style_mapper', label: 'Style Mapper', type: 'json' },
+      { key: 'timeout', label: 'Timeout', type: 'number' },
+      { key: 'debug', label: 'Debug', type: 'boolean' },
+    ];
+
+    const loadTtsConfig = async () => {
+      try {
+        const data = await apiFetch('/config/tts');
+        ttsConfig.value = data.config;
+        ttsType.value = data.type || '';
+      } catch (e) { showToast('Failed to load TTS config', 'error'); }
+    };
+
+    const saveTtsConfig = async (payload) => {
+      saving.value = true;
+      try {
+        await apiFetch('/config/tts', { method: 'POST', body: JSON.stringify({ config: payload }) });
+        await loadTtsConfig();
+        showToast('TTS config updated');
+      } catch (e) { showToast('Failed to save: ' + e.message, 'error'); }
+      saving.value = false;
+    };
+
+    // ---------- Adapters ----------
+    const adapters = ref([]);
+    const adapterFields = [
+      { key: 'response_audio_chunk_size', label: 'Audio Chunk Size', type: 'integer' },
+      { key: 'linebot_session_timeout', label: 'Session Timeout', type: 'number' },
+      { key: 'default_error_message', label: 'Error Message', type: 'text' },
+      { key: 'debug', label: 'Debug', type: 'boolean' },
+    ];
+
+    const loadAdaptersConfig = async () => {
+      try {
+        const data = await apiFetch('/config/adapters');
+        adapters.value = data;
+      } catch (e) { showToast('Failed to load adapters config', 'error'); }
+    };
+
+    const saveAdapterConfig = async (name, payload) => {
+      saving.value = true;
+      try {
+        await apiFetch(`/config/adapter/${name}`, { method: 'POST', body: JSON.stringify({ config: payload }) });
+        await loadAdaptersConfig();
+        showToast(`Adapter "${name}" config updated`);
+      } catch (e) { showToast('Failed to save: ' + e.message, 'error'); }
+      saving.value = false;
+    };
+
+    // ========== Evaluation ==========
+    const evalScenarios = ref([]);
+    const expandedScenarios = reactive({});
+    const evalRunning = ref(false);
+    const currentEvalId = ref('');
+    const loadEvalId = ref('');
+    let evalPollTimer = null;
+
+    const evalSummary = computed(() => {
+      const scenarios = evalScenarios.value;
+      if (!scenarios.length) return null;
+      const hasAnyResult = scenarios.some(s => s.scenario_evaluation_result || s.error || s.turns.some(t => t.evaluation_result || t.actual_output_text));
+      if (!hasAnyResult) return null;
+
+      let scenariosPassed = 0, scenariosTotal = 0, scenariosErrored = 0;
+      let turnsPassed = 0, turnsTotal = 0, turnsErrored = 0;
+      for (const s of scenarios) {
+        scenariosTotal++;
+        if (s.error) {
+          scenariosErrored++;
+          turnsTotal += s.turns.length;
+          turnsErrored += s.turns.length;
+        } else {
+          if (s.scenario_evaluation_result && s.scenario_evaluation_result.result) {
+            scenariosPassed++;
+          }
+          for (const t of s.turns) {
+            turnsTotal++;
+            if (t.evaluation_result && t.evaluation_result.result) {
+              turnsPassed++;
+            }
+          }
+        }
+      }
+      return { scenariosPassed, scenariosTotal, scenariosErrored, turnsPassed, turnsTotal, turnsErrored };
+    });
+
+    const addScenario = () => {
+      evalScenarios.value.push({ name: '', goal: '', user_id: null, turns: [{ input_text: '', expected_output_text: '', evaluation_criteria: '', evaluation_function_name: '' }], scenario_evaluation_result: null });
+      expandedScenarios[evalScenarios.value.length - 1] = true;
+    };
+
+    const removeScenario = (idx) => {
+      evalScenarios.value.splice(idx, 1);
+      delete expandedScenarios[idx];
+    };
+
+    const toggleScenario = (idx) => {
+      expandedScenarios[idx] = !expandedScenarios[idx];
+    };
+
+    const addTurn = (sIdx) => {
+      evalScenarios.value[sIdx].turns.push({ input_text: '', expected_output_text: '', evaluation_criteria: '', evaluation_function_name: '' });
+    };
+
+    const removeTurn = (sIdx, tIdx) => {
+      evalScenarios.value[sIdx].turns.splice(tIdx, 1);
+    };
+
+    const importScenarios = (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = JSON.parse(e.target.result);
+          const scenarios = data.scenarios || data;
+          if (!Array.isArray(scenarios)) throw new Error('Invalid format');
+          evalScenarios.value = scenarios;
+          // Expand all
+          scenarios.forEach((_, i) => { expandedScenarios[i] = true; });
+          showToast(`Imported ${scenarios.length} scenario(s)`);
+        } catch (err) {
+          showToast('Failed to import: ' + err.message, 'error');
+        }
+      };
+      reader.readAsText(file);
+      event.target.value = '';
+    };
+
+    const exportScenarios = () => {
+      const data = { timestamp: new Date().toISOString(), scenarios: evalScenarios.value };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `evaluation_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    const runEvaluation = async () => {
+      evalRunning.value = true;
+      for (const s of evalScenarios.value) {
+        s.scenario_evaluation_result = null;
+        s.error = null;
+        for (const t of s.turns) {
+          t.actual_output_text = null;
+          t.actual_tool_call = null;
+          t.evaluation_result = null;
+        }
+      }
+      try {
+        const data = await apiFetch('/evaluate', {
+          method: 'POST',
+          body: JSON.stringify({ scenarios: evalScenarios.value }),
+        });
+        currentEvalId.value = data.evaluation_id;
+        showToast('Evaluation started: ' + data.evaluation_id);
+        startPolling(data.evaluation_id);
+      } catch (e) {
+        showToast('Failed to start evaluation: ' + e.message, 'error');
+        evalRunning.value = false;
+      }
+    };
+
+    const startPolling = (evalId) => {
+      clearInterval(evalPollTimer);
+      evalPollTimer = setInterval(async () => {
+        try {
+          const data = await apiFetch(`/evaluate/${evalId}`);
+          if (data.scenarios) {
+            evalScenarios.value = data.scenarios;
+            const errorCount = data.scenarios.filter(s => s.error).length;
+            if (errorCount > 0) {
+              showToast(`Evaluation completed with errors: ${errorCount} scenario(s) failed`, 'error');
+            } else {
+              showToast('Evaluation completed');
+            }
+            evalScenarios.value.forEach((_, i) => { expandedScenarios[i] = true; });
+            clearInterval(evalPollTimer);
+            evalRunning.value = false;
+          }
+        } catch (e) {
+          // 404 means still running, keep polling
+          if (!e.message.startsWith('404')) {
+            clearInterval(evalPollTimer);
+            evalRunning.value = false;
+            showToast('Polling failed: ' + e.message, 'error');
+          }
+        }
+      }, 3000);
+    };
+
+    const clearResults = () => {
+      for (const s of evalScenarios.value) {
+        s.scenario_evaluation_result = null;
+        s.error = null;
+        for (const t of s.turns) {
+          t.actual_output_text = null;
+          t.actual_tool_call = null;
+          t.evaluation_result = null;
+        }
+      }
+      showToast('Results cleared');
+    };
+
+    const loadEvaluationResults = async () => {
+      try {
+        const data = await apiFetch(`/evaluate/${loadEvalId.value}`);
+        if (data.scenarios) {
+          evalScenarios.value = data.scenarios;
+          data.scenarios.forEach((_, i) => { expandedScenarios[i] = true; });
+          showToast(`Loaded ${data.scenarios.length} scenario(s)`);
+        }
+      } catch (e) {
+        showToast('Failed to load results: ' + e.message, 'error');
+      }
+    };
+
+    // ========== Metrics ==========
+    const metricsPeriod = ref('24h');
+    const metricsInterval = ref('1h');
+    const metricsLoading = ref(false);
+    const metricsSummary = ref(null);
+    const metricsTimeline = ref([]);
+
+    const volumeChartCanvas = ref(null);
+    const responseTimeChartCanvas = ref(null);
+    const breakdownChartCanvas = ref(null);
+    let volumeChart = null;
+    let responseTimeChart = null;
+    let breakdownChart = null;
+
+    const defaultIntervals = { '1h': '1m', '6h': '5m', '24h': '15m', '7d': '1h', '30d': '1d' };
+    const onPeriodChange = () => {
+      metricsInterval.value = defaultIntervals[metricsPeriod.value] || '1h';
+      loadMetrics();
+    };
+
+    const formatMs = (val) => {
+      if (val == null) return '-';
+      return (val * 1000).toFixed(0) + ' ms';
+    };
+
+    const formatLabel = (ts) => {
+      const d = new Date(ts + 'Z');
+      const pad = (n) => String(n).padStart(2, '0');
+      const iv = metricsInterval.value;
+      if (iv === '1d') return `${pad(d.getMonth()+1)}/${pad(d.getDate())}`;
+      if (iv === '1h' && (metricsPeriod.value === '7d' || metricsPeriod.value === '30d')) {
+        return `${pad(d.getMonth()+1)}/${pad(d.getDate())} ${pad(d.getHours())}:00`;
+      }
+      return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+
+    const destroyCharts = () => {
+      if (volumeChart) { volumeChart.destroy(); volumeChart = null; }
+      if (responseTimeChart) { responseTimeChart.destroy(); responseTimeChart = null; }
+      if (breakdownChart) { breakdownChart.destroy(); breakdownChart = null; }
+    };
+
+    const renderCharts = () => {
+      destroyCharts();
+      const buckets = metricsTimeline.value;
+      if (!buckets || buckets.length === 0) return;
+
+      const labels = buckets.map(b => formatLabel(b.timestamp));
+      const chartOpts = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } } },
+        scales: { x: { grid: { display: false } }, y: { beginAtZero: true } },
+      };
+
+      // Volume chart
+      if (volumeChartCanvas.value) {
+        volumeChart = new Chart(volumeChartCanvas.value, {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [{
+              label: 'Requests',
+              data: buckets.map(b => b.request_count),
+              backgroundColor: 'rgba(59, 130, 246, 0.5)',
+              borderColor: 'rgb(59, 130, 246)',
+              borderWidth: 1,
+            }],
+          },
+          options: { ...chartOpts, plugins: { ...chartOpts.plugins, legend: { display: false } } },
+        });
+      }
+
+      // Response time chart
+      if (responseTimeChartCanvas.value) {
+        responseTimeChart = new Chart(responseTimeChartCanvas.value, {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [
+              {
+                label: 'p50',
+                data: buckets.map(b => b.p50_tts_first_chunk_time != null ? (b.p50_tts_first_chunk_time * 1000) : null),
+                borderColor: 'rgb(16, 185, 129)',
+                tension: 0.3,
+                pointRadius: 2,
+                fill: false,
+              },
+              {
+                label: 'Avg',
+                data: buckets.map(b => b.avg_tts_first_chunk_time != null ? (b.avg_tts_first_chunk_time * 1000) : null),
+                borderColor: 'rgb(59, 130, 246)',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 2,
+              },
+              {
+                label: 'p95',
+                data: buckets.map(b => b.p95_tts_first_chunk_time != null ? (b.p95_tts_first_chunk_time * 1000) : null),
+                borderColor: 'rgb(239, 68, 68)',
+                borderDash: [4, 4],
+                tension: 0.3,
+                pointRadius: 2,
+                fill: false,
+              },
+            ],
+          },
+          options: {
+            ...chartOpts,
+            scales: {
+              ...chartOpts.scales,
+              y: { beginAtZero: true, title: { display: true, text: 'ms' } },
+            },
+          },
+        });
+      }
+
+      // Phase breakdown stacked bar chart
+      if (breakdownChartCanvas.value) {
+        breakdownChart = new Chart(breakdownChartCanvas.value, {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [
+              {
+                label: 'STT',
+                data: buckets.map(b => b.avg_stt_phase != null ? (b.avg_stt_phase * 1000) : 0),
+                backgroundColor: 'rgba(16, 185, 129, 0.7)',
+              },
+              {
+                label: 'LLM',
+                data: buckets.map(b => b.avg_llm_phase != null ? (b.avg_llm_phase * 1000) : 0),
+                backgroundColor: 'rgba(245, 158, 11, 0.7)',
+              },
+              {
+                label: 'TTS',
+                data: buckets.map(b => b.avg_tts_phase != null ? (b.avg_tts_phase * 1000) : 0),
+                backgroundColor: 'rgba(139, 92, 246, 0.7)',
+              },
+            ],
+          },
+          options: {
+            ...chartOpts,
+            scales: {
+              ...chartOpts.scales,
+              x: { ...chartOpts.scales.x, stacked: true },
+              y: { beginAtZero: true, stacked: true, title: { display: true, text: 'ms' } },
+            },
+          },
+        });
+      }
+    };
+
+    const loadMetrics = async () => {
+      metricsLoading.value = true;
+      try {
+        const [timelineData, summaryData] = await Promise.all([
+          apiFetch(`/metrics/timeline?period=${metricsPeriod.value}&interval=${metricsInterval.value}`),
+          apiFetch(`/metrics/summary?period=${metricsPeriod.value}`),
+        ]);
+        metricsTimeline.value = timelineData.buckets || [];
+        metricsSummary.value = summaryData;
+        await nextTick();
+        renderCharts();
+      } catch (e) {
+        showToast('Failed to load metrics: ' + e.message, 'error');
+      }
+      metricsLoading.value = false;
+    };
+
+    // ========== Logs ==========
+    const logsLimit = ref(200);
+    const logsLoading = ref(false);
+    const logsGroups = ref([]);
+    const expandedLogGroups = reactive({});
+    const voiceRecorderEnabled = ref(false);
+    let currentAudio = null;
+
+    const formatLogTime = (ts) => {
+      if (!ts) return '';
+      const d = new Date(ts + 'Z');
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    };
+
+    const toggleLogGroup = (idx) => {
+      expandedLogGroups[idx] = !expandedLogGroups[idx];
+    };
+
+    const fetchVoiceBlob = async (transactionId, voiceType) => {
+      const url = `${apiBase}/logs/voice/${transactionId}/${voiceType}`;
+      const headers = {};
+      if (apiKey.value) headers['Authorization'] = `Bearer ${apiKey.value}`;
+      const res = await fetch(url, { headers });
+      if (!res.ok) return null;
+      return await res.blob();
+    };
+
+    const playVoice = async (transactionId, voiceType, event) => {
+      // Stop currently playing audio
+      if (currentAudio) {
+        currentAudio.pause();
+        currentAudio = null;
+      }
+
+      try {
+        if (voiceType === 'response') {
+          // Get count of response voices
+          const headers = {};
+          if (apiKey.value) headers['Authorization'] = `Bearer ${apiKey.value}`;
+          const res = await fetch(`${apiBase}/logs/voice/${transactionId}/response`, { headers });
+          if (!res.ok) throw new Error(`${res.status}`);
+          const { count } = await res.json();
+          if (count === 0) { showToast('Voice file not found', 'error'); return; }
+
+          // Sequential playback: response_0 → response_1 → ...
+          const playIndex = async (idx) => {
+            if (idx >= count) { currentAudio = null; return; }
+            const blob = await fetchVoiceBlob(transactionId, `response_${idx}`);
+            if (!blob) { currentAudio = null; return; }
+            const audioUrl = URL.createObjectURL(blob);
+            currentAudio = new Audio(audioUrl);
+            currentAudio.onended = () => { URL.revokeObjectURL(audioUrl); playIndex(idx + 1); };
+            currentAudio.play();
+          };
+          await playIndex(0);
+        } else {
+          const blob = await fetchVoiceBlob(transactionId, voiceType);
+          if (!blob) { showToast('Voice file not found', 'error'); return; }
+          const audioUrl = URL.createObjectURL(blob);
+          currentAudio = new Audio(audioUrl);
+          currentAudio.onended = () => { URL.revokeObjectURL(audioUrl); currentAudio = null; };
+          currentAudio.play();
+        }
+      } catch (e) {
+        showToast('Failed to play voice: ' + e.message, 'error');
+      }
+    };
+
+    const loadLogs = async () => {
+      logsLoading.value = true;
+      try {
+        const data = await apiFetch(`/logs?limit=${logsLimit.value}`);
+        logsGroups.value = data.groups || [];
+        voiceRecorderEnabled.value = data.voice_recorder_enabled || false;
+        // Reset expanded state
+        Object.keys(expandedLogGroups).forEach(k => delete expandedLogGroups[k]);
+      } catch (e) {
+        showToast('Failed to load logs: ' + e.message, 'error');
+      }
+      logsLoading.value = false;
+    };
+
+    // ========== Character ==========
+    const charActiveSubTab = ref('calendar');
+    const charSubTabs = [
+      { id: 'calendar', label: 'Calendar' },
+      { id: 'settings', label: 'Settings' },
+      { id: 'users', label: 'Users' },
+    ];
+
+    // --- Character Info ---
+    const charInfo = reactive({ id: '', name: '', prompt: '', metadata: null });
+    const charInfoEdit = reactive({ name: '', prompt: '' });
+    const charInfoMetadataJson = ref('{}');
+    const charInfoLoading = ref(false);
+    const charInfoSaving = ref(false);
+
+    const charInfoChanged = computed(() => {
+      if (charInfoEdit.name !== charInfo.name) return true;
+      if (charInfoEdit.prompt !== charInfo.prompt) return true;
+      try {
+        const edited = JSON.parse(charInfoMetadataJson.value);
+        if (JSON.stringify(edited) !== JSON.stringify(charInfo.metadata || {})) return true;
+      } catch { return true; }
+      return false;
+    });
+
+    const loadCharInfo = async () => {
+      charInfoLoading.value = true;
+      try {
+        const data = await apiFetch('/character/info');
+        Object.assign(charInfo, { id: data.id, name: data.name, prompt: data.prompt, metadata: data.metadata });
+        charInfoEdit.name = data.name;
+        charInfoEdit.prompt = data.prompt;
+        charInfoMetadataJson.value = JSON.stringify(data.metadata || {}, null, 2);
+      } catch (e) {
+        showToast('Failed to load character info: ' + e.message, 'error');
+      }
+      charInfoLoading.value = false;
+    };
+
+    const charInfoReset = () => {
+      charInfoEdit.name = charInfo.name;
+      charInfoEdit.prompt = charInfo.prompt;
+      charInfoMetadataJson.value = JSON.stringify(charInfo.metadata || {}, null, 2);
+    };
+
+    const charInfoSave = async () => {
+      charInfoSaving.value = true;
+      try {
+        let meta = undefined;
+        try { meta = JSON.parse(charInfoMetadataJson.value); } catch { showToast('Invalid metadata JSON', 'error'); charInfoSaving.value = false; return; }
+        const payload = {};
+        if (charInfoEdit.name !== charInfo.name) payload.name = charInfoEdit.name;
+        if (charInfoEdit.prompt !== charInfo.prompt) payload.prompt = charInfoEdit.prompt;
+        if (JSON.stringify(meta) !== JSON.stringify(charInfo.metadata || {})) payload.metadata = meta;
+        if (Object.keys(payload).length === 0) { charInfoSaving.value = false; return; }
+        await apiFetch('/character/info', { method: 'POST', body: JSON.stringify(payload) });
+        showToast('Character info updated');
+        await loadCharInfo();
+      } catch (e) {
+        showToast('Failed to save: ' + e.message, 'error');
+      }
+      charInfoSaving.value = false;
+    };
+
+    // --- Weekly Schedule ---
+    const charWs = reactive({ content: null, exists: false });
+    const charWsEdit = reactive({ content: '' });
+    const charWsLoading = ref(false);
+    const charWsSaving = ref(false);
+    const charWsGenerating = ref(false);
+
+    const charWsChanged = computed(() => {
+      return charWsEdit.content !== (charWs.content || '');
+    });
+
+    const loadCharWs = async () => {
+      charWsLoading.value = true;
+      try {
+        const data = await apiFetch('/character/weekly-schedule');
+        Object.assign(charWs, { content: data.content, exists: data.exists });
+        charWsEdit.content = data.content || '';
+      } catch (e) {
+        showToast('Failed to load weekly schedule: ' + e.message, 'error');
+      }
+      charWsLoading.value = false;
+    };
+
+    const charWsReset = () => { charWsEdit.content = charWs.content || ''; };
+
+    const charWsSave = async () => {
+      charWsSaving.value = true;
+      try {
+        await apiFetch('/character/weekly-schedule', { method: 'POST', body: JSON.stringify({ content: charWsEdit.content }) });
+        showToast('Weekly schedule updated');
+        await loadCharWs();
+      } catch (e) {
+        showToast('Failed to save: ' + e.message, 'error');
+      }
+      charWsSaving.value = false;
+    };
+
+    const charWsGenerate = async () => {
+      charWsGenerating.value = true;
+      try {
+        await apiFetch('/character/weekly-schedule/generate', { method: 'POST' });
+        showToast('Weekly schedule generated');
+        await loadCharWs();
+      } catch (e) {
+        showToast('Failed to generate: ' + e.message, 'error');
+      }
+      charWsGenerating.value = false;
+    };
+
+    // --- Users ---
+    const charUsersList = ref([]);
+    const charUsersLoading = ref(false);
+    const charSelectedUserId = ref(null);
+    const charUser = reactive({ id: '', name: '', metadata: null });
+    const charUserEdit = reactive({ name: '' });
+    const charUserMetadataJson = ref('{}');
+    const charUserLoading = ref(false);
+    const charUserSaving = ref(false);
+
+    const charUserChanged = computed(() => {
+      if (!charUser.id) return false;
+      if (charUserEdit.name !== charUser.name) return true;
+      try {
+        const edited = JSON.parse(charUserMetadataJson.value);
+        if (JSON.stringify(edited) !== JSON.stringify(charUser.metadata || {})) return true;
+      } catch { return true; }
+      return false;
+    });
+
+    const formatUserTime = (ts) => {
+      if (!ts) return '';
+      const d = new Date(ts);
+      if (isNaN(d.getTime())) return ts;
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    };
+
+    const loadCharUsers = async () => {
+      charUsersLoading.value = true;
+      try {
+        const data = await apiFetch('/character/users?limit=500');
+        charUsersList.value = data.users || [];
+      } catch (e) {
+        showToast('Failed to load users: ' + e.message, 'error');
+      }
+      charUsersLoading.value = false;
+    };
+
+    const selectCharUser = async (userId) => {
+      charSelectedUserId.value = userId;
+      charUserLoading.value = true;
+      try {
+        const data = await apiFetch(`/character/user/${userId}`);
+        Object.assign(charUser, { id: data.id, name: data.name, metadata: data.metadata });
+        charUserEdit.name = data.name;
+        charUserMetadataJson.value = JSON.stringify(data.metadata || {}, null, 2);
+      } catch (e) {
+        showToast('Failed to load user: ' + e.message, 'error');
+        Object.assign(charUser, { id: '', name: '', metadata: null });
+      }
+      charUserLoading.value = false;
+    };
+
+    const charUserReset = () => {
+      charUserEdit.name = charUser.name;
+      charUserMetadataJson.value = JSON.stringify(charUser.metadata || {}, null, 2);
+    };
+
+    const charUserSave = async () => {
+      charUserSaving.value = true;
+      try {
+        let meta = undefined;
+        try { meta = JSON.parse(charUserMetadataJson.value); } catch { showToast('Invalid metadata JSON', 'error'); charUserSaving.value = false; return; }
+        const payload = {};
+        if (charUserEdit.name !== charUser.name) payload.name = charUserEdit.name;
+        if (JSON.stringify(meta) !== JSON.stringify(charUser.metadata || {})) payload.metadata = meta;
+        if (Object.keys(payload).length === 0) { charUserSaving.value = false; return; }
+        await apiFetch(`/character/user/${charUser.id}`, { method: 'POST', body: JSON.stringify(payload) });
+        showToast('User updated');
+        await selectCharUser(charUser.id);
+        await loadCharUsers();
+      } catch (e) {
+        showToast('Failed to save: ' + e.message, 'error');
+      }
+      charUserSaving.value = false;
+    };
+
+    // --- Calendar ---
+    const now = new Date();
+    const charYear = ref(now.getFullYear());
+    const charMonth = ref(now.getMonth() + 1);
+    const charLoading = ref(false);
+    const charDays = ref([]);
+    const charSelectedDate = ref(null);
+    const charDetailLoading = ref(false);
+    const charScheduleDetail = reactive({ exists: false, content: null, content_context: null });
+    const charDiaryDetail = reactive({ exists: false, content: null, content_context: null });
+    const charShowScheduleCtx = ref(false);
+    const charShowDiaryCtx = ref(false);
+    const charGenScheduleRunning = ref(false);
+    const charGenDiaryRunning = ref(false);
+    const charShowBatchForm = ref(false);
+    const charBatchStart = ref('');
+    const charBatchEnd = ref('');
+    const charBatchOverwrite = ref(false);
+    const charBatchRunning = ref(false);
+
+    const charCalendarCells = computed(() => {
+      const y = charYear.value, m = charMonth.value;
+      const firstDay = new Date(y, m - 1, 1).getDay();
+      const daysInMonth = new Date(y, m, 0).getDate();
+      const dayMap = {};
+      for (const d of charDays.value) {
+        dayMap[d.date] = d;
+      }
+      const cells = [];
+      for (let i = 0; i < firstDay; i++) cells.push({ day: null, dateStr: null });
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateStr = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+        const info = dayMap[dateStr];
+        cells.push({
+          day: d,
+          dateStr,
+          hasSchedule: info ? info.has_schedule : false,
+          hasDiary: info ? info.has_diary : false,
+        });
+      }
+      // Pad to complete last row
+      while (cells.length % 7 !== 0) cells.push({ day: null, dateStr: null });
+      return cells;
+    });
+
+    const loadCharActivities = async () => {
+      charLoading.value = true;
+      try {
+        const data = await apiFetch(`/character/activities?year=${charYear.value}&month=${charMonth.value}`);
+        charDays.value = data.days || [];
+      } catch (e) {
+        showToast('Failed to load activities: ' + e.message, 'error');
+      }
+      charLoading.value = false;
+    };
+
+    const charPrevMonth = () => {
+      if (charMonth.value === 1) { charMonth.value = 12; charYear.value--; }
+      else charMonth.value--;
+      charSelectedDate.value = null;
+      loadCharActivities();
+    };
+
+    const charNextMonth = () => {
+      if (charMonth.value === 12) { charMonth.value = 1; charYear.value++; }
+      else charMonth.value++;
+      charSelectedDate.value = null;
+      loadCharActivities();
+    };
+
+    const selectCharDate = async (dateStr) => {
+      charSelectedDate.value = dateStr;
+      charShowScheduleCtx.value = false;
+      charShowDiaryCtx.value = false;
+      charDetailLoading.value = true;
+      try {
+        const [sched, diary] = await Promise.all([
+          apiFetch(`/character/schedule/${dateStr}`),
+          apiFetch(`/character/diary/${dateStr}`),
+        ]);
+        Object.assign(charScheduleDetail, { exists: sched.exists, content: sched.content || null, content_context: sched.content_context || null });
+        Object.assign(charDiaryDetail, { exists: diary.exists, content: diary.content || null, content_context: diary.content_context || null });
+      } catch (e) {
+        showToast('Failed to load details: ' + e.message, 'error');
+      }
+      charDetailLoading.value = false;
+    };
+
+    const charGenerateSchedule = async () => {
+      charGenScheduleRunning.value = true;
+      try {
+        await apiFetch(`/character/schedule/${charSelectedDate.value}/generate`, {
+          method: 'POST',
+          body: JSON.stringify({ overwrite: charScheduleDetail.exists }),
+        });
+        showToast('Schedule generated');
+        await selectCharDate(charSelectedDate.value);
+        await loadCharActivities();
+      } catch (e) {
+        showToast('Failed to generate schedule: ' + e.message, 'error');
+      }
+      charGenScheduleRunning.value = false;
+    };
+
+    const charGenerateDiary = async () => {
+      charGenDiaryRunning.value = true;
+      try {
+        await apiFetch(`/character/diary/${charSelectedDate.value}/generate`, {
+          method: 'POST',
+          body: JSON.stringify({ overwrite: charDiaryDetail.exists }),
+        });
+        showToast('Diary generated');
+        await selectCharDate(charSelectedDate.value);
+        await loadCharActivities();
+      } catch (e) {
+        showToast('Failed to generate diary: ' + e.message, 'error');
+      }
+      charGenDiaryRunning.value = false;
+    };
+
+    const charBatchGenerate = async () => {
+      if (!charBatchStart.value || !charBatchEnd.value) {
+        showToast('Please set start and end dates', 'error');
+        return;
+      }
+      charBatchRunning.value = true;
+      try {
+        const data = await apiFetch('/character/activities/generate', {
+          method: 'POST',
+          body: JSON.stringify({
+            start_date: charBatchStart.value,
+            end_date: charBatchEnd.value,
+            overwrite: charBatchOverwrite.value,
+          }),
+        });
+        const count = (data.results || []).length;
+        showToast(`Batch generation completed: ${count} day(s) processed`);
+        await loadCharActivities();
+        if (charSelectedDate.value) await selectCharDate(charSelectedDate.value);
+      } catch (e) {
+        showToast('Batch generation failed: ' + e.message, 'error');
+      }
+      charBatchRunning.value = false;
+    };
+
+    const loadCharSettingsData = async () => {
+      await Promise.all([loadCharInfo(), loadCharWs()]);
+    };
+
+    // ---------- Control ----------
+    const ctrlSessionId = ref('');
+    const ctrlUserId = ref('');
+    const ctrlPerformText = ref('');
+    const ctrlPerformLoading = ref(false);
+    const ctrlConvText = ref('');
+    const ctrlConvLoading = ref(false);
+    const ctrlHistory = reactive([]);
+
+    const ctrlAddHistory = (type, text, sessionId, userId, success, error) => {
+      const now = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      const time = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+      ctrlHistory.unshift({ type, text, sessionId: sessionId || null, userId: userId || null, success, error: error || null, time });
+      if (ctrlHistory.length > 50) ctrlHistory.length = 50;
+    };
+
+    const ctrlPerform = async () => {
+      if (!ctrlPerformText.value.trim()) return;
+      ctrlPerformLoading.value = true;
+      const text = ctrlPerformText.value;
+      const sid = ctrlSessionId.value.trim() || undefined;
+      try {
+        const body = { text };
+        if (sid) body.session_id = sid;
+        await apiFetch('/avatar/perform', { method: 'POST', body: JSON.stringify(body) });
+        ctrlAddHistory('perform', text, sid, null, true);
+        ctrlPerformText.value = '';
+        showToast('Perform sent', 'success');
+      } catch (e) {
+        ctrlAddHistory('perform', text, sid, null, false, e.message);
+        showToast('Perform failed: ' + e.message, 'error');
+      } finally {
+        ctrlPerformLoading.value = false;
+      }
+    };
+
+    const ctrlConversation = async () => {
+      if (!ctrlConvText.value.trim()) return;
+      ctrlConvLoading.value = true;
+      const text = ctrlConvText.value;
+      const sid = ctrlSessionId.value.trim() || undefined;
+      const uid = ctrlUserId.value.trim() || undefined;
+      try {
+        const body = { text };
+        if (sid) body.session_id = sid;
+        if (uid) body.user_id = uid;
+        await apiFetch('/conversation', { method: 'POST', body: JSON.stringify(body) });
+        ctrlAddHistory('conversation', text, sid, uid, true);
+        ctrlConvText.value = '';
+        showToast('Message sent', 'success');
+      } catch (e) {
+        ctrlAddHistory('conversation', text, sid, uid, false, e.message);
+        showToast('Conversation failed: ' + e.message, 'error');
+      } finally {
+        ctrlConvLoading.value = false;
+      }
+    };
+
+    watch(charActiveSubTab, (sub) => {
+      if (sub === 'calendar') loadCharActivities();
+      if (sub === 'users') loadCharUsers();
+      if (sub === 'settings') loadCharSettingsData();
+    });
+
+    watch(activeTab, async (tab) => {
+      if (tab === 'metrics') loadMetrics();
+      if (tab === 'logs') loadLogs();
+      if (tab === 'character') {
+        if (tabAvailability.character === 'unknown') await probeTab('character');
+        if (tabAvailability.character === 'unavailable') return;
+        if (charActiveSubTab.value === 'calendar') loadCharActivities();
+        else if (charActiveSubTab.value === 'users') loadCharUsers();
+        else loadCharSettingsData();
+      }
+      if (tab === 'evaluation') {
+        if (tabAvailability.evaluation === 'unknown') await probeTab('evaluation');
+      }
+    });
+
+    onMounted(() => {
+      if (activeTab.value === 'metrics') loadMetrics();
+    });
+
+    // ---------- Load on section change ----------
+    const loaders = {
+      pipeline: loadPipelineConfig,
+      vad: loadVadConfig,
+      stt: loadSttConfig,
+      llm: loadLlmConfig,
+      tts: loadTtsConfig,
+      adapters: loadAdaptersConfig,
+    };
+
+    watch(activeConfigSection, async (section) => {
+      configLoading.value = true;
+      if (loaders[section]) await loaders[section]();
+      configLoading.value = false;
+    }, { immediate: true });
+
+    return {
+      apiKey,
+      activeTab, tabs, tabAvailability, tabSetupMessages,
+      activeConfigSection, configSections, configLoading, saving, toast,
+      pipelineConfig, pipelineFields, savePipelineConfig,
+      vadConfig, vadType, vadFields, saveVadConfig,
+      sttConfig, sttType, sttFields, saveSttConfig,
+      llmConfig, llmType, llmFields, saveLlmConfig,
+      ttsConfig, ttsType, ttsFields, saveTtsConfig,
+      adapters, adapterFields, saveAdapterConfig,
+      // Evaluation
+      evalScenarios, expandedScenarios, evalRunning, currentEvalId, loadEvalId, evalSummary,
+      addScenario, removeScenario, toggleScenario, addTurn, removeTurn,
+      importScenarios, exportScenarios, runEvaluation, clearResults, loadEvaluationResults,
+      // Metrics
+      metricsPeriod, metricsInterval, metricsLoading, metricsSummary, metricsTimeline,
+      volumeChartCanvas, responseTimeChartCanvas, breakdownChartCanvas,
+      formatMs, loadMetrics, onPeriodChange,
+      // Logs
+      logsLimit, logsLoading, logsGroups, expandedLogGroups, voiceRecorderEnabled,
+      formatLogTime, toggleLogGroup, loadLogs, playVoice,
+      // Character
+      charActiveSubTab, charSubTabs,
+      charInfo, charInfoEdit, charInfoMetadataJson, charInfoLoading, charInfoSaving, charInfoChanged,
+      charInfoReset, charInfoSave,
+      charWs, charWsEdit, charWsLoading, charWsSaving, charWsGenerating, charWsChanged,
+      charWsReset, charWsSave, charWsGenerate,
+      charUsersList, charUsersLoading, charSelectedUserId,
+      charUser, charUserEdit, charUserMetadataJson, charUserLoading, charUserSaving, charUserChanged,
+      loadCharUsers, selectCharUser, charUserReset, charUserSave,
+      charYear, charMonth, charLoading, charDays, charCalendarCells,
+      charSelectedDate, charDetailLoading,
+      charScheduleDetail, charDiaryDetail,
+      charShowScheduleCtx, charShowDiaryCtx,
+      charGenScheduleRunning, charGenDiaryRunning,
+      charShowBatchForm, charBatchStart, charBatchEnd, charBatchOverwrite, charBatchRunning,
+      loadCharActivities, charPrevMonth, charNextMonth,
+      selectCharDate, charGenerateSchedule, charGenerateDiary, charBatchGenerate,
+      formatUserTime,
+      // Control
+      ctrlSessionId, ctrlUserId, ctrlPerformText, ctrlPerformLoading,
+      ctrlConvText, ctrlConvLoading, ctrlHistory,
+      ctrlPerform, ctrlConversation,
+    };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>

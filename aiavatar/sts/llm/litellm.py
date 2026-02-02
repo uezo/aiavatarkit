@@ -74,6 +74,12 @@ class LiteLLMService(LLMService):
             }
         }
 
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config["base_url"] = self.base_url
+        config["system_prompt_by_user_prompt"] = self.system_prompt_by_user_prompt
+        return config
+
     @property
     def dynamic_tool_name(self) -> str:
         return self.dynamic_tool_spec["function"]["name"]

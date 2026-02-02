@@ -52,6 +52,40 @@ class SpeechSynthesizer(ABC):
     async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
         pass
 
+    def get_config(self) -> dict:
+        return {
+            "style_mapper": self.style_mapper,
+            "timeout": getattr(self.http_client.timeout, "read", None) if self.http_client else None,
+            "debug": self.debug,
+        }
+
+    def set_config(self, config: dict) -> dict:
+        allowed_keys = self.get_config().keys()
+        updated = {}
+        for k, v in config.items():
+            if v is None:
+                continue
+            if k not in allowed_keys:
+                continue
+            if k == "timeout":
+                if self.http_client:
+                    self.http_client = httpx.AsyncClient(
+                        follow_redirects=self.http_client._follow_redirects,
+                        timeout=httpx.Timeout(v),
+                        limits=httpx.Limits(
+                            max_connections=self.http_client._pool._max_connections,
+                            max_keepalive_connections=self.http_client._pool._max_keepalive_connections
+                        )
+                    )
+                    updated[k] = v
+            else:
+                try:
+                    setattr(self, k, v)
+                    updated[k] = v
+                except Exception:
+                    pass
+        return updated
+
     async def close(self):
         await self.http_client.aclose()
 

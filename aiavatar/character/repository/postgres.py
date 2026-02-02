@@ -537,6 +537,41 @@ class PostgreSQLActivityRepository(ActivityRepositoryBase):
             content_context=content_context
         )
 
+    async def list_daily_schedules(
+        self,
+        *,
+        character_id: str,
+        start_date: date,
+        end_date: date
+    ) -> List[DailySchedule]:
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT id, created_at, updated_at, character_id, schedule_date, content, content_context
+                FROM {self.DAILY_SCHEDULES_TABLE}
+                WHERE character_id = $1 AND schedule_date BETWEEN $2 AND $3
+                ORDER BY schedule_date
+                """,
+                character_id, start_date, end_date
+            )
+
+        result = []
+        for row in rows:
+            content_context = row["content_context"]
+            if isinstance(content_context, str):
+                content_context = json.loads(content_context)
+            result.append(DailySchedule(
+                id=row["id"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                character_id=row["character_id"],
+                schedule_date=row["schedule_date"],
+                content=row["content"],
+                content_context=content_context
+            ))
+        return result
+
     async def delete_daily_schedule(
         self,
         *,
@@ -677,6 +712,41 @@ class PostgreSQLActivityRepository(ActivityRepositoryBase):
             content=row["content"],
             content_context=row_content_context
         )
+
+    async def list_diaries(
+        self,
+        *,
+        character_id: str,
+        start_date: date,
+        end_date: date
+    ) -> List[Diary]:
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT id, created_at, updated_at, character_id, diary_date, content, content_context
+                FROM {self.DIARIES_TABLE}
+                WHERE character_id = $1 AND diary_date BETWEEN $2 AND $3
+                ORDER BY diary_date
+                """,
+                character_id, start_date, end_date
+            )
+
+        result = []
+        for row in rows:
+            content_context = row["content_context"]
+            if isinstance(content_context, str):
+                content_context = json.loads(content_context)
+            result.append(Diary(
+                id=row["id"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                character_id=row["character_id"],
+                diary_date=row["diary_date"],
+                content=row["content"],
+                content_context=content_context
+            ))
+        return result
 
     async def delete_diary(
         self,
@@ -885,6 +955,33 @@ class PostgreSQLUserRepository(UserRepository):
             name=row["name"],
             metadata=row_metadata
         )
+
+    async def list(self, *, limit: int = 100, offset: int = 0) -> List[User]:
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT id, created_at, updated_at, name, metadata
+                FROM {self.TABLE_NAME}
+                ORDER BY updated_at DESC
+                LIMIT $1 OFFSET $2
+                """,
+                limit, offset
+            )
+
+        result = []
+        for row in rows:
+            metadata = row["metadata"]
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+            result.append(User(
+                id=row["id"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                name=row["name"],
+                metadata=metadata
+            ))
+        return result
 
     async def delete(self, *, user_id: str) -> bool:
         pool = await self.get_pool()

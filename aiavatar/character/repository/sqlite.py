@@ -484,6 +484,46 @@ class SQLiteActivityRepository(ActivityRepositoryBase):
             content_context=content_context
         )
 
+    async def list_daily_schedules(
+        self,
+        *,
+        character_id: str,
+        start_date: date,
+        end_date: date
+    ) -> List[DailySchedule]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, created_at, updated_at, character_id, schedule_date, content, content_context
+                FROM {self.DAILY_SCHEDULES_TABLE}
+                WHERE character_id = ? AND schedule_date BETWEEN ? AND ?
+                ORDER BY schedule_date
+                """,
+                (character_id, start_date.isoformat(), end_date.isoformat())
+            )
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+        result = []
+        for row in rows:
+            content_context = row["content_context"]
+            if isinstance(content_context, str):
+                content_context = json.loads(content_context)
+            result.append(DailySchedule(
+                id=row["id"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+                updated_at=datetime.fromisoformat(row["updated_at"]),
+                character_id=row["character_id"],
+                schedule_date=date.fromisoformat(row["schedule_date"]),
+                content=row["content"],
+                content_context=content_context
+            ))
+        return result
+
     async def delete_daily_schedule(
         self,
         *,
@@ -645,6 +685,46 @@ class SQLiteActivityRepository(ActivityRepositoryBase):
             content=row["content"],
             content_context=row_content_context
         )
+
+    async def list_diaries(
+        self,
+        *,
+        character_id: str,
+        start_date: date,
+        end_date: date
+    ) -> List[Diary]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, created_at, updated_at, character_id, diary_date, content, content_context
+                FROM {self.DIARIES_TABLE}
+                WHERE character_id = ? AND diary_date BETWEEN ? AND ?
+                ORDER BY diary_date
+                """,
+                (character_id, start_date.isoformat(), end_date.isoformat())
+            )
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+        result = []
+        for row in rows:
+            content_context = row["content_context"]
+            if isinstance(content_context, str):
+                content_context = json.loads(content_context)
+            result.append(Diary(
+                id=row["id"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+                updated_at=datetime.fromisoformat(row["updated_at"]),
+                character_id=row["character_id"],
+                diary_date=date.fromisoformat(row["diary_date"]),
+                content=row["content"],
+                content_context=content_context
+            ))
+        return result
 
     async def delete_diary(
         self,
@@ -816,6 +896,38 @@ class SQLiteUserRepository(UserRepository):
             name=row["name"],
             metadata=row_metadata
         )
+
+    async def list(self, *, limit: int = 100, offset: int = 0) -> List[User]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, created_at, updated_at, name, metadata
+                FROM {self.TABLE_NAME}
+                ORDER BY updated_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset)
+            )
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+        result = []
+        for row in rows:
+            metadata = row["metadata"]
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+            result.append(User(
+                id=row["id"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+                updated_at=datetime.fromisoformat(row["updated_at"]),
+                name=row["name"],
+                metadata=metadata
+            ))
+        return result
 
     async def delete(self, *, user_id: str) -> bool:
         conn = sqlite3.connect(self.db_path)

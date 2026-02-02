@@ -12,6 +12,7 @@ setup(
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     packages=find_packages(exclude=["examples*", "tests*"]),
+    package_data={"aiavatar": ["admin/static/*"]},
     install_requires=["httpx>=0.27.0", "openai>=1.55.3", "aiofiles>=24.1.0", "numpy>=2.2.3", "PyAudio>=0.2.14", "silero-vad>=6.0.0"],
     license="Apache v2",
     classifiers=[

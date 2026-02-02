@@ -61,6 +61,18 @@ class StandardSpeechDetector(SpeechDetector):
         self.should_mute = lambda: False
         self.recording_sessions: Dict[str, RecordingSession] = {}
 
+    def get_config(self) -> dict:
+        return {
+            "volume_db_threshold": self.volume_db_threshold,
+            "silence_duration_threshold": self.silence_duration_threshold,
+            "max_duration": self.max_duration,
+            "min_duration": self.min_duration,
+            "sample_rate": self.sample_rate,
+            "channels": self.channels,
+            "preroll_buffer_count": self.preroll_buffer_count,
+            "debug": self.debug,
+        }
+
     @property
     def volume_db_threshold(self) -> float:
         return self._volume_db_threshold

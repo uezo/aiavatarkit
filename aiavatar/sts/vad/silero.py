@@ -87,6 +87,40 @@ class SileroSpeechDetector(SpeechDetector):
         # Initialize Silero VAD model pool
         self._init_silero_model(model_path)
 
+    def get_config(self) -> dict:
+        return {
+            "volume_db_threshold": self.volume_db_threshold,
+            "silence_duration_threshold": self.silence_duration_threshold,
+            "max_duration": self.max_duration,
+            "min_duration": self.min_duration,
+            "sample_rate": self.sample_rate,
+            "channels": self.channels,
+            "preroll_buffer_count": self.preroll_buffer_count,
+            "debug": self.debug,
+            "speech_probability_threshold": self.speech_probability_threshold,
+            "chunk_size": self.chunk_size,
+            "use_vad_iterator": self.use_vad_iterator,
+        }
+
+    def set_config(self, config: dict) -> dict:
+        allowed_keys = self.get_config().keys()
+        updated = {}
+        for k, v in config.items():
+            if v is None:
+                continue
+            if k not in allowed_keys:
+                continue
+            if k == "speech_probability_threshold":
+                self.set_speech_probability_threshold(v)
+                updated[k] = v
+            else:
+                try:
+                    setattr(self, k, v)
+                    updated[k] = v
+                except Exception:
+                    pass
+        return updated
+
     @property
     def volume_db_threshold(self) -> float:
         return self._volume_db_threshold

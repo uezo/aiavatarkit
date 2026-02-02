@@ -37,6 +37,13 @@ class GoogleSpeechSynthesizer(SpeechSynthesizer):
         self.audio_format = audio_format
         self.voice_map = {self.default_language: self.speaker}
 
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config["speaker"] = self.speaker
+        config["default_language"] = self.default_language
+        config["audio_format"] = self.audio_format
+        return config
+
     async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
         if not text or not text.strip():
             return bytes()

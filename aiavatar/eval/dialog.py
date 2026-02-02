@@ -1,5 +1,6 @@
 from datetime import datetime
 import json
+import traceback
 from pathlib import Path
 from typing import List, Dict, Tuple, Union, Optional
 from uuid import uuid4
@@ -14,10 +15,8 @@ DEFAULT_EVALUATION_SYSTEM_PROMPT = (
     "based on the evaluation criteria. If appropriate, output [result:true]. "
     "Regardless of whether it's appropriate or not, provide a reason for your evaluation."
 )
-DEFAULT_USER_ID = "eval_user"
-DEFAULT_TURN_USER_ID = "turn_user"
-DEFAULT_SCENARIO_USER_ID = "scenario_eval_user"
-
+DEFAULT_EVALUATOR_USER_ID = "eval_user"
+DEFAULT_AIAVATAR_USER_ID = "turn_user"
 
 # Data models
 class EvaluationResult(BaseModel):
@@ -49,11 +48,13 @@ class Turn(BaseModel):
 
 
 class Scenario(BaseModel):
-    name: Optional[str] = None 
+    name: Optional[str] = None
     turns: List[Turn] = Field(default_factory=list)
     goal: Optional[str] = None
     scenario_evaluation_result: Optional[EvaluationResult] = None
-    
+    user_id: Optional[str] = None
+    error: Optional[str] = None
+
     def has_execution_results(self) -> bool:
         return all(turn.actual_output_text is not None for turn in self.turns)
 
@@ -94,12 +95,13 @@ class DataValidator:
 
 # Evaluator
 class DialogEvaluator:
-    def __init__(self, llm: LLMService, evaluation_llm: LLMService = None, evaluation_functions: Dict[str, callable] = None):
+    def __init__(self, llm: LLMService, evaluation_llm: LLMService = None, evaluation_functions: Dict[str, callable] = None, default_user_id: str = None):
         self.llm = llm
         self.evaluation_llm = evaluation_llm
         if self.evaluation_llm and not self.evaluation_llm.system_prompt:
             self.evaluation_llm.system_prompt = DEFAULT_EVALUATION_SYSTEM_PROMPT
         self.evaluation_functions = evaluation_functions or {}
+        self.default_user_id = default_user_id or DEFAULT_AIAVATAR_USER_ID
 
     async def get_llm_response(self, llm: LLMService, context_id: str, user_id: str, text: str) -> Tuple[str, Union[TC, None]]:
         result_text = ""
@@ -116,10 +118,10 @@ class DialogEvaluator:
                     result_text += resp.text
             return result_text, tool_call
         except Exception as ex:
-            print(f"Error during turn processing: {ex}")
+            print(f"Error during turn processing: {ex}\n{traceback.format_exc()}")
             raise
 
-    async def process_turn(self, context_id: str, turn: Turn) -> Tuple[str, Union[TC, None]]:
+    async def process_turn(self, context_id: str, turn: Turn, user_id: str = None) -> Tuple[str, Union[TC, None]]:
         if not self.llm:
             raise ValidationError("LLM service is required for processing turns")
         
@@ -127,7 +129,7 @@ class DialogEvaluator:
         actual_output_text, tool_call = await self.get_llm_response(
             llm=self.llm,
             context_id=context_id, 
-            user_id=DEFAULT_TURN_USER_ID, 
+            user_id=user_id or self.default_user_id,
             text=turn.input_text
         )
 
@@ -139,7 +141,7 @@ class DialogEvaluator:
         for i, turn in enumerate(scenario.turns, 1):
             print(f"\rProcessing Scenario {scenario.name} - Turn {i}/{len(scenario.turns)}: {turn.input_text[:50]}...", end="", flush=True)
             try:
-                turn.actual_output_text, tool_call = await self.process_turn(context_id, turn)
+                turn.actual_output_text, tool_call = await self.process_turn(context_id, turn, scenario.user_id)
                 if tool_call:
                     turn.actual_tool_call = ToolCall.model_validate(tool_call.to_dict())
             except Exception as ex:
@@ -155,7 +157,7 @@ class DialogEvaluator:
         eval_result_text, _ = await self.get_llm_response(
             llm=self.evaluation_llm,
             context_id=str(uuid4()), 
-            user_id=DEFAULT_USER_ID, 
+            user_id=DEFAULT_EVALUATOR_USER_ID,
             text=eval_input_text
         )
 
@@ -186,7 +188,7 @@ class DialogEvaluator:
         eval_result_text, _ = await self.get_llm_response(
             self.evaluation_llm,
             context_id=str(uuid4()), 
-            user_id=DEFAULT_SCENARIO_USER_ID, 
+            user_id=DEFAULT_EVALUATOR_USER_ID, 
             text=eval_input_text
         )
 
@@ -223,6 +225,9 @@ class DialogEvaluator:
                     await self.process_scenario(scenario)
             except Exception as ex:
                 print(f"[{scenario_idx}/{total_scenarios}] Scenario failed: {ex}. Continuing with next scenario.")
+                scenario.error = str(ex)
+                scenarios.append(scenario)
+                print(f"✗ Scenario {scenario_idx} failed")
                 continue
 
             if self.evaluation_llm:

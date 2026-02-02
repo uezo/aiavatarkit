@@ -216,6 +216,51 @@ The list of tools is as follows:
         self._on_error = None
         self.debug = debug
 
+    def get_config(self) -> dict:
+        return {
+            "system_prompt": self.system_prompt,
+            "model": self.model,
+            "temperature": self.temperature,
+            "split_chars": self.split_chars,
+            "option_split_chars": self.option_split_chars,
+            "option_split_threshold": self.option_split_threshold,
+            "split_on_control_tags": self.split_on_control_tags,
+            "voice_text_tag": self.voice_text_tag,
+            "initial_messages": self.initial_messages,
+            "use_dynamic_tools": self.use_dynamic_tools,
+            "debug": self.debug,
+        }
+
+    def set_config(self, config: dict) -> dict:
+        allowed_keys = self.get_config().keys()
+        updated = {}
+        for k, v in config.items():
+            if v is None:
+                continue
+            if k not in allowed_keys:
+                continue
+            try:
+                setattr(self, k, v)
+                updated[k] = v
+            except Exception:
+                pass
+
+        # Rebuild derived patterns when split chars are updated
+        if "split_chars" in updated:
+            self.split_chars_pattern = "|".join(
+                re.escape(char) for char in sorted(self.split_chars, key=len, reverse=True)
+            )
+        if "option_split_chars" in updated:
+            self.option_split_patterns = [
+                re.escape(char) if char.endswith(" ") else f"{re.escape(char)}\\s?"
+                for char in sorted(self.option_split_chars, key=len, reverse=True)
+            ]
+            self.option_split_chars_regex = (
+                f"({'|'.join(self.option_split_patterns)})\\s*(?!.*({'|'.join(self.option_split_patterns)}))"
+            )
+
+        return updated
+
     # Decorators
     def request_filter(self, func):
         self._request_filter = func

@@ -72,6 +72,11 @@ class ClaudeService(LLMService):
             }
         }
 
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config["max_tokens"] = self.max_tokens
+        return config
+
     @property
     def dynamic_tool_name(self) -> str:
         return self.dynamic_tool_spec["name"]

@@ -154,6 +154,12 @@ class AIAvatarWebSocketServer(Adapter):
         self.debug = debug
         self.last_response = None
 
+    def get_config(self) -> dict:
+        return {
+            "response_audio_chunk_size": self.response_audio_chunk_size,
+            "debug": self.debug,
+        }
+
     def on_connect(self, func: Callable[[AIAvatarRequest, WebSocketSessionData], Awaitable[None]]):
         self._on_connect = func
         return func

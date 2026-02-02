@@ -30,6 +30,11 @@ class GoogleSpeechRecognizer(SpeechRecognizer):
         self.google_api_key = google_api_key
         self.sample_rate = sample_rate
 
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config["sample_rate"] = self.sample_rate
+        return config
+
     async def transcribe(self, data: bytes) -> str:
         request_body = {
             "config": {

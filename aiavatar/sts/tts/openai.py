@@ -38,6 +38,15 @@ class OpenAISpeechSynthesizer(SpeechSynthesizer):
         self.instructions = instructions
         self.audio_format = audio_format
 
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config["speaker"] = self.speaker
+        config["model"] = self.model
+        config["instructions"] = self.instructions
+        config["audio_format"] = self.audio_format
+        config["base_url"] = self.base_url
+        return config
+
     async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
         if not text or not text.strip():
             return bytes()

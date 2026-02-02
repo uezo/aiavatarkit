@@ -50,6 +50,18 @@ class DifyService(LLMService):
             )
         )
 
+    def get_config(self) -> dict:
+        return {
+            "base_url": self.base_url,
+            "user": self.user,
+            "is_agent_mode": self.is_agent_mode,
+            "split_chars": self.split_chars,
+            "option_split_chars": self.option_split_chars,
+            "option_split_threshold": self.option_split_threshold,
+            "split_on_control_tags": self.split_on_control_tags,
+            "voice_text_tag": self.voice_text_tag,
+        }
+
     @property
     def dynamic_tool_name(self) -> str:
         pass

@@ -36,6 +36,15 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
         self.tts_url = tts_url
         self.audio_format = audio_format
 
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config["service_name"] = self.service_name
+        config["speaker"] = self.speaker
+        config["speed"] = self.speed
+        config["tts_url"] = self.tts_url
+        config["audio_format"] = self.audio_format
+        return config
+
     async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
         if not text or not text.strip():
             return bytes()
