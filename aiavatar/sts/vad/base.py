@@ -23,6 +23,24 @@ class SpeechDetector(ABC):
         self._on_recording_started.append(func)
         return func
 
+    def get_config(self) -> dict:
+        return {}
+
+    def set_config(self, config: dict) -> dict:
+        allowed_keys = self.get_config().keys()
+        updated = {}
+        for k, v in config.items():
+            if v is None:
+                continue
+            if k not in allowed_keys:
+                continue
+            try:
+                setattr(self, k, v)
+                updated[k] = v
+            except Exception:
+                pass
+        return updated
+
     @abstractmethod
     async def process_samples(self, samples: bytes, session_id: str = None):
         pass

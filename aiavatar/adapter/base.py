@@ -16,6 +16,24 @@ class Adapter(ABC):
         self._on_request_handlers: List[Callable[[AIAvatarRequest], Awaitable[None]]] = []
         self._on_response_handlers: List[Callable[[AIAvatarResponse, STSResponse], Awaitable[None]]] = []
 
+    def get_config(self) -> dict:
+        return {}
+
+    def set_config(self, config: dict) -> dict:
+        allowed_keys = self.get_config().keys()
+        updated = {}
+        for k, v in config.items():
+            if v is None:
+                continue
+            if k not in allowed_keys:
+                continue
+            try:
+                setattr(self, k, v)
+                updated[k] = v
+            except Exception:
+                pass
+        return updated
+
     @abstractmethod
     async def handle_response(self, response: STSResponse):
         pass

@@ -3,7 +3,7 @@ import asyncio
 from dataclasses import dataclass
 import logging
 import struct
-from typing import List
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,24 @@ class VoiceRecorder(ABC):
     @abstractmethod
     async def save_voice(self, id: str, voice_bytes: bytes, audio_format: str):
         pass
+
+    @abstractmethod
+    async def get_voice(self, id: str) -> Optional[bytes]:
+        pass
+
+    async def get_request_voice(self, transaction_id: str) -> Optional[bytes]:
+        return await self.get_voice(f"{transaction_id}_request")
+
+    async def get_response_voices(self, transaction_id: str) -> List[bytes]:
+        voices = []
+        idx = 0
+        while True:
+            data = await self.get_voice(f"{transaction_id}_response_{idx}")
+            if data is None:
+                break
+            voices.append(data)
+            idx += 1
+        return voices
 
     async def _worker(self):
         while True:

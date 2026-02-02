@@ -170,6 +170,13 @@ class AIAvatarLineBotServer(Adapter):
         self._on_send_error_message = None
         self.default_error_message = default_error_message
 
+    def get_config(self) -> dict:
+        return {
+            "linebot_session_timeout": self.linebot_session_timeout,
+            "default_error_message": self.default_error_message,
+            "debug": self.debug,
+        }
+
     def api_key_auth(self, credentials: HTTPAuthorizationCredentials):
         if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != self.api_key:
             raise HTTPException(

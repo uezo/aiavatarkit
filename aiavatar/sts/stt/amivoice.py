@@ -31,6 +31,13 @@ class AmiVoiceSpeechRecognizer(SpeechRecognizer):
         self.target_sample_rate = target_sample_rate
         self.url = "https://acp-api.amivoice.com/v1/recognize"
 
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config["engine"] = self.engine
+        config["sample_rate"] = self.sample_rate
+        config["target_sample_rate"] = self.target_sample_rate
+        return config
+
     async def transcribe(self, data: bytes) -> str:
         form_data = {
             "u": self.amivoice_api_key,

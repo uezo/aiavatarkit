@@ -45,6 +45,12 @@ class AzureSpeechRecognizer(SpeechRecognizer):
         if self.use_classic and self.alternative_languages:
             logger.warning("Auto language detection is not available in Azure STT v1. Set `use_classic=False` to enable this feature.")
 
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config["sample_rate"] = self.sample_rate
+        config["use_classic"] = self.use_classic
+        return config
+
     async def transcribe(self, data: bytes) -> str:
         if self.use_classic:
             return await self.transcribe_classic(data)

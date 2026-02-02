@@ -137,9 +137,8 @@ This change ensures compatibility with the new internal structure and removes th
     - [🍓 Raspberry Pi](#-raspberry-pi)
 
 - [⚙️ Administration](#️-administration)
-    - [🎛️ Configuration API](#️-configuration-api)
-    - [🎮 Control API](#-control-api)
-    - [🔐 Authorization](#-authorization)
+    - [Admin Panel](#admin-panel)
+    - [REST API](#rest-api)
     - [📈 Observability](#-observability)
 
 - [🧪 Evaluation](#-evaluation)
@@ -1629,256 +1628,49 @@ Now writing... ✍️
 
 ## ⚙️ Administration
 
-AIAvatarKit provides comprehensive administration APIs for monitoring and controlling running instances. These APIs enable dynamic configuration updates, runtime control, and system monitoring for production deployments.
+AIAvatarKit provides a built-in admin panel for monitoring, controlling, and evaluating your AI avatar from a web browser.
 
-### 🎛️ Configuration API
+### Admin Panel
 
-The Configuration API allows real-time management of AIAvatar components and their settings. You can dynamically switch between different LLM providers, adjust TTS settings, modify STT parameters, and monitor system logs.
-
-#### Setting up Configuration API
+Set up the admin panel with a single function call. Once configured, access it at `/admin` on your server.
 
 ```python
-from fastapi import FastAPI
-from aiavatar.adapter.http.server import AIAvatarHttpServer
-from aiavatar.admin.config import ConfigAPI
+from aiavatar.admin import setup_admin_panel
 
-# Create AIAvatar server
-aiavatar_app = AIAvatarHttpServer(
-    openai_api_key=OPENAI_API_KEY,
-    debug=True
+setup_admin_panel(
+    app,
+    adapter=aiavatar_app,
+    evaluator=evaluator,                    # Optional: If omitted, the pipeline LLM settings are used
+    character_service=character_service,    # Optional: If using CharacterService
+    character_id=YOUR_CHARACTER_ID,         # Optional: Required if character_service is set
+    api_key="your-api-key"                  # Optional: If omitted, no authentication is required
 )
-
-# Create multiple LLM services for switching
-from aiavatar.sts.llm.chatgpt import ChatGPTService
-from aiavatar.sts.llm.claude import ClaudeService
-
-chatgpt_service = ChatGPTService(openai_api_key=OPENAI_API_KEY, model="gpt-4o")
-claude_service = ClaudeService(anthropic_api_key=ANTHROPIC_API_KEY, model="claude-sonnet-4-5")
-
-# Setup Configuration API
-config_api = ConfigAPI(
-    sts=aiavatar_app.sts,
-    llms={
-        "chatgpt": chatgpt_service,
-        "claude": claude_service
-    },
-    logfile_path="/var/log/aiavatar.log"
-)
-
-# Setup FastAPI app
-app = FastAPI()
-app.include_router(aiavatar_app.get_api_router())
-app.include_router(config_api.get_router(), prefix="/admin")
 ```
 
-#### Key Configuration Features
+The admin panel includes:
 
-**Component Management**
-- Switch between different STT, LLM, and TTS providers at runtime
-- Query available components and their current configurations
-- Hot-swap components without restarting the application
+- **Metrics** — Real-time performance metrics for the STS pipeline
+- **Logs** — Conversation logs with voice playback
+- **Control** — Send speech and conversation messages to the avatar
+- **Config** — Adjust pipeline, VAD, STT, LLM, TTS, and adapter settings at runtime
+- **Evaluation** — Run dialog evaluation scenarios
+- **Character** — Manage character info, weekly schedule, daily schedules, diaries, and users (requires `character_service`)
 
-**Dynamic Configuration Updates**
-- Update LLM parameters (temperature, model, system prompt)
-- Modify TTS settings (voice, speaker, style mappings)
-- Adjust STT configurations (language, timeout, debug mode)
-
-**System Monitoring**
-- Retrieve recent system logs
-- Monitor component health and status
-- Track configuration changes
-
-#### API Examples
-
-```bash
-# Get current LLM configuration
-curl -X GET "http://localhost:8000/admin/llm/config"
-
-# Switch to Claude
-curl -X POST "http://localhost:8000/admin/sts/component" \
-    -H "Content-Type: application/json" \
-    -d '{"llm": "claude"}'
-
-# Update system prompt
-curl -X POST "http://localhost:8000/admin/llm/config" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "config": {
-            "system_prompt": "You are a helpful virtual assistant.",
-            "temperature": 0.7
-        }
-    }'
-
-# Get system logs
-curl -X GET "http://localhost:8000/admin/system/log?count=50"
-```
-
-### 🎮 Control API
-
-The Control API provides runtime control over AIAvatar behavior, allowing you to manage listening sessions, control avatar expressions and animations, and handle conversations programmatically.
-
-#### Setting up Control API
+You can also supply your own HTML to fully customize the admin page:
 
 ```python
-from fastapi import FastAPI
-from aiavatar import AIAvatar
-from aiavatar.admin.control import ControlAPI
+custom_html = open("my_admin.html").read()
 
-# Create AIAvatar
-aiavatar_app = AIAvatar(
-    openai_api_key=OPENAI_API_KEY,
-    debug=True
-)
-
-# Setup Control API
-control_api = ControlAPI(aiavatar_app)
-
-# Setup FastAPI app
-app = FastAPI()
-app.include_router(control_api.get_router(), prefix="/control")
-```
-
-#### Key Control Features
-
-**Listener Management**
-- Start and stop voice listening sessions
-- Monitor listening status
-- Handle multiple concurrent sessions
-
-**Avatar Control**
-- Set facial expressions with duration control
-- Trigger animations programmatically
-- Perform synchronized speech with avatar controls
-- Monitor current avatar state
-
-**Conversation Management**
-- Send text messages directly to the conversation pipeline
-- Retrieve conversation history
-- Monitor conversation flow
-
-#### API Examples
-
-```bash
-# Start listening for session
-curl -X POST "http://localhost:8000/control/listener/start" \
-    -H "Content-Type: application/json" \
-    -d '{"session_id": "demo_session"}'
-
-# Check listener status
-curl -X GET "http://localhost:8000/control/listener/status"
-
-# Set facial expression
-curl -X POST "http://localhost:8000/control/avatar/face" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "name": "joy",
-        "duration": 3.0
-    }'
-
-# Trigger animation
-curl -X POST "http://localhost:8000/control/avatar/animation" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "name": "wave_hands",
-        "duration": 2.5
-    }'
-
-# Perform speech with control tags
-curl -X POST "http://localhost:8000/control/avatar/perform" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "text": "[face:joy]Hello there! [animation:wave_hands]Nice to meet you!"
-    }'
-
-# Send conversation message
-curl -X POST "http://localhost:8000/control/conversation" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "text": "What's the weather like today?"
-    }'
-
-# Get conversation history
-curl -X GET "http://localhost:8000/control/conversation/histories"
-```
-
-### 🔐 Authorization
-
-The administration APIs support secure authentication using Bearer tokens to protect sensitive management operations in production environments.
-
-#### Setting up Authentication
-
-AIAvatarKit provides a built-in authentication system through the `aiavatar.auth` module:
-
-```python
-from fastapi import FastAPI, Depends
-from aiavatar.auth import BearerAuth
-from aiavatar.adapter.http.server import AIAvatarHttpServer
-from aiavatar.admin.config import ConfigAPI
-from aiavatar.admin.control import ControlAPI
-
-# Create AIAvatar server
-aiavatar_app = AIAvatarHttpServer(
-    openai_api_key=OPENAI_API_KEY,
-    debug=True
-)
-
-# Setup authentication
-auth = BearerAuth(api_key="your-secure-admin-token-here")
-
-# Setup administration APIs
-config_api = ConfigAPI(sts=aiavatar_app.sts, logfile_path="/var/log/aiavatar.log")
-control_api = ControlAPI(aiavatar_app)
-
-# Setup FastAPI app with authentication
-app = FastAPI(
-    title="AIAvatar Administration",
-    description="Administration APIs for AIAvatar management",
-    version="1.0.0"
-)
-
-# Include routers with authentication
-app.include_router(aiavatar_app.get_api_router())
-app.include_router(
-    config_api.get_router(), 
-    prefix="/admin", 
-    dependencies=[Depends(auth)]
-)
-app.include_router(
-    control_api.get_router(), 
-    prefix="/control", 
-    dependencies=[Depends(auth)]
+setup_admin_panel(
+    app,
+    adapter=aiavatar_app,
+    html=custom_html,       # Use your own HTML instead of the built-in template
 )
 ```
 
-#### Using Authenticated APIs
+### REST API
 
-Once authentication is configured, all administration API calls must include the Authorization header:
-
-```bash
-# Set your admin token
-export ADMIN_TOKEN="your-secure-admin-token-here"
-
-# Get LLM configuration with authentication
-curl -X GET "http://localhost:8000/admin/llm/config" \
-    -H "Authorization: Bearer $ADMIN_TOKEN"
-
-# Start listener with authentication
-curl -X POST "http://localhost:8000/control/listener/start" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"session_id": "secure_session"}'
-
-# Update system prompt with authentication
-curl -X POST "http://localhost:8000/admin/llm/config" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "config": {
-            "system_prompt": "You are a secure virtual assistant.",
-            "temperature": 0.7
-        }
-    }'
-```
+All admin panel features are also available as REST API endpoints. See the interactive API documentation at `/docs` on your server for full details on request/response schemas.
 
 ### 📈 Observability
 

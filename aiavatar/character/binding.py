@@ -36,6 +36,8 @@ def bind_character(
         if not system_prompt_params:
             system_prompt_params = {}
         user = await character_service.user.get(user_id=user_id)
+        if not user:
+            raise Exception(f"User not found: {user_id}")
         system_prompt_params["username"] = user.name
         return await character_service.get_system_prompt(
             character_id=character_id,

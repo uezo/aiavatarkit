@@ -75,6 +75,11 @@ class GeminiService(LLMService):
             }]
         }
 
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config["thinking_budget"] = self.thinking_budget
+        return config
+
     async def download_image(self, url: str) -> bytes:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.get(url)

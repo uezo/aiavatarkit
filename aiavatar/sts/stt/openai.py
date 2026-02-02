@@ -31,6 +31,11 @@ class OpenAISpeechRecognizer(SpeechRecognizer):
         self.openai_api_key = openai_api_key
         self.sample_rate = sample_rate
 
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config["sample_rate"] = self.sample_rate
+        return config
+
     def to_wave_file(self, raw_audio: bytes):
         buffer = io.BytesIO()
         with wave.open(buffer, "wb") as wf:

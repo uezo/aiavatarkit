@@ -30,6 +30,12 @@ class VoicevoxSpeechSynthesizer(SpeechSynthesizer):
         self.base_url = base_url
         self.speaker = speaker
 
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config["base_url"] = self.base_url
+        config["speaker"] = self.speaker
+        return config
+
     async def get_audio_query(self, text: str, speaker: int):
         url = f"{self.base_url}/audio_query"
         response = await self.http_client.post(url, params={"speaker": speaker, "text": text})

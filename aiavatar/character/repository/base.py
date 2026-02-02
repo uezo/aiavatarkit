@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from datetime import date
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from ..models import Character, WeeklySchedule, DailySchedule, Diary, User
 
 
@@ -97,6 +97,16 @@ class ActivityRepositoryBase(ABC):
         pass
 
     @abstractmethod
+    async def list_daily_schedules(
+        self,
+        *,
+        character_id: str,
+        start_date: date,
+        end_date: date
+    ) -> List[DailySchedule]:
+        pass
+
+    @abstractmethod
     async def delete_daily_schedule(
         self,
         *,
@@ -139,6 +149,16 @@ class ActivityRepositoryBase(ABC):
         pass
 
     @abstractmethod
+    async def list_diaries(
+        self,
+        *,
+        character_id: str,
+        start_date: date,
+        end_date: date
+    ) -> List[Diary]:
+        pass
+
+    @abstractmethod
     async def delete_diary(
         self,
         *,
@@ -170,6 +190,10 @@ class UserRepository(ABC):
         name: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Optional[User]:
+        pass
+
+    @abstractmethod
+    async def list(self, *, limit: int = 100, offset: int = 0) -> List[User]:
         pass
 
     @abstractmethod

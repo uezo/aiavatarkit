@@ -200,6 +200,37 @@ class STSPipeline:
         self.invoke_queue_idle_timeout = invoke_queue_idle_timeout
         self.invoke_timeout = invoke_timeout
 
+    def get_config(self) -> dict:
+        return {
+            "wakewords": self.wakewords,
+            "wakeword_timeout": self.wakeword_timeout,
+            "merge_request_threshold": self.merge_request_threshold,
+            "merge_request_prefix": self.merge_request_prefix,
+            "timestamp_interval_seconds": self.timestamp_interval_seconds,
+            "timestamp_prefix": self.timestamp_prefix,
+            "timestamp_timezone": self.timestamp_timezone,
+            "voice_recorder_enabled": self.voice_recorder_enabled,
+            "invoke_queue_idle_timeout": self.invoke_queue_idle_timeout,
+            "invoke_timeout": self.invoke_timeout,
+            "use_invoke_queue": self.use_invoke_queue,
+            "debug": self.debug,
+        }
+
+    def set_config(self, config: dict) -> dict:
+        allowed_keys = self.get_config().keys()
+        updated = {}
+        for k, v in config.items():
+            if v is None:
+                continue
+            if k not in allowed_keys:
+                continue
+            try:
+                setattr(self, k, v)
+                updated[k] = v
+            except Exception:
+                pass
+        return updated
+
     def on_before_llm(self, func):
         self._on_before_llm = func
         return func

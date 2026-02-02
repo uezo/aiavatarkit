@@ -207,6 +207,11 @@ class AIAvatarHttpServer(Adapter):
         self.api_key = api_key
         self._bearer_scheme = HTTPBearer(auto_error=False)
 
+    def get_config(self) -> dict:
+        return {
+            "debug": self.debug,
+        }
+
     def api_key_auth(self, credentials: HTTPAuthorizationCredentials):
         if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != self.api_key:
             raise HTTPException(
