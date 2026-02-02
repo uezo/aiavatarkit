@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from ...adapter.base import Adapter
@@ -8,19 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class AdapterConfig(BaseModel):
-    """
-    AdapterConfig is a data model that holds configuration settings for adapter components.
-
-    All fields are optional and default to None if not provided.
-    """
-    response_audio_chunk_size: Optional[int] = Field(
-        default=None,
-        description="Size of audio chunks for response streaming. 0 means send whole audio data at once."
-    )
-    debug: Optional[bool] = Field(
-        default=None,
-        description="Flag indicating whether to enable debug mode. If True, detailed logs are output."
-    )
+    """Dynamic config model that only contains fields returned by each adapter's get_config()."""
 
     class Config:
         extra = "allow"
