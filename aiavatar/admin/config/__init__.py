@@ -33,7 +33,8 @@ def setup_config_api(
     adapter: Union[Adapter, List[Adapter], Dict[str, Adapter], None] = None,
     sts: STSPipeline = None,
     api_key: str = None
-):
+) -> Dict[str, Adapter]:
+    """Set up config API routes and return the adapters dict (mutable)."""
     deps = [Depends(create_api_key_dependency(api_key))] if api_key else []
 
     if isinstance(adapter, dict):
@@ -43,11 +44,10 @@ def setup_config_api(
     elif isinstance(adapter, Adapter):
         _adapters = {_adapter_key(adapter): adapter}
     else:
-        _adapters = None
+        _adapters = {}
 
-    if _adapters:
-        adapter_router = AdapterConfigAPI(adapters=_adapters).get_router()
-        app.include_router(adapter_router, dependencies=deps)
+    adapter_router = AdapterConfigAPI(adapters=_adapters).get_router()
+    app.include_router(adapter_router, dependencies=deps)
 
     _sts = sts or (next(iter(_adapters.values())).sts if _adapters else None)
 
@@ -59,3 +59,5 @@ def setup_config_api(
     app.include_router(SttConfigAPI(stt=_sts.stt).get_router(), dependencies=deps)
     app.include_router(LlmConfigAPI(llm=_sts.llm).get_router(), dependencies=deps)
     app.include_router(TtsConfigAPI(tts=_sts.tts).get_router(), dependencies=deps)
+
+    return _adapters

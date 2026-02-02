@@ -1,9 +1,9 @@
 from pathlib import Path
+from typing import Optional
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-from .auth import create_api_key_dependency
 from .character import setup_character_api
-from .config import setup_config_api
+from .config import setup_config_api, _adapter_key
 from .control import setup_control_api
 from .evaluation import setup_evaluation_api
 from .logs import setup_logs_api
@@ -13,6 +13,18 @@ from ..eval import DialogEvaluator
 from ..sts.llm.chatgpt import ChatGPTService
 
 _STATIC_DIR = Path(__file__).parent / "static"
+
+
+class AdminPanel:
+    """Lightweight handle returned by setup_admin_panel for post-setup configuration."""
+
+    def __init__(self, adapters: dict):
+        self._adapters = adapters
+
+    def add_adapter(self, adapter: Adapter, *, name: Optional[str] = None):
+        """Register an additional adapter for the Config API."""
+        key = name or _adapter_key(adapter)
+        self._adapters[key] = adapter
 
 
 def _setup_admin_html(app: FastAPI, *, title: str = "AIAvatarKit Admin Panel", html: str = None):
@@ -35,7 +47,7 @@ def setup_admin_panel(
     character_id: str = None,
     default_session_id: str = None,
     api_key: str = None,
-):
+) -> AdminPanel:
     """Convenience function to set up the full admin panel.
 
     Required:
@@ -49,6 +61,9 @@ def setup_admin_panel(
         character_id: Character ID for character tab (required if character_service is set)
         default_session_id: Default session ID for control API
         api_key: API key for all admin endpoints
+
+    Returns:
+        AdminPanel instance for post-setup configuration (e.g. add_adapter)
     """
     # Admin HTML page
     _setup_admin_html(app, title=title, html=html)
@@ -77,7 +92,7 @@ def setup_admin_panel(
     )
 
     # Config
-    setup_config_api(
+    adapters = setup_config_api(
         app,
         adapter=adapter,
         api_key=api_key
@@ -105,3 +120,5 @@ def setup_admin_panel(
             character_id=character_id,
             api_key=api_key,
         )
+
+    return AdminPanel(adapters=adapters)
