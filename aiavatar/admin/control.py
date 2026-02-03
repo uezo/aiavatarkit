@@ -110,12 +110,21 @@ class ControlAPI:
                 voice = await self.adapter.sts.tts.synthesize(text=self.remove_control_tags(request.text))
 
                 await self.adapter.stop_response(session_id, "_")
+
+                voice_text = self.remove_control_tags(request.text)
                 await self.adapter.handle_response(STSResponse(
                     type="chunk",
                     session_id=session_id,
                     text=request.text,
-                    voice_text=self.remove_control_tags(request.text),
+                    voice_text=voice_text,
                     audio_data=voice,
+                    metadata={"is_first_chunk": True}
+                ))
+                await self.adapter.handle_response(STSResponse(
+                    type="final",
+                    session_id=session_id,
+                    text=request.text,
+                    voice_text=voice_text,
                     metadata={}
                 ))
 
