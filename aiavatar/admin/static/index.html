@@ -360,6 +360,11 @@
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
           <div class="text-xs text-gray-500 uppercase tracking-wide">Total Requests</div>
           <div class="text-2xl font-semibold text-gray-800 mt-1">{{ metricsSummary.total_requests }}</div>
+          <div class="text-xs text-gray-500 mt-1">
+            <span class="text-green-600">{{ metricsSummary.success_count || 0 }} success</span>
+            <span class="mx-1">/</span>
+            <span class="text-red-500">{{ metricsSummary.error_count || 0 }} error</span>
+          </div>
         </div>
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
           <div class="text-xs text-gray-500 uppercase tracking-wide">Avg Response Time</div>
@@ -865,6 +870,7 @@
               <span class="text-sm font-medium text-gray-700 font-mono">{{ group.context_id || '(no context)' }}</span>
               <span class="text-xs text-gray-400">{{ group.logs.length }} message(s)</span>
               <span v-if="group.logs.length > 0" class="text-xs text-gray-400">{{ formatLogTime(group.logs[0].created_at) }} ~ {{ formatLogTime(group.logs[group.logs.length - 1].created_at) }}</span>
+              <span v-if="group.has_error" class="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded font-medium">Error</span>
             </div>
             <div class="flex items-center space-x-2">
               <span v-if="group.logs[0] && group.logs[0].user_id" class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">{{ group.logs[0].user_id }}</span>
@@ -913,6 +919,11 @@
                   </button>
                 </div>
                 <div class="text-sm text-gray-700 bg-purple-50 rounded px-3 py-2 whitespace-pre-wrap">{{ log.response_voice_text }}</div>
+              </div>
+              <!-- Error -->
+              <div v-if="log.error_info" class="mb-2">
+                <div class="text-xs text-red-500 mb-0.5">Error</div>
+                <div class="text-sm text-red-700 bg-red-50 rounded px-3 py-2 whitespace-pre-wrap font-mono text-xs">{{ formatErrorInfo(log.error_info) }}</div>
               </div>
             </div>
           </div>
@@ -1605,21 +1616,37 @@ createApp({
         scales: { x: { grid: { display: false } }, y: { beginAtZero: true } },
       };
 
-      // Volume chart
+      // Volume chart (stacked: success + error)
       if (volumeChartCanvas.value) {
         volumeChart = new Chart(volumeChartCanvas.value, {
           type: 'bar',
           data: {
             labels,
-            datasets: [{
-              label: 'Requests',
-              data: buckets.map(b => b.request_count),
-              backgroundColor: 'rgba(59, 130, 246, 0.5)',
-              borderColor: 'rgb(59, 130, 246)',
-              borderWidth: 1,
-            }],
+            datasets: [
+              {
+                label: 'Success',
+                data: buckets.map(b => b.success_count || 0),
+                backgroundColor: 'rgba(16, 185, 129, 0.6)',
+                borderColor: 'rgb(16, 185, 129)',
+                borderWidth: 1,
+              },
+              {
+                label: 'Error',
+                data: buckets.map(b => b.error_count || 0),
+                backgroundColor: 'rgba(239, 68, 68, 0.6)',
+                borderColor: 'rgb(239, 68, 68)',
+                borderWidth: 1,
+              },
+            ],
           },
-          options: { ...chartOpts, plugins: { ...chartOpts.plugins, legend: { display: false } } },
+          options: {
+            ...chartOpts,
+            scales: {
+              ...chartOpts.scales,
+              x: { ...chartOpts.scales.x, stacked: true },
+              y: { beginAtZero: true, stacked: true },
+            },
+          },
         });
       }
 
@@ -1734,6 +1761,16 @@ createApp({
       const d = new Date(ts + 'Z');
       const pad = (n) => String(n).padStart(2, '0');
       return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    };
+
+    const formatErrorInfo = (errorInfo) => {
+      if (!errorInfo) return '';
+      try {
+        const parsed = JSON.parse(errorInfo);
+        return `${parsed.error}\n\n${parsed.traceback || ''}`.trim();
+      } catch {
+        return errorInfo;
+      }
     };
 
     const toggleLogGroup = (idx) => {
@@ -2319,7 +2356,7 @@ createApp({
       formatMs, loadMetrics, onPeriodChange,
       // Logs
       logsLimit, logsLoading, logsGroups, expandedLogGroups, voiceRecorderEnabled,
-      formatLogTime, toggleLogGroup, loadLogs, playVoice,
+      formatLogTime, formatErrorInfo, toggleLogGroup, loadLogs, playVoice,
       // Character
       charActiveSubTab, charSubTabs,
       charInfo, charInfoEdit, charInfoMetadataJson, charInfoLoading, charInfoSaving, charInfoChanged,

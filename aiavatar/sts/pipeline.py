@@ -299,6 +299,7 @@ class STSPipeline:
                 yield response
 
     async def _invoke_direct(self, request: STSRequest) -> AsyncGenerator[STSResponse, None]:
+        performance = None
         try:
             if not request.session_id:
                 raise ValueError("session_id is required but not provided")
@@ -438,6 +439,7 @@ class STSPipeline:
                     # Voice
                     if llm_stream_chunk.voice_text:
                         voice_text += llm_stream_chunk.voice_text
+                        performance.response_voice_text = voice_text
                         if performance.llm_first_voice_chunk_time == 0:
                             performance.llm_first_voice_chunk_time = time() - start_time
                             await self._on_before_tts(request)
@@ -463,7 +465,6 @@ class STSPipeline:
                         performance.tts_time = time() - start_time
 
                     yield audio_chunk, llm_stream_chunk, language, llm_stream_chunk.guradrail_name
-                performance.response_voice_text = voice_text
 
             response_text = ""
             response_audios = []
@@ -487,6 +488,7 @@ class STSPipeline:
                     continue
 
                 response_text += llm_stream_chunk.text
+                performance.response_text = response_text
                 if audio_chunk:
                     response_audios.append(audio_chunk)
 
@@ -503,7 +505,6 @@ class STSPipeline:
                 )
                 is_first_chunk = False
 
-            performance.response_text = response_text
             performance.total_time = time() - start_time
             self.performance_recorder.record(performance)
 
@@ -526,6 +527,13 @@ class STSPipeline:
         except Exception as iex:
             tb = traceback.format_exc()
             logger.error(f"Error at invoke: {iex}\n\n{tb}")
+
+            if performance:
+                performance.error_info = json.dumps({
+                    "error": str(iex),
+                    "traceback": tb
+                }, ensure_ascii=False)
+                self.performance_recorder.record(performance)
 
             yield STSResponse(
                 type="error",
