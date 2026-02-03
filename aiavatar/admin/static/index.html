@@ -950,22 +950,30 @@ const ConfigPanel = {
 
     watch(() => props.config, resetEdit, { immediate: true, deep: true });
 
-    const visibleFields = computed(() => {
-      if (!props.config) return [];
-      const configKeys = Object.keys(props.config);
-      if (props.fields) {
-        return props.fields.filter(f => configKeys.includes(f.key));
-      }
-      return configKeys.map(k => ({ key: k, label: k, type: guessType(props.config[k]) }));
-    });
-
     const guessType = (val) => {
       if (typeof val === 'boolean') return 'boolean';
       if (typeof val === 'number') return Number.isInteger(val) ? 'integer' : 'number';
       if (Array.isArray(val)) return 'list';
+      if (typeof val === 'object' && val !== null) return 'json';
       if (typeof val === 'string' && val.length > 80) return 'textarea';
       return 'text';
     };
+
+    const visibleFields = computed(() => {
+      if (!props.config) return [];
+      const configKeys = Object.keys(props.config);
+      if (props.fields) {
+        // Start with defined fields that exist in config
+        const defined = props.fields.filter(f => configKeys.includes(f.key));
+        const definedKeys = new Set(defined.map(f => f.key));
+        // Add any config keys not in fields definition (dynamic fields)
+        const dynamic = configKeys
+          .filter(k => !definedKeys.has(k))
+          .map(k => ({ key: k, label: k, type: guessType(props.config[k]) }));
+        return [...defined, ...dynamic];
+      }
+      return configKeys.map(k => ({ key: k, label: k, type: guessType(props.config[k]) }));
+    });
 
     const handleSave = () => {
       const payload = {};
@@ -2248,6 +2256,17 @@ createApp({
     watch(activeTab, async (tab) => {
       if (tab === 'metrics') loadMetrics();
       if (tab === 'logs') loadLogs();
+      if (tab === 'config') {
+        configLoading.value = true;
+        const section = activeConfigSection.value;
+        if (section === 'pipeline') await loadPipelineConfig();
+        else if (section === 'vad') await loadVadConfig();
+        else if (section === 'stt') await loadSttConfig();
+        else if (section === 'llm') await loadLlmConfig();
+        else if (section === 'tts') await loadTtsConfig();
+        else if (section === 'adapters') await loadAdaptersConfig();
+        configLoading.value = false;
+      }
       if (tab === 'character') {
         if (tabAvailability.character === 'unknown') await probeTab('character');
         if (tabAvailability.character === 'unavailable') return;
