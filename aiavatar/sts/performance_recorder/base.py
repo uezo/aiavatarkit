@@ -23,6 +23,7 @@ class PerformanceRecord:
     tts_first_chunk_time: float = 0
     tts_time: float = 0
     total_time: float = 0
+    error_info: str = None
 
 
 class PerformanceRecorder(ABC):

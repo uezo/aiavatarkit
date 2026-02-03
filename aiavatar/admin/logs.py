@@ -25,11 +25,13 @@ class ConversationLogResponse(BaseModel):
     request_files: Optional[str] = None
     response_text: Optional[str] = None
     response_voice_text: Optional[str] = None
+    error_info: Optional[str] = None
 
 
 class ConversationGroupResponse(BaseModel):
     context_id: Optional[str] = None
     logs: List[ConversationLogResponse]
+    has_error: bool = False
 
 
 class LogsResponse(BaseModel):
@@ -69,6 +71,7 @@ class LogsAPI:
                         ConversationGroupResponse(
                             context_id=g.context_id,
                             logs=[ConversationLogResponse(**asdict(l)) for l in g.logs],
+                            has_error=g.has_error,
                         )
                         for g in groups
                     ],

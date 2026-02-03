@@ -65,6 +65,10 @@ class SQLitePerformanceRecorder(PerformanceRecorder):
                     print("add column: transaction_id")
                     conn.execute("ALTER TABLE performance_records ADD COLUMN transaction_id TEXT")
 
+                # Add error_info column if not exist
+                if "error_info" not in columns:
+                    conn.execute("ALTER TABLE performance_records ADD COLUMN error_info TEXT")
+
                 # Create index
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_created_at ON performance_records (created_at)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_transaction_id ON performance_records (transaction_id)")

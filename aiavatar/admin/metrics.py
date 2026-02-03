@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 class TimelineBucketResponse(BaseModel):
     timestamp: str
     request_count: int
+    success_count: int = 0
+    error_count: int = 0
     avg_tts_first_chunk_time: Optional[float] = None
     p50_tts_first_chunk_time: Optional[float] = None
     p95_tts_first_chunk_time: Optional[float] = None
@@ -30,6 +32,8 @@ class TimelineResponse(BaseModel):
 class SummaryResponse(BaseModel):
     period: str
     total_requests: int
+    success_count: int = 0
+    error_count: int = 0
     avg_tts_first_chunk_time: Optional[float] = None
     p50_tts_first_chunk_time: Optional[float] = None
     p95_tts_first_chunk_time: Optional[float] = None
