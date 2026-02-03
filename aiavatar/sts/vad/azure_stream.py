@@ -8,6 +8,8 @@ from . import SpeechDetector
 
 logger = logging.getLogger(__name__)
 
+MIN_CHUNK_BYTES = 512
+
 
 class RecordingSession:
     def __init__(self, session_id: str, preroll_buffer_size: int):
@@ -23,8 +25,14 @@ class RecordingSession:
         self.azure_recognizer: Optional[speechsdk.SpeechRecognizer] = None
         self.event_loop: Optional[asyncio.AbstractEventLoop] = None
 
-    def reset(self):
+    def reset(self, reason: str = "unknown", debug: bool = False):
         # Reset status data except for preroll_buffer
+        if debug:
+            logger.info(
+                f"[VAD_DEBUG] reset called: reason={reason}, session={self.session_id}, "
+                f"was_recording={self.is_recording}, buffer_bytes={len(self.buffer)}, "
+                f"duration={self.record_duration:.2f}s, preroll_frames={len(self.preroll_buffer)}"
+            )
         self.buffer.clear()
         self.is_recording = False
         self.record_duration = 0
@@ -57,6 +65,7 @@ class AzureStreamSpeechDetector(SpeechDetector):
         self.max_duration = max_duration
         self.channels = channels
         self.debug = debug
+        self.debug_deeper = False
         self.preroll_buffer_sec = preroll_buffer_sec
         self.to_linear16 = to_linear16
         self.recording_sessions: Dict[str, RecordingSession] = {}
@@ -73,14 +82,13 @@ class AzureStreamSpeechDetector(SpeechDetector):
             "channels": self.channels,
             "preroll_buffer_sec": self.preroll_buffer_sec,
             "debug": self.debug,
+            "debug_deeper": self.debug_deeper
         }
 
-    def _calculate_preroll_buffer_size(self, chunk_bytes: int) -> int:
-        """Calculate preroll buffer size based on chunk size and desired duration"""
-        # bytes per second = sample_rate * channels * 2 (16-bit)
+    def _calculate_preroll_buffer_size(self) -> int:
+        """Calculate preroll buffer size based on a conservative minimum chunk size"""
         bytes_per_sec = self.sample_rate * self.channels * 2
-        # Number of chunks to store for preroll_buffer_sec
-        return max(1, int((self.preroll_buffer_sec * bytes_per_sec) / chunk_bytes))
+        return max(1, int((self.preroll_buffer_sec * bytes_per_sec) / MIN_CHUNK_BYTES))
 
     def _start_azure_recognition(self, session: RecordingSession):
         """Start Azure Speech recognition for a session"""
@@ -126,16 +134,31 @@ class AzureStreamSpeechDetector(SpeechDetector):
 
             def on_recognizing(evt):
                 if self.debug:
-                    logger.info(f"Azure recognizing: {evt.result.text}")
+                    logger.info(
+                        f"[VAD_DEBUG] on_recognizing: text='{evt.result.text}', "
+                        f"is_recording={session.is_recording}, buffer_bytes={len(session.buffer)}, "
+                        f"duration={session.record_duration:.2f}s"
+                    )
 
                 # Start recording on first recognizing event
                 if not session.is_recording:
                     session.is_recording = True
-                    # Copy preroll buffer to recording buffer
-                    for f in session.preroll_buffer:
+                    # Copy preroll buffer to recording buffer (limit to preroll_buffer_sec)
+                    preroll_max_bytes = int(self.preroll_buffer_sec * self.sample_rate * self.channels * 2)
+                    total_bytes = 0
+                    frames_to_copy = []
+                    for f in reversed(session.preroll_buffer):
+                        total_bytes += len(f)
+                        frames_to_copy.append(f)
+                        if total_bytes >= preroll_max_bytes:
+                            break
+                    for f in reversed(frames_to_copy):
                         session.buffer.extend(f)
                     if self.debug:
-                        logger.info(f"Recording started: preroll_frames={len(session.preroll_buffer)}, preroll_bytes={len(session.buffer)}")
+                        logger.info(
+                            f"[VAD_DEBUG] recording_started: preroll_total={len(session.preroll_buffer)}, "
+                            f"used_frames={len(frames_to_copy)}, preroll_bytes={len(session.buffer)}"
+                        )
 
                 if self._on_speech_detecting:
                     try:
@@ -155,18 +178,25 @@ class AzureStreamSpeechDetector(SpeechDetector):
                             logger.error("Error in on_recording_started callback", exc_info=True)
 
             def on_recognized(evt):
+                if self.debug:
+                    logger.info(
+                        f"[VAD_DEBUG] on_recognized: reason={evt.result.reason}, text='{evt.result.text}', "
+                        f"is_recording={session.is_recording}, buffer_bytes={len(session.buffer)}, "
+                        f"duration={session.record_duration:.2f}s"
+                    )
                 if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
                     if not evt.result.text:
                         if self.debug:
-                            logger.info("Azure recognized empty text, skipping")
-                        session.reset()
+                            logger.info("[VAD_DEBUG] recognized empty text, skipping")
+                        session.reset(reason="recognized_empty", debug=self.debug)
                         return
-                    if self.debug:
-                        logger.info(f"Azure recognized: {evt.result.text}")
                     recorded_data = bytes(session.buffer)
                     recorded_duration = session.record_duration
                     if self.debug:
-                        logger.info(f"Recording finished: {recorded_duration:.2f} sec, {len(recorded_data)} bytes")
+                        logger.info(
+                            f"[VAD_DEBUG] speech_detected: text='{evt.result.text}', "
+                            f"buffer_bytes={len(recorded_data)}, duration={recorded_duration:.2f}s"
+                        )
                     # Trigger speech detected callback with recorded audio
                     try:
                         asyncio.run_coroutine_threadsafe(
@@ -175,18 +205,19 @@ class AzureStreamSpeechDetector(SpeechDetector):
                         )
                     except Exception as ex:
                         logger.error("Error scheduling execute_on_speech_detected", exc_info=True)
-                    session.reset()
+                    session.reset(reason="recognized_speech", debug=self.debug)
                 elif evt.result.reason == speechsdk.ResultReason.NoMatch:
                     if self.debug:
-                        logger.debug("Azure: No speech recognized")
-                    session.reset()
+                        logger.info("[VAD_DEBUG] no_match")
+                    session.reset(reason="no_match", debug=self.debug)
                 else:
-                    logger.info(f"Azure on_recognized: reason={evt.result.reason}, text='{evt.result.text}'")
+                    if self.debug:
+                        logger.info(f"[VAD_DEBUG] on_recognized other: reason={evt.result.reason}, text='{evt.result.text}'")
 
             def on_canceled(evt):
                 if self.debug:
-                    logger.warning(f"Azure recognition canceled: {evt.reason}")
-                session.reset()
+                    logger.info(f"[VAD_DEBUG] on_canceled: reason={evt.reason}, is_recording={session.is_recording}, buffer_bytes={len(session.buffer)}")
+                session.reset(reason="canceled", debug=self.debug)
 
             session.azure_recognizer.recognizing.connect(on_recognizing)
             session.azure_recognizer.recognized.connect(on_recognized)
@@ -241,19 +272,22 @@ class AzureStreamSpeechDetector(SpeechDetector):
         if self.to_linear16:
             samples = self.to_linear16(samples)
 
-        session = self.get_session(session_id, len(samples))
+        if self.debug and self.debug_deeper:
+            logger.info(f"process_samples: session_id={session_id}, should_mute={self.should_mute()}")
+
+        session = self.get_session(session_id)
 
         if self.should_mute():
-            session.reset()
+            session.reset(reason="muted", debug=self.debug)
             session.preroll_buffer.clear()
-            if self.debug:
-                logger.debug("AzureStreamSpeechDetector is muted.")
             return False
 
         # Calculate sample duration
         sample_duration = (len(samples) / 2) / (self.sample_rate * self.channels)
 
         # Always send to Azure stream
+        if self.debug and self.debug_deeper:
+            logger.info(f"Send samples to Azure: session_id={session_id}, samples={len(samples)}")
         self._write_to_azure_stream(session, samples)
 
         # Always update preroll buffer (for next speech detection)
@@ -263,6 +297,12 @@ class AzureStreamSpeechDetector(SpeechDetector):
         if session.is_recording:
             session.buffer.extend(samples)
             session.record_duration += sample_duration
+
+        if self.debug and session.is_recording and int(session.record_duration * 10) % 50 == 0:
+            logger.info(
+                f"[VAD_DEBUG] process_samples: is_recording={session.is_recording}, "
+                f"buffer_bytes={len(session.buffer)}, duration={session.record_duration:.2f}s"
+            )
 
         return session.is_recording
 
@@ -282,10 +322,10 @@ class AzureStreamSpeechDetector(SpeechDetector):
     async def finalize_session(self, session_id):
         self.delete_session(session_id)
 
-    def get_session(self, session_id: str, chunk_bytes: int = 512):
+    def get_session(self, session_id: str):
         session = self.recording_sessions.get(session_id)
         if session is None:
-            preroll_buffer_size = self._calculate_preroll_buffer_size(chunk_bytes)
+            preroll_buffer_size = self._calculate_preroll_buffer_size()
             session = RecordingSession(session_id, preroll_buffer_size)
             self.recording_sessions[session_id] = session
             # Start Azure recognition when session is created
@@ -296,7 +336,7 @@ class AzureStreamSpeechDetector(SpeechDetector):
 
     def reset_session(self, session_id: str):
         if session := self.recording_sessions.get(session_id):
-            session.reset()
+            session.reset(reason="reset_session", debug=self.debug)
 
     def delete_session(self, session_id: str):
         if session_id in self.recording_sessions:
