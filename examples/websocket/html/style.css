@@ -122,6 +122,14 @@ button.active {
     transition: opacity 0.3s ease;
 }
 
+/* Tool Call Status */
+.tool-status {
+    color: #666666;
+    font-size: 12px;
+    margin-top: 8px;
+    text-align: center;
+}
+
 /* iOS-style toggle switch */
 .toggle-container {
     display: flex;
