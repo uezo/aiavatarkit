@@ -26,6 +26,7 @@ class ConversationLogResponse(BaseModel):
     response_text: Optional[str] = None
     response_voice_text: Optional[str] = None
     error_info: Optional[str] = None
+    tool_calls: Optional[str] = None
 
 
 class ConversationGroupResponse(BaseModel):

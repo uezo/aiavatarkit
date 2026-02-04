@@ -925,6 +925,11 @@
                 <div class="text-xs text-red-500 mb-0.5">Error</div>
                 <div class="text-sm text-red-700 bg-red-50 rounded px-3 py-2 whitespace-pre-wrap font-mono text-xs">{{ formatErrorInfo(log.error_info) }}</div>
               </div>
+              <!-- Tool Calls -->
+              <div v-if="log.tool_calls" class="mb-2">
+                <div class="text-xs text-blue-500 mb-0.5">Tool Calls</div>
+                <div class="text-sm text-blue-700 bg-blue-50 rounded px-3 py-2 whitespace-pre-wrap font-mono text-xs">{{ formatToolCalls(log.tool_calls) }}</div>
+              </div>
             </div>
           </div>
         </div>
@@ -1664,6 +1669,7 @@ createApp({
                 tension: 0.3,
                 pointRadius: 2,
                 fill: false,
+                spanGaps: true,
               },
               {
                 label: 'Avg',
@@ -1673,6 +1679,7 @@ createApp({
                 fill: true,
                 tension: 0.3,
                 pointRadius: 2,
+                spanGaps: true,
               },
               {
                 label: 'p95',
@@ -1682,6 +1689,7 @@ createApp({
                 tension: 0.3,
                 pointRadius: 2,
                 fill: false,
+                spanGaps: true,
               },
             ],
           },
@@ -1711,6 +1719,11 @@ createApp({
                 label: 'LLM',
                 data: buckets.map(b => b.avg_llm_phase != null ? (b.avg_llm_phase * 1000) : 0),
                 backgroundColor: 'rgba(245, 158, 11, 0.7)',
+              },
+              {
+                label: 'Processing',
+                data: buckets.map(b => b.avg_processing_phase != null ? (b.avg_processing_phase * 1000) : 0),
+                backgroundColor: 'rgba(59, 130, 246, 0.7)',
               },
               {
                 label: 'TTS',
@@ -1770,6 +1783,30 @@ createApp({
         return `${parsed.error}\n\n${parsed.traceback || ''}`.trim();
       } catch {
         return errorInfo;
+      }
+    };
+
+    const formatToolCalls = (toolCalls) => {
+      if (!toolCalls) return '';
+      try {
+        const parsed = JSON.parse(toolCalls);
+        if (!Array.isArray(parsed)) return toolCalls;
+        // Handle both old format (string array) and new format (object array)
+        return parsed.map(tc => {
+          if (typeof tc === 'string') return tc;
+          let line = tc.name || 'unknown';
+          if (tc.arguments) {
+            const args = typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments);
+            line += `(${args})`;
+          }
+          if (tc.result) {
+            const result = typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result);
+            line += ` → ${result}`;
+          }
+          return line;
+        }).join('\n');
+      } catch {
+        return toolCalls;
       }
     };
 
@@ -2356,7 +2393,7 @@ createApp({
       formatMs, loadMetrics, onPeriodChange,
       // Logs
       logsLimit, logsLoading, logsGroups, expandedLogGroups, voiceRecorderEnabled,
-      formatLogTime, formatErrorInfo, toggleLogGroup, loadLogs, playVoice,
+      formatLogTime, formatErrorInfo, formatToolCalls, toggleLogGroup, loadLogs, playVoice,
       // Character
       charActiveSubTab, charSubTabs,
       charInfo, charInfoEdit, charInfoMetadataJson, charInfoLoading, charInfoSaving, charInfoChanged,
