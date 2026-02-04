@@ -45,6 +45,7 @@ class AvatarUI {
         this.messageBox = document.getElementById("messageBox");
         this.messageSpeaker = document.getElementById("messageSpeaker");
         this.messageText = document.getElementById("messageText");
+        this.toolStatus = document.getElementById("toolStatus");
 
         this._setupMicrophoneCallback();
         this._setupMicrophoneMute();
@@ -270,6 +271,14 @@ class AvatarUI {
         }
         if (response.type === "error") {
             this.updateMessage("ai", response.voice_text, false);
+        }
+
+        // Show tool status
+        if (response.type == "tool_call") {
+            console.log(`Tool Call: ${JSON.stringify(response.metadata.tool_call, null, 2)}`);
+            this.toolStatus.textContent = `Tool Call: ${response.metadata.tool_call.name}`;
+        } else if (response.type == "final" || response.type == "error") {
+            this.toolStatus.textContent = "";
         }
     }
 }
