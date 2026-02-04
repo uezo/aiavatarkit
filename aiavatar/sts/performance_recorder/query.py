@@ -290,7 +290,8 @@ class SQLiteMetricsQuery(MetricsQuery):
     def _fetch_rows(self, start_time: datetime):
         conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
         try:
-            rows = conn.execute(_QUERY_SQL, (start_time.isoformat(),)).fetchall()
+            # Use datetime object directly for proper comparison
+            rows = conn.execute(_QUERY_SQL, (start_time,)).fetchall()
             result = []
             for row in rows:
                 created_at = row[0]
