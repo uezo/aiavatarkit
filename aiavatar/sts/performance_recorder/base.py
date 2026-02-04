@@ -24,6 +24,7 @@ class PerformanceRecord:
     tts_time: float = 0
     total_time: float = 0
     error_info: str = None
+    tool_calls: str = None
 
 
 class PerformanceRecorder(ABC):

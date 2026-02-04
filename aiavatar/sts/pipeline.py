@@ -469,6 +469,7 @@ class STSPipeline:
             response_text = ""
             response_audios = []
             is_first_chunk = True
+            tool_call_records = {}  # {tool_call_id: {name, arguments, result}}
             async for audio_chunk, llm_stream_chunk, language, guradrail_name in synthesize_stream():
                 is_txn_active, active_txn = await self.is_transaction_active(request.session_id, transaction_id)
                 if not is_txn_active:
@@ -478,6 +479,16 @@ class STSPipeline:
                     break
 
                 if llm_stream_chunk.tool_call:
+                    tc = llm_stream_chunk.tool_call
+                    tc_id = tc.id or tc.name  # Use id if available, otherwise name
+                    if tc_id:
+                        # First yield: record name and arguments
+                        # Second yield: update with result (arguments still present)
+                        tool_call_records[tc_id] = {
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                            "result": tc.result.data if tc.result and tc.result.data else None
+                        }
                     yield STSResponse(
                         type="tool_call",
                         session_id=request.session_id,
@@ -506,6 +517,8 @@ class STSPipeline:
                 is_first_chunk = False
 
             performance.total_time = time() - start_time
+            if tool_call_records:
+                performance.tool_calls = json.dumps(list(tool_call_records.values()), ensure_ascii=False)
             self.performance_recorder.record(performance)
 
             final_response = STSResponse(

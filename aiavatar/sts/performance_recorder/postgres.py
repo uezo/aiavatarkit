@@ -123,6 +123,9 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
                 # Add error_info column if not exist
                 await self.add_column_if_not_exist(conn, "error_info")
 
+                # Add tool_calls column if not exist
+                await self.add_column_if_not_exist(conn, "tool_calls")
+
                 # Create index
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_created_at ON performance_records (created_at)")
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_transaction_id ON performance_records (transaction_id)")
