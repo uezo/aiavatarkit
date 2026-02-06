@@ -54,6 +54,7 @@ class STSPipeline:
         merge_request_prefix: str = "$Previous user's request and your response have been canceled. Please respond again to the following request:\n\n",
         # Japanese version
         # merge_request_prefix: str = "$直前のユーザーの要求とあなたの応答はキャンセルされました。以下の要求に対して、あらためて応答しなおしてください:\n\n"
+        min_request_text_length: int = 0,
         timestamp_interval_seconds: float = 0.0,
         timestamp_prefix: str = "$Current date and time: ",
         timestamp_timezone: str = "UTC",
@@ -160,6 +161,9 @@ class STSPipeline:
         self.merge_request_threshold = merge_request_threshold
         self.merge_request_prefix = merge_request_prefix
 
+        # Validate request (ex: text too short, invalid files)
+        self._validate_request = None
+
         # Timestamp
         self.timestamp_interval_seconds = timestamp_interval_seconds
         self.timestamp_timezone = timestamp_timezone
@@ -230,6 +234,10 @@ class STSPipeline:
             except Exception:
                 pass
         return updated
+
+    def validate_request(self, func):
+        self._validate_request = func
+        return func
 
     def on_before_llm(self, func):
         self._on_before_llm = func
@@ -337,12 +345,32 @@ class STSPipeline:
                 if not recognized_text:
                     if self.debug:
                         logger.info("No speech recognized.")
+                    yield STSResponse(
+                        type="canceled",
+                        session_id=request.session_id,
+                        user_id=request.user_id,
+                        context_id=request.context_id,
+                        metadata={"reason": "No speech recognized."}
+                    )
                     return
                 if self.debug:
                     logger.info(f"Recognized text from request: {recognized_text}")
             else:
                 recognized_text = ""    # Request without both text and audio (e.g. image only)
             request.text = recognized_text
+
+            if self._validate_request:
+                if reason := await self._validate_request(request):
+                    if self.debug:
+                        logger.info(f"Invalid request: {request.text} / reason: {reason}")
+                    yield STSResponse(
+                        type="canceled",
+                        session_id=request.session_id,
+                        user_id=request.user_id,
+                        context_id=request.context_id,
+                        metadata={"reason": reason}
+                    )
+                    return
 
             performance.request_text = request.text
             performance.request_files = json.dumps(request.files or [], ensure_ascii=False)

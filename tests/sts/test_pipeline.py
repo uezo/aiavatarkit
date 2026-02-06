@@ -953,6 +953,135 @@ async def test_invoke_queued_error_handling():
 
 
 @pytest.mark.asyncio
+async def test_validate_request_cancel():
+    """Test that validate_request cancels request when reason is returned"""
+    session_id = f"test_validate_request_cancel_{str(uuid4())}"
+
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o-mini",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        performance_recorder=SQLitePerformanceRecorder(),
+        debug=True
+    )
+
+    # Set up validator that rejects short text
+    @sts.validate_request
+    async def validate_request(request: STSRequest):
+        if len(request.text) < 5:
+            return "Text too short"
+        return None
+
+    responses = []
+    async for response in sts.invoke(STSRequest(
+        session_id=session_id,
+        user_id="test_user",
+        text="Hi"  # Too short, should be canceled
+    )):
+        responses.append(response)
+
+    # Should have a canceled response
+    canceled_responses = [r for r in responses if r.type == "canceled"]
+    assert len(canceled_responses) == 1
+    assert canceled_responses[0].metadata["reason"] == "Text too short"
+
+    # Should not have final response (LLM was not called)
+    final_responses = [r for r in responses if r.type == "final"]
+    assert len(final_responses) == 0
+
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_validate_request_pass():
+    """Test that validate_request allows request when None is returned"""
+    session_id = f"test_validate_request_pass_{str(uuid4())}"
+
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o-mini",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        performance_recorder=SQLitePerformanceRecorder(),
+        debug=True
+    )
+
+    # Set up validator that rejects short text
+    @sts.validate_request
+    async def validate_request(request: STSRequest):
+        if len(request.text) < 5:
+            return "Text too short"
+        return None
+
+    responses = []
+    async for response in sts.invoke(STSRequest(
+        session_id=session_id,
+        user_id="test_user",
+        text="Hello, this is a valid request"  # Long enough, should pass
+    )):
+        responses.append(response)
+
+    # Should not have canceled response
+    canceled_responses = [r for r in responses if r.type == "canceled"]
+    assert len(canceled_responses) == 0
+
+    # Should have final response
+    final_responses = [r for r in responses if r.type == "final"]
+    assert len(final_responses) == 1
+
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_validate_request_with_files():
+    """Test that validate_request can access files in request"""
+    session_id = f"test_validate_request_with_files_{str(uuid4())}"
+
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o-mini",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        performance_recorder=SQLitePerformanceRecorder(),
+        debug=True
+    )
+
+    # Set up validator that rejects requests with too many files
+    @sts.validate_request
+    async def validate_request(request: STSRequest):
+        if request.files and len(request.files) > 2:
+            return "Too many files"
+        return None
+
+    # Request with too many files
+    responses = []
+    async for response in sts.invoke(STSRequest(
+        session_id=session_id,
+        user_id="test_user",
+        text="Check these files",
+        files={"file1": "content1", "file2": "content2", "file3": "content3"}
+    )):
+        responses.append(response)
+
+    # Should be canceled
+    canceled_responses = [r for r in responses if r.type == "canceled"]
+    assert len(canceled_responses) == 1
+    assert canceled_responses[0].metadata["reason"] == "Too many files"
+
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_invoke_queued_multiple_sessions():
     """Test that different sessions have independent queues"""
     session_id_1 = f"test_invoke_queued_multi_1_{str(uuid4())}"
