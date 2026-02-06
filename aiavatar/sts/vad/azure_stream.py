@@ -72,6 +72,7 @@ class AzureStreamSpeechDetector(SpeechDetector):
         if on_recording_started:
             self._on_recording_started.append(on_recording_started)
         self._on_speech_detecting: Callable[[str, RecordingSession], Awaitable[None]] = None
+        self._validate_recognized_text: Callable[[str], Optional[str]] = None
 
     def get_config(self) -> dict:
         return {
@@ -197,15 +198,22 @@ class AzureStreamSpeechDetector(SpeechDetector):
                             f"[VAD_DEBUG] speech_detected: text='{evt.result.text}', "
                             f"buffer_bytes={len(recorded_data)}, duration={recorded_duration:.2f}s"
                         )
+
                     # Trigger speech detected callback with recorded audio
                     try:
+                        if self._validate_recognized_text:
+                            if validation := self._validate_recognized_text(evt.result.text):
+                                if self.debug:
+                                    logger.info(f"Invalid recognized text: {evt.result.text} / validation: {validation}")
+                                return
                         asyncio.run_coroutine_threadsafe(
                             self.execute_on_speech_detected(recorded_data, evt.result.text, None, recorded_duration, session.session_id),
                             session.event_loop
                         )
                     except Exception as ex:
                         logger.error("Error scheduling execute_on_speech_detected", exc_info=True)
-                    session.reset(reason="recognized_speech", debug=self.debug)
+                    finally:
+                        session.reset(reason="recognized_speech", debug=self.debug)
                 elif evt.result.reason == speechsdk.ResultReason.NoMatch:
                     if self.debug:
                         logger.info("[VAD_DEBUG] no_match")
@@ -260,6 +268,10 @@ class AzureStreamSpeechDetector(SpeechDetector):
 
     def on_speech_detecting(self, func):
         self._on_speech_detecting = func
+        return func
+
+    def validate_recognized_text(self, func):
+        self._validate_recognized_text = func
         return func
 
     async def execute_on_speech_detected(self, recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):

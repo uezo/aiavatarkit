@@ -345,3 +345,107 @@ def test_session_data(detector):
 
     # Cleanup
     detector.delete_session(session_id_1)
+
+
+@pytest.mark.asyncio
+async def test_validate_recognized_text_rejects_short_text(detector, stt_wav_path):
+    """
+    Test that validate_recognized_text can reject short text before pipeline processing.
+    NOTE: This test actually calls Azure's Speech-to-Text API and consumes credits.
+    """
+    validation_calls = []
+    original_detected_results = detector._detected_results
+
+    @detector.validate_recognized_text
+    def validate_text(text: str) -> str | None:
+        validation_calls.append(text)
+        # Reject all text (simulating validation failure)
+        return "Rejected for testing"
+
+    # Use validation_calls as the trigger for send_audio_and_wait_for_recognition
+    detector._detected_results = validation_calls
+    session_id = "test_validation_reject"
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    # Send audio and wait for validation to be called
+    await send_audio_and_wait_for_recognition(detector, session_id, wave_data, timeout=5.0)
+
+    # Wait a bit more for any pending callbacks
+    await asyncio.sleep(0.5)
+
+    # Validation should have been called
+    assert len(validation_calls) >= 1, "validate_recognized_text was not called"
+    assert "こんにちは" in validation_calls[0], f"Expected 'こんにちは', got: {validation_calls[0]}"
+
+    # But on_speech_detected should NOT have been called (rejected by validation)
+    assert len(original_detected_results) == 0, "on_speech_detected should not be called when validation rejects"
+
+
+@pytest.mark.asyncio
+async def test_validate_recognized_text_allows_valid_text(detector, stt_wav_path):
+    """
+    Test that validate_recognized_text allows valid text to proceed.
+    NOTE: This test actually calls Azure's Speech-to-Text API and consumes credits.
+    """
+    validation_calls = []
+
+    @detector.validate_recognized_text
+    def validate_text(text: str) -> str | None:
+        validation_calls.append(text)
+        # Allow all text (return None means valid)
+        return None
+
+    session_id = "test_validation_allow"
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    # Send audio and wait for recognition
+    await send_audio_and_wait_for_recognition(detector, session_id, wave_data)
+
+    # Validation should have been called
+    assert len(validation_calls) >= 1, "validate_recognized_text was not called"
+
+    # on_speech_detected should also have been called (validation passed)
+    assert len(detector._detected_results) >= 1, "on_speech_detected should be called when validation passes"
+    assert "こんにちは" in detector._detected_results[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_validate_recognized_text_session_reset_on_reject(detector, stt_wav_path):
+    """
+    Test that session is properly reset even when validation rejects the text.
+    NOTE: This test actually calls Azure's Speech-to-Text API and consumes credits.
+    """
+    validation_calls = []
+
+    @detector.validate_recognized_text
+    def validate_text(text: str) -> str | None:
+        validation_calls.append(text)
+        return "Rejected"
+
+    # Use validation_calls as the trigger for send_audio_and_wait_for_recognition
+    detector._detected_results = validation_calls
+    session_id = "test_reset_on_reject"
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    # Send audio and wait for validation to be called
+    await send_audio_and_wait_for_recognition(detector, session_id, wave_data, timeout=5.0)
+
+    # Wait a bit more
+    await asyncio.sleep(0.5)
+
+    # Validation should have been called
+    assert len(validation_calls) >= 1, "validate_recognized_text was not called"
+
+    # Session should be reset (buffer cleared, not recording)
+    session = detector.get_session(session_id)
+    assert session.is_recording is False, "Session should not be recording after rejection"
+    assert len(session.buffer) == 0, "Session buffer should be cleared after rejection"
