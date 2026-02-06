@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import asyncio
 from dataclasses import dataclass
 import io
 import wave
@@ -209,5 +210,31 @@ class SpeechRecognizer(ABC):
 
 
 class SpeechRecognizerDummy(SpeechRecognizer):
+    def __init__(
+        self,
+        *,
+        recognized_text: str = None,
+        wait_sec: float = 0.0,
+        language: str = None,
+        alternative_languages: List[str] = None,
+        max_connections: int = 100,
+        max_keepalive_connections: int = 20,
+        timeout: float = 10.0,
+        max_retries: int = 2,
+        debug: bool = False
+    ):
+        super().__init__(
+            language=language,
+            alternative_languages=alternative_languages,
+            max_connections=max_connections,
+            max_keepalive_connections=max_keepalive_connections,
+            timeout=timeout,
+            max_retries=max_retries,
+            debug=debug
+        )
+        self.recognized_text = recognized_text
+        self.wait_sec = wait_sec
+
     async def transcribe(self, data: bytes) -> str:
-        pass
+        await asyncio.sleep(self.wait_sec)
+        return self.recognized_text
