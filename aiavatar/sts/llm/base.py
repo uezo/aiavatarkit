@@ -554,3 +554,98 @@ The list of tools is as follows:
                 messages[message_length_at_start - len(messages):],
                 response_text.strip(),
             )
+
+
+class LLMServiceDummy(LLMService):
+    def __init__(
+        self,
+        *,
+        response_text: str = None,
+        wait_sec: float = 0.0,
+        system_prompt: str = None,
+        model: str = None,
+        temperature: float = 0.5,
+        initial_messages: List[dict] = None,
+        split_chars: List[str] = None,
+        option_split_chars: List[str] = None,
+        option_split_threshold: int = 50,
+        split_on_control_tags: bool = True,
+        voice_text_tag: str = None,
+        use_dynamic_tools: bool = False,
+        context_manager: ContextManager = None,
+        shared_context_ids: List[str] = None,
+        guardrails: List[Guardrail] = None,
+        db_connection_str: str = "aiavatar.db",
+        debug: bool = False
+    ):
+        super().__init__(
+            system_prompt=system_prompt,
+            model=model,
+            temperature=temperature,
+            initial_messages=initial_messages,
+            split_chars=split_chars,
+            option_split_chars=option_split_chars,
+            option_split_threshold=option_split_threshold,
+            split_on_control_tags=split_on_control_tags,
+            voice_text_tag=voice_text_tag,
+            use_dynamic_tools=use_dynamic_tools,
+            context_manager=context_manager,
+            shared_context_ids=shared_context_ids,
+            db_connection_str=db_connection_str,
+            debug=debug
+        )
+        self.response_text = response_text
+        self.wait_sec = wait_sec
+
+    @property
+    def dynamic_tool_name(self) -> str:
+        return "dummy_tool"
+
+
+    async def compose_messages(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
+        messages = []
+        if system_prompt := await self._get_system_prompt(context_id, user_id, system_prompt_params):
+            messages.append({"role": "system", "content": system_prompt})
+
+        # Add initial messages (e.g. few-shot)
+        if self.initial_messages:
+            messages.extend(self.initial_messages)
+
+        # Extract the history starting from the first message where the role is 'user'
+        histories = await self.context_manager.get_histories(
+            context_id=[context_id] + self.shared_context_ids if self.shared_context_ids else context_id
+        )
+        while histories and histories[0]["role"] != "user":
+            histories.pop(0)
+        messages.extend(histories)
+
+        if files:
+            content = []
+            for f in files:
+                if url := f.get("url"):
+                    content.append({"type": "image_url", "image_url": {"url": url}})
+            if text:
+                content.append({"type": "text", "text": text})
+        else:
+            content = text
+        messages.append({"role": "user", "content": content})
+
+        return messages
+
+    async def update_context(self, context_id: str, user_id: str, messages: List[Dict], response_text: str):
+        if self._update_context_filter:
+            if isinstance(messages[0]["content"], list):
+                if "text" in messages[0]["content"][-1]:
+                    messages[0]["content"][-1]["text"] = self._update_context_filter(messages[0]["content"][-1]["text"])
+            elif isinstance(messages[0]["content"], str):
+                messages[0]["content"] = self._update_context_filter(messages[0]["content"])
+        messages.append({"role": "assistant", "content": response_text})
+        await self.context_manager.add_histories(context_id, messages, "dummy")
+
+    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[Dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None) -> AsyncGenerator[LLMResponse, None]:
+        await asyncio.sleep(self.wait_sec)
+        yield LLMResponse(
+            context_id=context_id,
+            text=self.response_text,
+            voice_text=self.remove_control_tags(self.response_text)
+        )

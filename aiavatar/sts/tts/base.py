@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import asyncio
 from typing import Dict, List, Callable, Optional
 import inspect
 import httpx
@@ -91,8 +92,33 @@ class SpeechSynthesizer(ABC):
 
 
 class SpeechSynthesizerDummy(SpeechSynthesizer):
+    def __init__(
+        self,
+        *,
+        synthesized_bytes: bytes = None,
+        wait_sec: float = 0.0,
+        style_mapper: Dict[str, str] = None,
+        max_connections: int = 100,
+        max_keepalive_connections: int = 20,
+        timeout: float = 10.0,
+        preprocessors: List[TTSPreprocessor] = None,
+        follow_redirects: bool = False,
+        debug: bool = False
+    ):
+        super().__init__(
+            style_mapper=style_mapper,
+            max_connections=max_connections,
+            max_keepalive_connections=max_keepalive_connections,
+            timeout=timeout,
+            preprocessors=preprocessors,
+            debug=debug
+        )
+        self.synthesized_bytes = synthesized_bytes
+        self.wait_sec = wait_sec
+
     async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
-        return None
+        await asyncio.sleep(self.wait_sec)
+        return self.synthesized_bytes
 
 
 def create_instant_synthesizer(
