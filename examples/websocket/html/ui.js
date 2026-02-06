@@ -232,7 +232,7 @@ class AvatarUI {
             if (response.metadata && response.metadata.block_barge_in) {
                 this.isBargeInBlocked = true;
             }
-        } else if (response.type === "final" || response.type === "error") {
+        } else if (response.type === "final" || response.type === "canceled" || response.type === "error") {
             this.isServerProcessing = false;
         }
 
