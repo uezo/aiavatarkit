@@ -559,7 +559,7 @@ class STSPipeline:
                 user_id=request.user_id,
                 context_id=request.context_id,
                 text=response_text,
-                voice_text=performance.response_voice_text
+                voice_text=performance.response_voice_text or ""
             )
 
             if self.voice_recorder_enabled:
