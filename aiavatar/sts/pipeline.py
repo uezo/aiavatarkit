@@ -267,7 +267,7 @@ class STSPipeline:
         self._process_llm_chunk = func
         return func
 
-    async def process_llm_chunk_default(self, response: STSResponse):
+    async def process_llm_chunk_default(self, llm_stream_chunk: LLMResponse, session_id: str, user_id: str):
         return {}
 
     async def handle_response_default(self, response: STSResponse):
@@ -478,11 +478,15 @@ class STSPipeline:
                         language = match.group(1)
 
                     # Parse style info from LLM chunk
-                    parsed_info = await self._process_llm_chunk(llm_stream_chunk)
+                    parsed_info = await self._process_llm_chunk(
+                        llm_stream_chunk,
+                        request.session_id,
+                        request.user_id,
+                    )
 
                     audio_chunk = await self.tts.synthesize(
                         text=llm_stream_chunk.voice_text,
-                        style_info={"styled_text": llm_stream_chunk.text, "info": parsed_info},
+                        style_info={"styled_text": llm_stream_chunk.text, "info": parsed_info or {}},
                         language=language
                     )
 

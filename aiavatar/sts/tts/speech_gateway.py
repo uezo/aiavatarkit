@@ -70,7 +70,14 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
         # Apply style
         if style := self.parse_style(style_info):
             request_json["style"] = style
-            logger.info(f"Apply style: {style}")
+            if self.debug:
+                logger.info(f"Apply style: {style}")
+
+        # Apply speed
+        if speed := style_info.get("info", {}).get("speed"):
+            request_json["speed"] = speed
+            if self.debug:
+                logger.info(f"Apply speed: {speed}")
 
         # Apply language
         if language and language != "ja-JP":
