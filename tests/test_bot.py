@@ -230,12 +230,14 @@ async def test_chat_wakeword(aiavatar_app: AIAvatar):
 
         # Start chat
         response = await chat(aiavatar_app, text="こんにちは、元気？", session_id=session_id)
-        assert "こんにちは" in response.text
+        resp_text = response.text
+        assert "こんにちは" in resp_text
         context_id = response.context_id
 
         # Continue chat not by wakeword
         response = await chat(aiavatar_app, text="寿司とラーメンどっちが好き？", session_id=session_id, context_id=context_id)
-        assert "寿司" in response.text or "ラーメン" in response.text
+        resp_text = response.text
+        assert "寿司" in resp_text or "ラーメン" in resp_text
 
         # Wait for wakeword timeout
         await asyncio.sleep(10)
