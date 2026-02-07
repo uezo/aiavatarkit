@@ -18,14 +18,11 @@
 - **⚡️ AI Agent native**: Designed to support agentic systems. In addition to standard tool calls, it offers Dynamic Tool Calls for extensibility and supports progress feedback for high-latency operations.
 
 
-## 🍩 Requirements
-
-- VOICEVOX API in your computer or network reachable machine (Text-to-Speech)
-- API key for OpenAI API (ChatGPT and Speech-to-Text)
-- Python 3.10 (Runtime)
-
-
 ## 🚀 Quick start
+
+**Requirements**: Python 3.11+, OpenAI API key, and a running VOICEVOX instance for TTS
+
+### 📺 Local (Console)
 
 Install AIAvatarKit.
 
@@ -60,32 +57,56 @@ Conversation will start when you say the wake word "こんにちは" (or "Hello"
 Feel free to enjoy the conversation afterwards!
 
 
-## 🔄 Migration Guide: From v0.6.x to v0.7.0
+### 🌐 WebSocket (Browser)
 
-In version **v0.7.0**, the internal Speech-to-Speech pipeline previously provided by the external `LiteSTS` library has been fully integrated into AIAvatarKit.
+Install AIAvatarKit and additional dependencies.
 
-### What Changed?
-
-- The functionality remains the same — **no API behavior changes**.
-- However, **import paths have been updated**.
-
-### 🔧 Required Changes
-
-All imports from `litests` should now be updated to `aiavatar.sts`.
-
-For example:
-
-```python
-# Before
-from litests import STSRequest, STSResponse
-from litests.llm.chatgpt import ChatGPTService
-
-# After
-from aiavatar.sts import STSRequest, STSResponse
-from aiavatar.sts.llm.chatgpt import ChatGPTService
+```sh
+pip install aiavatar fastapi uvicorn websockets
 ```
 
-This change ensures compatibility with the new internal structure and removes the need for `LiteSTS` as a separate dependency.
+Download the example UI.
+
+```sh
+curl -L https://github.com/uezo/aiavatarkit/archive/refs/heads/main.tar.gz \
+  | tar xz --strip-components=3 aiavatarkit-main/examples/websocket/html
+```
+
+Make the script as `ws.py`.
+
+```python
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer
+
+# Build Speech-to-Speech pipeline with WebSocket adapter
+aiavatar_app = AIAvatarWebSocketServer(
+    openai_api_key=OPENAI_API_KEY
+)
+
+# Build websocket server
+app = FastAPI()
+router = aiavatar_app.get_websocket_router()
+app.include_router(router)
+app.mount("/static", StaticFiles(directory="html"), name="static")
+
+# Setup admin panel (Optional)
+from aiavatar.admin import setup_admin_panel
+setup_admin_panel(app, adapter=aiavatar_app)
+```
+
+Start server. Also, don't forget to launch VOICEVOX beforehand.
+
+```bash
+$ python -m uvicorn ws:app
+```
+
+Open following URLs and enjoy the conversation!
+
+- Character icon (dynamic expression, lip sync, blinking): http://127.0.0.1:8000/static/index.html
+- MotionPNGTuber: http://127.0.0.1:8000/static/mpt.html
+
+You can also access the Admin Panel at http://127.0.0.1:8000/admin.
 
 
 ## 🔖 Contents
@@ -155,7 +176,9 @@ This change ensures compatibility with the new internal structure and removes th
     - [🧺 Shared Context](#-shared-context)
     - [🔈 Audio Device](#-audio-device)
     - [🎭 Custom Behavior](#-custom-behavior)
+    - [✅ Request Validation](#-request-validation)
     - [🎚️ Noise Filter](#%EF%B8%8F-noise-filter)
+    - [🔄 Migration Guide: From v0.6.x to v0.7.0](#-migration-guide-from-v06x-to-v070)
 
 
 ## 🎓 Generative AI
@@ -567,6 +590,25 @@ tts.preprocessors.extend([
     custom_preproc          # 3. Custom conversion
 ])
 ```
+
+
+### Adjusting Speech Speed
+
+With `SpeechGatewaySpeechSynthesizer`, you can change the speech speed per session by setting the speed either on the entire instance or in `style_info`.
+
+Here is an example of storing the speech speed as `tts_speed` in session data when using WebSocketAdapter.
+
+```python
+# Apply speech speed per session
+from aiavatar.sts.llm import LLMResponse
+@aiavatar_app.sts.process_llm_chunk
+async def process_llm_chunk(llm_stream_chunk: LLMResponse, session_id: str, user_id: str) -> dict:
+    if session_data := aiavatar_app.sessions.get(session_id):
+        if speed := session_data.data.get("tts_speed"):
+            return {"speed": float(speed)}
+```
+
+NOTE: To configure `tts_speed`, you can either set up a REST API endpoint to update it directly, or use control tags included in responses to update it.
 
 
 ## 👂 Speech listener
@@ -2671,6 +2713,65 @@ async def on_chunk_response(response):
 ```
 
 
+### ✅ Request Validation
+
+You can filter out unwanted requests before they reach the LLM by implementing a `validate_request` hook. Return a reason string to cancel the request, or `None` to proceed.
+
+```python
+from aiavatar.sts.models import STSRequest
+
+@aiavatar_app.sts.validate_request
+async def validate_request(request: STSRequest):
+    # Reject text that is too short
+    if len(request.text) < 3:
+        return "Text too short"
+
+    # Reject requests with too many files
+    if request.files and len(request.files) > 5:
+        return "Too many files attached"
+
+    # Reject specific users
+    if request.user_id == "blocked_user":
+        return "User is blocked"
+
+    return None  # Proceed with the request
+```
+
+This is useful for:
+- Filtering out noise or accidental triggers (e.g., coughs, short utterances)
+- Limiting file attachments
+- Implementing user-based access control
+- Any custom validation logic based on `STSRequest` fields
+
+#### Early Validation with AzureStreamSpeechDetector
+
+When using `AzureStreamSpeechDetector`, you can validate recognized text even earlier—before the STS pipeline is invoked. This is more efficient for filtering out short or invalid utterances since it skips the entire pipeline processing.
+
+```python
+from aiavatar.sts.vad.azure_stream import AzureStreamSpeechDetector
+
+speech_detector = AzureStreamSpeechDetector(
+    azure_subscription_key=AZURE_SUBSCRIPTION_KEY,
+    azure_region=AZURE_REGION,
+    azure_language="ja-JP",
+)
+
+@speech_detector.validate_recognized_text
+def validate_recognized_text(text: str) -> str | None:
+    # Reject text that is too short
+    if len(text) < 3:
+        return "Text too short"
+
+    # Reject specific patterns (e.g., filler words)
+    if text in ["えーと", "あの", "うーん"]:
+        return "Filler word detected"
+
+    return None  # Proceed with the request
+```
+
+Note: This decorator uses a synchronous function (not `async`) because it runs within the Azure Speech SDK's callback thread.
+
+
 ### 🎚️ Noise Filter
 
 AIAvatarKit automatically adjusts the noise filter for listeners when you instantiate an AIAvatar object. To manually set the noise filter level for voice detection, set `auto_noise_filter_threshold` to `False` and specify the `volume_threshold_db` in decibels (dB).
@@ -2682,3 +2783,31 @@ aiavatar_app = AIAvatar(
     volume_threshold_db=-40   # Set the voice detection threshold to -40 dB
 )
 ```
+
+
+### 🔄 Migration Guide: From v0.6.x to v0.7.0
+
+In version **v0.7.0**, the internal Speech-to-Speech pipeline previously provided by the external `LiteSTS` library has been fully integrated into AIAvatarKit.
+
+### What Changed?
+
+- The functionality remains the same — **no API behavior changes**.
+- However, **import paths have been updated**.
+
+### 🔧 Required Changes
+
+All imports from `litests` should now be updated to `aiavatar.sts`.
+
+For example:
+
+```python
+# Before
+from litests import STSRequest, STSResponse
+from litests.llm.chatgpt import ChatGPTService
+
+# After
+from aiavatar.sts import STSRequest, STSResponse
+from aiavatar.sts.llm.chatgpt import ChatGPTService
+```
+
+This change ensures compatibility with the new internal structure and removes the need for `LiteSTS` as a separate dependency.
