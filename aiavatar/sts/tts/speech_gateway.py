@@ -3,6 +3,13 @@ from typing import Dict, List
 from . import SpeechSynthesizer
 from .preprocessor import TTSPreprocessor
 
+try:
+    from speech_gateway.gateway.unified import UnifiedGateway
+    from speech_gateway.gateway import UnifiedTTSRequest
+except ImportError:
+    UnifiedGateway = None
+    UnifiedTTSRequest = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -16,6 +23,7 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
         style_mapper: Dict[str, str] = None,
         tts_url: str = "http://127.0.0.1:8000/tts",
         audio_format: str = None,
+        use_local_gateway: bool = False,
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
@@ -35,6 +43,16 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
         self.speed = speed
         self.tts_url = tts_url
         self.audio_format = audio_format
+        self.use_local_gateway = use_local_gateway
+        if self.use_local_gateway:
+            if UnifiedGateway is None:
+                raise ImportError(
+                    "speech_gateway is required for use_local_gateway=True. "
+                    "Install it with: pip install speech-gateway"
+                )
+            self.unified_gateway = UnifiedGateway()
+        else:
+            self.unified_gateway = None
 
     def get_config(self) -> dict:
         config = super().get_config()
@@ -55,9 +73,6 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
         # Preprocess
         processed_text = await self.preprocess(text, style_info, language)
 
-        # Audio format
-        query_params = {"x_audio_format": self.audio_format} if self.audio_format else {}
-
         # Make basic params
         request_json = {"text": processed_text}
         if self.service_name:
@@ -74,7 +89,7 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
                 logger.info(f"Apply style: {style}")
 
         # Apply speed
-        if speed := style_info.get("info", {}).get("speed"):
+        if speed := (style_info or {}).get("info", {}).get("speed"):
             request_json["speed"] = speed
             if self.debug:
                 logger.info(f"Apply speed: {speed}")
@@ -86,11 +101,21 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
             del request_json["service_name"]
             del request_json["speaker"]
 
-        # Synthesize
-        resp = await self.http_client.post(
-            url=self.tts_url,
-            params=query_params,
-            json=request_json
-        )
+        # Apply audio format
+        if self.audio_format:
+            request_json["audio_format"] = self.audio_format
+            if self.debug:
+                logger.info(f"Apply audio format: {self.audio_format}")
 
-        return resp.content
+        # Synthesize
+        if self.use_local_gateway:
+            resp = await self.unified_gateway.tts(
+                UnifiedTTSRequest(**request_json)
+            )
+            return resp.audio_data
+        else:
+            resp = await self.http_client.post(
+                url=self.tts_url,
+                json=request_json
+            )
+            return resp.content
