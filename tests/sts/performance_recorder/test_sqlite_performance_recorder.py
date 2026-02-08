@@ -207,7 +207,7 @@ def test_init_db_creates_indexes(recorder, db_path):
 
 def test_default_db_path():
     """Test using default database path"""
-    default_path = "performance.db"
+    default_path = "aiavatar.db"
     recorder = SQLitePerformanceRecorder()
 
     try:

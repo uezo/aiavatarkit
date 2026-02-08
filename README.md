@@ -1698,6 +1698,18 @@ The admin panel includes:
 - **Evaluation** — Run dialog evaluation scenarios
 - **Character** — Manage character info, weekly schedule, daily schedules, diaries, and users (requires `character_service`)
 
+To protect the admin panel with Basic authentication:
+
+```python
+setup_admin_panel(
+    app,
+    adapter=aiavatar_app,
+    api_key="your-api-key",
+    basic_auth_username="admin",
+    basic_auth_password="your-password",
+)
+```
+
 You can also supply your own HTML to fully customize the admin page:
 
 ```python
