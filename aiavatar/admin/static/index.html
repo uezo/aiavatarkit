@@ -1187,7 +1187,7 @@ createApp({
     };
 
     // API helper
-    const apiBase = window.location.origin;
+    const apiBase = window.location.origin + window.location.pathname.replace(/\/admin\/?$/, '');
     const apiFetch = async (path, options = {}) => {
       const headers = { 'Content-Type': 'application/json', ...options.headers };
       if (apiKey.value) {

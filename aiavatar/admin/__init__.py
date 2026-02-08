@@ -1,7 +1,9 @@
+import base64
 from pathlib import Path
+import secrets
 from typing import Optional
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, Response
 from .character import setup_character_api
 from .config import setup_config_api, _adapter_key
 from .control import setup_control_api
@@ -36,6 +38,40 @@ def _setup_admin_html(app: FastAPI, *, title: str = "AIAvatarKit Admin Panel", h
         return default_html.replace("{{ADMIN_TITLE}}", title)
 
 
+def _setup_admin_basic_auth(app: FastAPI, *, username: str, password: str, path_prefix: str = "/admin"):
+    @app.middleware("http")
+    async def admin_basic_auth(request: Request, call_next):
+        if request.url.path.startswith(path_prefix):
+            auth_header = request.headers.get("Authorization")
+            if auth_header is None or not auth_header.startswith("Basic "):
+                return Response(
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Basic realm='Admin'"},
+                    content="Unauthorized"
+                )
+
+            try:
+                encoded = auth_header.split(" ")[1]
+                decoded = base64.b64decode(encoded).decode("utf-8")
+                req_username, req_password = decoded.split(":", 1)
+
+                if not (secrets.compare_digest(req_username, username) and
+                        secrets.compare_digest(req_password, password)):
+                    return Response(
+                        status_code=401,
+                        headers={"WWW-Authenticate": "Basic realm='Admin'"},
+                        content="Invalid credentials"
+                    )
+            except Exception:
+                return Response(
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Basic realm='Admin'"},
+                    content="Invalid credentials"
+                )
+
+        return await call_next(request)
+
+
 def setup_admin_panel(
     app: FastAPI,
     *,
@@ -47,6 +83,8 @@ def setup_admin_panel(
     character_id: str = None,
     default_session_id: str = None,
     api_key: str = None,
+    basic_auth_username: str = None,
+    basic_auth_password: str = None,
 ) -> AdminPanel:
     """Convenience function to set up the full admin panel.
 
@@ -61,10 +99,16 @@ def setup_admin_panel(
         character_id: Character ID for character tab (required if character_service is set)
         default_session_id: Default session ID for control API
         api_key: API key for all admin endpoints
+        basic_auth_username: Username for Basic authentication (requires basic_auth_password)
+        basic_auth_password: Password for Basic authentication (requires basic_auth_username)
 
     Returns:
         AdminPanel instance for post-setup configuration (e.g. add_adapter)
     """
+    # Basic auth middleware (must be registered before routes)
+    if basic_auth_username and basic_auth_password:
+        _setup_admin_basic_auth(app, username=basic_auth_username, password=basic_auth_password)
+
     # Admin HTML page
     _setup_admin_html(app, title=title, html=html)
 
