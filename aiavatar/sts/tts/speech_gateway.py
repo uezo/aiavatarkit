@@ -4,6 +4,7 @@ from . import SpeechSynthesizer
 from .preprocessor import TTSPreprocessor
 
 try:
+    from speech_gateway.gateway import SpeechGateway
     from speech_gateway.gateway.unified import UnifiedGateway
     from speech_gateway.gateway import UnifiedTTSRequest
 except ImportError:
@@ -62,6 +63,25 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
         config["tts_url"] = self.tts_url
         config["audio_format"] = self.audio_format
         return config
+
+    def add_local_gateway(
+        self, name: str,
+        gateway,
+        *,
+        speaker: str = None,
+        languages: List[str] = None,
+        default: bool = False
+    ):
+        if not self.unified_gateway:
+            self.unified_gateway = UnifiedGateway()
+        self.unified_gateway.add_gateway(
+            name, gateway,
+            languages=languages,
+            default_speaker=speaker
+        )
+        if default:
+            self.service_name = name
+            self.speaker = speaker
 
     async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
         if not text or not text.strip():
