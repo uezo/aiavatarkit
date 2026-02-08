@@ -50,7 +50,7 @@ class SessionStateManager(ABC):
 
 
 class SQLiteSessionStateManager(SessionStateManager):
-    def __init__(self, db_path: str = "session_state.db", session_timeout: float = 3600, cache_ttl: float = 60):
+    def __init__(self, db_path: str = "aiavatar.db", session_timeout: float = 3600, cache_ttl: float = 60):
         self.db_path = db_path
         self.session_timeout = session_timeout
         self.cache_ttl = cache_ttl  # Cache TTL in seconds

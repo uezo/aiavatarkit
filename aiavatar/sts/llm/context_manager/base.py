@@ -23,7 +23,7 @@ class ContextManager(ABC):
 
 
 class SQLiteContextManager(ContextManager):
-    def __init__(self, db_path="context.db", context_timeout=3600):
+    def __init__(self, db_path="aiavatar.db", context_timeout=3600):
         self.db_path = db_path
         self.context_timeout = context_timeout
         self.init_db()
