@@ -7,7 +7,7 @@ from . import PerformanceRecorder, PerformanceRecord
 
 
 class SQLitePerformanceRecorder(PerformanceRecorder):
-    def __init__(self, db_path="performance.db"):
+    def __init__(self, db_path="aiavatar.db"):
         self.db_path = db_path
         self.record_queue = queue.Queue()
         self.stop_event = threading.Event()
