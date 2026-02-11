@@ -78,6 +78,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
         self.on_recording_started_min_text_length = on_recording_started_min_text_length
         self.recording_sessions: Dict[str, RecordingSession] = {}
         self._on_speech_detecting: Optional[Callable[[str, RecordingSession], Awaitable[None]]] = None
+        self._on_speech_recognition_error: Optional[Callable[[Exception, str], Awaitable[None]]] = None
         self._validate_recognized_text: Optional[Callable[[str], Optional[str]]] = None
 
     def on_speech_detecting(self, func: Callable[[str, RecordingSession], Awaitable[None]]):
@@ -86,6 +87,10 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
 
     def validate_recognized_text(self, func: Callable[[str], Optional[str]]):
         self._validate_recognized_text = func
+        return func
+
+    def on_speech_recognition_error(self, func: Callable[[Exception, str], Awaitable[None]]):
+        self._on_speech_recognition_error = func
         return func
 
     async def execute_on_speech_detected(self, recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
@@ -185,6 +190,11 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                             await self._check_and_trigger_recording_started(sess)
                     except Exception as ex:
                         logger.error("Error in segment recognition", exc_info=True)
+                        if self._on_speech_recognition_error:
+                            try:
+                                await self._on_speech_recognition_error(ex, sess.session_id)
+                            except Exception as callback_ex:
+                                logger.error(f"Error in on_speech_recognition_error callback: {callback_ex}", exc_info=True)
                 session.pending_recognition_task = asyncio.create_task(_run_segment_recognition(segment_data, session, current_seq))
 
             # Check on_recording_started trigger condition (without text, duration-based only)
@@ -215,6 +225,11 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                             final_text = result.text
                         except Exception as ex:
                             logger.error("Error in final recognition", exc_info=True)
+                            if self._on_speech_recognition_error:
+                                try:
+                                    await self._on_speech_recognition_error(ex, session.session_id)
+                                except Exception as callback_ex:
+                                    logger.error(f"Error in on_speech_recognition_error callback: {callback_ex}", exc_info=True)
 
                     if final_text:
                         if self._validate_recognized_text:
