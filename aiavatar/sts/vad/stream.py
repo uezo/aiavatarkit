@@ -248,7 +248,30 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
 
             elif session.record_duration >= self.max_duration:
                 if self.debug:
-                    logger.info(f"Recording too long: {session.record_duration} sec")
+                    logger.info(f"Recording max duration reached: {session.record_duration} sec")
+
+                # Wait for pending recognition task to complete
+                if session.pending_recognition_task is not None:
+                    try:
+                        await session.pending_recognition_task
+                    except Exception as ex:
+                        logger.error("Error waiting for pending recognition", exc_info=True)
+
+                # Use last recognized text if available
+                final_text = session.last_recognized_text
+                if final_text:
+                    if self._validate_recognized_text:
+                        if validation := self._validate_recognized_text(final_text):
+                            if self.debug:
+                                logger.info(f"Invalid recognized text: {final_text} / validation: {validation}")
+                            session.reset()
+                            return session.is_recording
+
+                    recorded_data = bytes(session.buffer)
+                    asyncio.create_task(self.execute_on_speech_detected(recorded_data, final_text, None, session.record_duration, session.session_id))
+                else:
+                    if self.debug:
+                        logger.info("No text recognized at max duration, skipping")
                 session.reset()
 
         return session.is_recording

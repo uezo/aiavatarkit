@@ -142,7 +142,9 @@ class StandardSpeechDetector(SpeechDetector):
 
             elif session.record_duration >= self.max_duration:
                 if self.debug:
-                    logger.info(f"Recording too long: {session.record_duration} sec")
+                    logger.info(f"Recording max duration reached: {session.record_duration} sec")
+                recorded_data = bytes(session.buffer)
+                asyncio.create_task(self.execute_on_speech_detected(recorded_data, session.record_duration, session.session_id))
                 session.reset()
         
         return session.is_recording

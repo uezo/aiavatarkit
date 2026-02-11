@@ -100,10 +100,9 @@ async def test_process_samples_short_recording(detector, test_output_dir):
 @pytest.mark.asyncio
 async def test_process_samples_max_duration(detector, test_output_dir):
     """
-    Verify that when sound continues beyond max_duration (3 seconds), 
-    recording is automatically stopped, and on_speech_detected is not called. 
-    In the default implementation, recording is reset() when max_duration is exceeded, 
-    and data is discarded.
+    Verify that when sound continues beyond max_duration (3 seconds),
+    recording is automatically stopped, and on_speech_detected is called
+    with the recorded data up to max_duration.
     """
     session_id = "test_max_duration"
 
@@ -124,8 +123,11 @@ async def test_process_samples_max_duration(detector, test_output_dir):
 
     await asyncio.sleep(0.2)
 
+    # on_speech_detected should be called with recorded data when max_duration is reached
     output_file = test_output_dir / f"speech_{session_id}.pcm"
-    assert not output_file.exists(), "File exists even the samples is as long as max_duration"
+    assert output_file.exists(), "File should exist when max_duration is reached"
+    file_size = output_file.stat().st_size
+    assert file_size > 0, "Recorded file should contain data"
 
 
 @pytest.mark.asyncio
