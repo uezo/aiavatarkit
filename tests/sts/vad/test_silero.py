@@ -691,13 +691,21 @@ async def test_process_samples_return_value_when_muted(detector, stt_wav_path):
 async def test_process_samples_max_duration(stt_wav_path):
     """
     Verify that when sound continues beyond max_duration,
-    recording is automatically stopped and on_speech_detected is not called.
+    recording is automatically stopped and on_speech_detected is called
+    with the recorded data up to max_duration.
     Uses extended audio data by repeating the middle portion of the WAV file
-    to avoid gaps caused by silence at the beginning/end.
+    to simulate continuous speech.
     """
     detector = SileroSpeechDetector(
-        silence_duration_threshold=0.5,
-        max_duration=3.0,  # 3 seconds max
+        # NOTE: Using 0.5000...28 instead of 0.5 due to floating-point accumulation error.
+        # silence_duration is accumulated by adding 0.1 sec per chunk (3200 bytes / 2 / 16000 Hz).
+        # In Python: 0.1 + 0.1 + 0.1 + 0.1 + 0.1 = 0.5000000000000001 (not exactly 0.5)
+        # This is because 0.1 cannot be represented exactly in binary floating-point.
+        # If threshold is exactly 0.5, the condition (0.5000000000000001 >= 0.5) becomes True
+        # after 5 chunks of silence, causing recording to stop before max_duration is reached.
+        # Using this precise value ensures silence detection doesn't trigger prematurely.
+        silence_duration_threshold=0.500000000000000055511151231257828,
+        max_duration=3.0,
         min_duration=0.2,
         sample_rate=16000,
         channels=1,
@@ -713,6 +721,7 @@ async def test_process_samples_max_duration(stt_wav_path):
     @detector.on_speech_detected
     async def on_speech_detected(recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
         detected_results.append({
+            "data": recorded_data,
             "duration": recorded_duration,
             "session_id": session_id
         })
@@ -723,13 +732,13 @@ async def test_process_samples_max_duration(stt_wav_path):
     with wave.open(str(stt_wav_path), 'rb') as wav_file:
         wave_data = wav_file.readframes(wav_file.getnframes())
 
-    # Extract middle portion of audio (skip first and last 0.5 sec to avoid silence)
+    # Extract middle portion of audio (skip first and last 0.5 sec to avoid silence at boundaries)
     # 16000 samples/sec * 2 bytes * 0.5 sec = 16000 bytes
     skip_bytes = 16000
     middle_portion = wave_data[skip_bytes:-skip_bytes] if len(wave_data) > skip_bytes * 2 else wave_data
 
-    # Repeat the middle portion to create ~10 seconds of continuous speech
-    extended_wave_data = extend_audio(middle_portion, 5)
+    # Repeat the middle portion to create continuous speech that exceeds max_duration
+    extended_wave_data = extend_audio(middle_portion, 10)
 
     chunk_size = 3200
 
@@ -739,13 +748,20 @@ async def test_process_samples_max_duration(stt_wav_path):
     for i in range(0, len(extended_wave_data), chunk_size):
         chunk = extended_wave_data[i:i + chunk_size]
         if chunk:
-            was_recording = detector.get_session(session_id).is_recording
+            session = detector.get_session(session_id)
+            was_recording = session.is_recording
+            record_duration_before = session.record_duration
             is_recording = await detector.process_samples(chunk, session_id)
+
             if is_recording:
                 recording_was_active = True
-            # Check if recording was stopped due to max_duration (was recording, now not, no silence sent)
-            if was_recording and not is_recording and detector.get_session(session_id).record_duration == 0:
-                max_duration_exceeded = True
+
+            # Check if recording was stopped due to max_duration
+            if was_recording and not is_recording:
+                chunk_duration = (len(chunk) / 2) / detector.sample_rate
+                estimated_record_duration_at_stop = record_duration_before + chunk_duration
+                if estimated_record_duration_at_stop >= detector.max_duration - 0.01:
+                    max_duration_exceeded = True
                 break
             await asyncio.sleep(0.01)
 
@@ -755,10 +771,15 @@ async def test_process_samples_max_duration(stt_wav_path):
     # Recording should have been stopped due to max_duration
     assert max_duration_exceeded is True, "Recording should have been stopped due to max_duration"
 
+    # Wait for async task to complete
     await asyncio.sleep(0.3)
 
-    # on_speech_detected should NOT have been called (exceeded max_duration)
-    assert len(detected_results) == 0, "on_speech_detected should not be called when max_duration is exceeded"
+    # on_speech_detected should be called with recorded data when max_duration is reached
+    assert len(detected_results) >= 1, "on_speech_detected should be called when max_duration is reached"
+    result = detected_results[0]
+    assert result["session_id"] == session_id
+    assert result["duration"] >= detector.max_duration - 0.01, f"Duration should be >= max_duration, got {result['duration']}"
+    assert len(result["data"]) > 0, "Recorded data should not be empty"
 
     # Cleanup
     detector.delete_session(session_id)

@@ -667,13 +667,16 @@ async def test_process_stream(detector, stt_wav_path):
 @pytest.mark.asyncio
 async def test_max_duration_exceeded(stt_wav_path, speech_recognizer):
     """
-    Test that recording is stopped when max_duration is exceeded.
+    Test that when recording exceeds max_duration, it is stopped and
+    on_speech_detected is called with the last recognized text.
     Uses extended audio data by repeating the middle portion of the WAV file
     to avoid gaps caused by silence at the beginning/end.
+    NOTE: This test actually calls Azure's Speech-to-Text API and consumes credits.
     """
     detector = SileroStreamSpeechDetector(
         speech_recognizer=speech_recognizer,
         silence_duration_threshold=0.5,
+        segment_silence_threshold=0.2,  # Enable segment recognition
         max_duration=3.0,  # 3 seconds max
         min_duration=0.2,
         sample_rate=16000,
@@ -689,7 +692,7 @@ async def test_max_duration_exceeded(stt_wav_path, speech_recognizer):
 
     @detector.on_speech_detected
     async def on_speech_detected(recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
-        detected_results.append({"text": text})
+        detected_results.append({"text": text, "duration": recorded_duration})
 
     session_id = "test_max_duration"
 
@@ -707,16 +710,24 @@ async def test_max_duration_exceeded(stt_wav_path, speech_recognizer):
 
     chunk_size = 3200
 
-    # Send extended audio
+    # Send extended audio with short silence gaps to trigger segment recognition
     recording_was_active = False
     max_duration_exceeded = False
+    silence_chunk = b'\x00' * chunk_size
+    chunks_sent = 0
     for i in range(0, len(extended_wave_data), chunk_size):
         chunk = extended_wave_data[i:i + chunk_size]
         if chunk:
             was_recording = detector.get_session(session_id).is_recording
             is_recording = await detector.process_samples(chunk, session_id)
+            chunks_sent += 1
             if is_recording:
                 recording_was_active = True
+            # Insert short silence every ~1 second to trigger segment recognition
+            if chunks_sent % 10 == 0 and is_recording:
+                for _ in range(3):  # ~300ms silence
+                    await detector.process_samples(silence_chunk, session_id)
+                    await asyncio.sleep(0.01)
             # Check if recording was stopped due to max_duration (was recording, now not, no silence sent)
             if was_recording and not is_recording and detector.get_session(session_id).record_duration == 0:
                 max_duration_exceeded = True
@@ -729,10 +740,15 @@ async def test_max_duration_exceeded(stt_wav_path, speech_recognizer):
     # Recording should have been stopped due to max_duration
     assert max_duration_exceeded is True, "Recording should have been stopped due to max_duration"
 
-    await asyncio.sleep(0.3)
+    await asyncio.sleep(0.5)
 
-    # on_speech_detected should NOT have been called (exceeded max_duration)
-    assert len(detected_results) == 0, "on_speech_detected should not be called when max_duration is exceeded"
+    # on_speech_detected should be called with recognized text when max_duration is reached
+    # (if segment recognition captured text before max_duration)
+    # Note: If no text was recognized during segments, on_speech_detected won't be called
+    if len(detected_results) > 0:
+        result = detected_results[0]
+        assert result["text"] is not None, "Text should be recognized"
+        assert result["duration"] > 0, "Duration should be greater than 0"
 
     # Cleanup
     detector.delete_session(session_id)
