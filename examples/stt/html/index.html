@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STT WebSocket Test</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .card h2 {
+            margin-top: 0;
+            color: #555;
+            font-size: 1.1em;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #555;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        #startBtn {
+            background: #4CAF50;
+            color: white;
+        }
+        #startBtn:hover:not(:disabled) {
+            background: #45a049;
+        }
+        #stopBtn {
+            background: #f44336;
+            color: white;
+        }
+        #stopBtn:hover:not(:disabled) {
+            background: #da190b;
+        }
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #ccc;
+        }
+        .status-indicator.connected {
+            background: #4CAF50;
+        }
+        .status-indicator.recording {
+            background: #f44336;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .volume-meter {
+            height: 8px;
+            background: #eee;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        .volume-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #8BC34A);
+            width: 0%;
+            transition: width 0.05s;
+        }
+        .result-box {
+            min-height: 100px;
+            max-height: 300px;
+            overflow-y: auto;
+            padding: 15px;
+            background: #fafafa;
+            border: 1px solid #eee;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        .partial {
+            color: #888;
+            font-style: italic;
+        }
+        .final {
+            color: #333;
+            font-weight: 500;
+        }
+        .log-entry {
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #eee;
+        }
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+        .timestamp {
+            color: #999;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>STT WebSocket Test</h1>
+
+    <div class="card">
+        <h2>Connection Settings</h2>
+        <div class="form-group">
+            <label for="wsUrl">WebSocket URL</label>
+            <input type="text" id="wsUrl" value="ws://localhost:8000/ws/stt">
+        </div>
+        <div class="form-group">
+            <label for="sessionId">Session ID</label>
+            <input type="text" id="sessionId" value="">
+        </div>
+        <div class="button-group">
+            <button id="startBtn">Start</button>
+            <button id="stopBtn" disabled>Stop</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Status</h2>
+        <div class="status">
+            <div class="status-indicator" id="statusIndicator"></div>
+            <span id="statusText">Disconnected</span>
+        </div>
+        <label>Microphone Level</label>
+        <div class="volume-meter">
+            <div class="volume-bar" id="volumeBar"></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Current Recognition</h2>
+        <div class="result-box">
+            <span id="currentText" class="partial">-</span>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Recognition History</h2>
+        <div class="result-box" id="historyBox">
+            <div class="log-entry">
+                <span class="timestamp">Ready to start...</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="aiavatar-stt.js"></script>
+    <script>
+        // Generate random session ID if not provided
+        function generateSessionId() {
+            return 'session_' + Math.random().toString(36).substring(2, 15);
+        }
+
+        // DOM elements
+        const wsUrlInput = document.getElementById('wsUrl');
+        const sessionIdInput = document.getElementById('sessionId');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const statusIndicator = document.getElementById('statusIndicator');
+        const statusText = document.getElementById('statusText');
+        const volumeBar = document.getElementById('volumeBar');
+        const currentText = document.getElementById('currentText');
+        const historyBox = document.getElementById('historyBox');
+
+        // Initialize session ID
+        sessionIdInput.value = generateSessionId();
+
+        let client = null;
+
+        function updateStatus(status) {
+            statusIndicator.className = 'status-indicator ' + status;
+            switch (status) {
+                case 'connected':
+                    statusText.textContent = 'Connected';
+                    break;
+                case 'recording':
+                    statusText.textContent = 'Recording...';
+                    break;
+                default:
+                    statusText.textContent = 'Disconnected';
+            }
+        }
+
+        function addToHistory(text, type) {
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+
+            const timestamp = new Date().toLocaleTimeString();
+            entry.innerHTML = `
+                <span class="timestamp">[${timestamp}]</span>
+                <span class="${type}">${text}</span>
+            `;
+
+            // Remove "Ready to start" message
+            if (historyBox.children.length === 1 && historyBox.children[0].textContent.includes('Ready')) {
+                historyBox.innerHTML = '';
+            }
+
+            historyBox.appendChild(entry);
+            historyBox.scrollTop = historyBox.scrollHeight;
+        }
+
+        async function start() {
+            const wsUrl = wsUrlInput.value.trim();
+            let sessionId = sessionIdInput.value.trim();
+
+            if (!wsUrl) {
+                alert('Please enter WebSocket URL');
+                return;
+            }
+
+            if (!sessionId) {
+                sessionId = generateSessionId();
+                sessionIdInput.value = sessionId;
+            }
+
+            // Create client
+            client = new SpeechRecognitionClient({
+                webSocketUrl: wsUrl,
+                sampleRate: 16000
+            });
+
+            // Setup callbacks
+            client.onConnected = (sid) => {
+                updateStatus('connected');
+                addToHistory('Connected to server', 'final');
+            };
+
+            client.onPartialResult = (text, metadata) => {
+                currentText.textContent = text || '-';
+                currentText.className = 'partial';
+                updateStatus('recording');
+            };
+
+            client.onFinalResult = (text, metadata) => {
+                if (text) {
+                    currentText.textContent = text;
+                    currentText.className = 'final';
+                    addToHistory(text, 'final');
+
+                    // Reset current text after a short delay
+                    setTimeout(() => {
+                        currentText.textContent = '-';
+                        currentText.className = 'partial';
+                    }, 1000);
+                }
+                updateStatus('connected');
+            };
+
+            client.onError = (error, metadata) => {
+                console.error('Error:', error);
+                addToHistory(`Error: ${error.message}`, 'partial');
+            };
+
+            client.onDisconnected = () => {
+                updateStatus('');
+                addToHistory('Disconnected', 'partial');
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+            };
+
+            // Store RMS value for use in onVoiced
+            let currentRms = 0;
+            let voicedTimeout = null;
+            client.onMicrophoneData = (rms) => {
+                currentRms = rms;
+            };
+
+            client.onVoiced = () => {
+                // Show volume meter when voice is detected
+                const percent = Math.min(100, currentRms * 500);
+                volumeBar.style.width = percent + '%';
+
+                // Reset timeout - fade out after 200ms of no voice
+                if (voicedTimeout) {
+                    clearTimeout(voicedTimeout);
+                }
+                voicedTimeout = setTimeout(() => {
+                    volumeBar.style.width = '0%';
+                }, 200);
+            };
+
+            // Start
+            try {
+                await client.start(sessionId);
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+            } catch (err) {
+                console.error('Failed to start:', err);
+                alert('Failed to start: ' + err.message);
+            }
+        }
+
+        async function stop() {
+            if (client) {
+                await client.stop();
+                client = null;
+            }
+            volumeBar.style.width = '0%';
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        }
+
+        // Event listeners
+        startBtn.addEventListener('click', start);
+        stopBtn.addEventListener('click', stop);
+
+        // Handle page unload
+        window.addEventListener('beforeunload', () => {
+            if (client) {
+                client.stop();
+            }
+        });
+    </script>
+</body>
+</html>
