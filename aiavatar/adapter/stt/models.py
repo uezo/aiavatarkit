@@ -10,7 +10,7 @@ class STTRequest(BaseModel):
 
 
 class STTResponse(BaseModel):
-    type: str  # connected, partial, final, error, stop
+    type: str  # connected, partial, final, error, voiced
     session_id: Optional[str] = None
     text: Optional[str] = None
     is_final: bool = False

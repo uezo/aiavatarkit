@@ -57,6 +57,15 @@ class StreamSpeechRecognitionServer:
     def _setup_vad_callbacks(self):
         """Setup callbacks for VAD events."""
 
+        # Voice activity callback (common for all VAD types)
+        @self.vad.on_voiced
+        async def on_voiced(session_id: str):
+            if session_id in self.websockets:
+                await self._send_response(STTResponse(
+                    type="voiced",
+                    session_id=session_id
+                ))
+
         if self._is_stream_vad:
             # Stream VAD: send partial results during recognition
             @self.vad.on_speech_detecting
