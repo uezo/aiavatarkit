@@ -449,3 +449,308 @@ async def test_validate_recognized_text_session_reset_on_reject(detector, stt_wa
     session = detector.get_session(session_id)
     assert session.is_recording is False, "Session should not be recording after rejection"
     assert len(session.buffer) == 0, "Session buffer should be cleared after rejection"
+
+
+@pytest.mark.asyncio
+async def test_on_speech_detecting_callback(detector, stt_wav_path):
+    """
+    Test that on_speech_detecting callback is triggered during recognition.
+    NOTE: This test actually calls Azure's Speech-to-Text API and consumes credits.
+    """
+    from aiavatar.sts.vad.azure_stream import RecordingSession
+
+    detecting_calls = []
+
+    @detector.on_speech_detecting
+    async def on_detecting(text: str, session: RecordingSession):
+        detecting_calls.append({
+            "text": text,
+            "session_id": session.session_id,
+            "is_recording": session.is_recording
+        })
+
+    session_id = "test_detecting"
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    # Send audio and wait for recognition
+    await send_audio_and_wait_for_recognition(detector, session_id, wave_data)
+
+    # on_speech_detecting should have been called at least once (during recognizing events)
+    assert len(detecting_calls) >= 1, "on_speech_detecting was not triggered"
+    # Check that text was captured during recognizing phase
+    assert detecting_calls[0]["session_id"] == session_id
+
+
+@pytest.mark.asyncio
+async def test_on_recording_started_decorator(stt_wav_path):
+    """
+    Test that on_recording_started decorator works correctly.
+    NOTE: This test actually calls Azure's Speech-to-Text API and consumes credits.
+    """
+    callback_calls = []
+
+    detector = AzureStreamSpeechDetector(
+        azure_subscription_key=AZURE_API_KEY,
+        azure_region=AZURE_REGION,
+        azure_language="ja-JP",
+        silence_duration_threshold=0.5,
+        max_duration=10.0,
+        sample_rate=16000,
+        channels=1,
+        debug=True
+    )
+
+    @detector.on_recording_started
+    async def on_started(session_id: str):
+        callback_calls.append(session_id)
+
+    detected_results = []
+    detector._detected_results = detected_results
+
+    @detector.on_speech_detected
+    async def on_speech_detected(recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
+        detected_results.append({"text": text, "session_id": session_id})
+
+    session_id = "test_decorator"
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    # Send audio and wait for recognition
+    await send_audio_and_wait_for_recognition(detector, session_id, wave_data)
+
+    # Callback should have been triggered
+    assert len(callback_calls) >= 1, "on_recording_started decorator callback was not triggered"
+    assert callback_calls[0] == session_id
+
+    # Cleanup
+    detector.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_max_duration_exceeded(stt_wav_path):
+    """
+    Test that recording handles max_duration properly.
+    NOTE: Azure has a minimum of 20 seconds for max_duration, so this test
+    verifies that the setting is applied correctly.
+    """
+    detector = AzureStreamSpeechDetector(
+        azure_subscription_key=AZURE_API_KEY,
+        azure_region=AZURE_REGION,
+        azure_language="ja-JP",
+        silence_duration_threshold=0.5,
+        max_duration=3.0,  # Will be capped to 20 seconds by Azure
+        sample_rate=16000,
+        channels=1,
+        debug=True
+    )
+
+    detected_results = []
+    detector._detected_results = detected_results
+
+    @detector.on_speech_detected
+    async def on_speech_detected(recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
+        detected_results.append({"text": text, "duration": recorded_duration})
+
+    session_id = "test_max_duration"
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    # Send audio and wait for recognition
+    await send_audio_and_wait_for_recognition(detector, session_id, wave_data)
+
+    # Should still detect speech (max_duration doesn't prevent detection)
+    assert len(detected_results) >= 1, "Speech should still be detected"
+    assert "こんにちは" in detected_results[0]["text"]
+
+    # Cleanup
+    detector.delete_session(session_id)
+
+
+def test_detector_inherits_from_speech_detector():
+    """
+    Test that AzureStreamSpeechDetector properly inherits from SpeechDetector.
+    """
+    from aiavatar.sts.vad.base import SpeechDetector
+
+    detector = AzureStreamSpeechDetector(
+        azure_subscription_key="test_key",
+        azure_region="test_region",
+        azure_language="ja-JP"
+    )
+
+    # Check inheritance chain
+    assert isinstance(detector, SpeechDetector)
+
+    # Check parent class methods are available
+    assert hasattr(detector, 'process_stream')
+    assert hasattr(detector, 'finalize_session')
+    assert hasattr(detector, 'reset_session')
+    assert hasattr(detector, 'delete_session')
+    assert hasattr(detector, 'on_speech_detected')
+    assert hasattr(detector, 'on_recording_started')
+
+    # Check Azure-specific attributes
+    assert hasattr(detector, 'azure_subscription_key')
+    assert hasattr(detector, 'azure_region')
+    assert hasattr(detector, 'azure_language')
+    assert hasattr(detector, '_on_speech_detecting')
+    assert hasattr(detector, '_validate_recognized_text')
+
+
+def test_recording_session_attributes():
+    """
+    Test that RecordingSession has all required attributes.
+    """
+    from aiavatar.sts.vad.azure_stream import RecordingSession
+
+    session = RecordingSession("test_session", preroll_buffer_size=10)
+
+    # Check required attributes
+    assert hasattr(session, 'session_id')
+    assert hasattr(session, 'is_recording')
+    assert hasattr(session, 'buffer')
+    assert hasattr(session, 'record_duration')
+    assert hasattr(session, 'preroll_buffer')
+    assert hasattr(session, 'data')
+    assert hasattr(session, 'on_recording_started_triggered')
+
+    # Check Azure-specific attributes
+    assert hasattr(session, 'azure_push_stream')
+    assert hasattr(session, 'azure_recognizer')
+    assert hasattr(session, 'event_loop')
+
+    # Check initial values
+    assert session.session_id == "test_session"
+    assert session.is_recording is False
+    assert len(session.buffer) == 0
+    assert session.record_duration == 0
+    assert session.on_recording_started_triggered is False
+    assert session.azure_push_stream is None
+    assert session.azure_recognizer is None
+
+
+def test_recording_session_reset():
+    """
+    Test that RecordingSession.reset() properly clears state.
+    """
+    from aiavatar.sts.vad.azure_stream import RecordingSession
+
+    session = RecordingSession("test_session", preroll_buffer_size=10)
+
+    # Set some state
+    session.is_recording = True
+    session.buffer.extend(b'\x00' * 100)
+    session.record_duration = 2.5
+    session.on_recording_started_triggered = True
+    session.preroll_buffer.append(b'\x00' * 50)
+
+    # Reset
+    session.reset()
+
+    # Check that recording state is reset
+    assert session.is_recording is False
+    assert len(session.buffer) == 0
+    assert session.record_duration == 0
+    assert session.on_recording_started_triggered is False
+
+    # preroll_buffer should NOT be cleared by reset
+    assert len(session.preroll_buffer) > 0
+
+
+@pytest.mark.asyncio
+async def test_muted_detector(detector, stt_wav_path):
+    """
+    Test that detector properly handles muted state.
+    """
+    detector.should_mute = lambda: True
+
+    session_id = "test_muted"
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    chunk_size = 3200
+    chunk = wave_data[:chunk_size * 3]
+
+    # Try to record while muted
+    is_recording = await detector.process_samples(chunk, session_id)
+    assert is_recording is False, "Should return False when muted"
+
+    session = detector.get_session(session_id)
+    assert session.is_recording is False
+    assert len(session.preroll_buffer) == 0, "Preroll buffer should be cleared when muted"
+
+
+def test_get_config(detector):
+    """
+    Test that get_config returns expected configuration.
+    """
+    config = detector.get_config()
+
+    assert "azure_language" in config
+    assert "silence_duration_threshold" in config
+    assert "max_duration" in config
+    assert "sample_rate" in config
+    assert "channels" in config
+    assert "preroll_buffer_sec" in config
+    assert "debug" in config
+
+    assert config["azure_language"] == "ja-JP"
+    assert config["silence_duration_threshold"] == 0.5
+    assert config["max_duration"] == 10.0
+    assert config["sample_rate"] == 16000
+    assert config["channels"] == 1
+
+
+@pytest.mark.asyncio
+async def test_finalize_session(detector, stt_wav_path):
+    """
+    Test that finalize_session properly cleans up a session.
+    """
+    session_id = "test_finalize"
+
+    # Create a session by sending some audio
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    chunk = wave_data[:3200]
+    await detector.process_samples(chunk, session_id)
+
+    # Verify session exists
+    assert session_id in detector.recording_sessions
+
+    # Finalize session
+    await detector.finalize_session(session_id)
+
+    # Session should be deleted
+    assert session_id not in detector.recording_sessions
+
+
+def test_calculate_preroll_buffer_size():
+    """
+    Test that preroll buffer size is calculated correctly.
+    """
+    detector = AzureStreamSpeechDetector(
+        azure_subscription_key="test_key",
+        azure_region="test_region",
+        azure_language="ja-JP",
+        sample_rate=16000,
+        channels=1,
+        preroll_buffer_sec=2.0
+    )
+
+    # Calculate expected size
+    # bytes_per_sec = 16000 * 1 * 2 = 32000
+    # preroll_buffer_size = (2.0 * 32000) / 512 = 125
+    expected_size = int((2.0 * 32000) / 512)
+    actual_size = detector._calculate_preroll_buffer_size()
+
+    assert actual_size == expected_size, f"Expected {expected_size}, got {actual_size}"

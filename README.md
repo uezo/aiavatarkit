@@ -118,16 +118,22 @@ You can also access the Admin Panel at http://127.0.0.1:8000/admin.
     - [Dify](#dify)
     - [OpenAI-compatible APIs](#openai-compatible-apis)
     - [Other LLMs](#other-llms)
+
 - [🗣️ Voice](#️voice)
+
 - [👂 Speech Listener](#-speech-listener)
     - [Preprocessing and Postprocessing](#preprocessing-and-postprocessing)
     - [Speaker Diarization](#speaker-diarization)
+
 - [🎙️ Speech Detector](#%EF%B8%8F-speech-detector)
-    - [Standard Speech Detector](#standard-speech-detector)
     - [Silero VAD Speech Detector](#silero-speech-detector)
+    - [Silero Stream Speech Detector](#silero-stream-speech-detector)
     - [Azure Stream Speech Detector](#azure-stream-speech-detector)
-    - [Speech Detection Callback](#speech-detection-callback)
+    - [Customization](#customization)
+    - [Standard Speech Detector (Legacy)](#standard-speech-detector-legacy)
+
 - [🥰 Face Expression](#-face-expression)
+
 - [💃 Animation](#-animation)
 
 - [🥳 Character Management](#-character-management)
@@ -742,16 +748,15 @@ AIAvatarKit includes Voice Activity Detection (VAD) components to automatically 
 
 ### Silero Speech Detector
 
-The default Speech Detector is `SileroSpeechDetector`, which employs AI-based voice activity detection:
+The default Speech Detector is `SileroSpeechDetector`, which employs AI-based voice activity detection using the Silero VAD model:
 
 ```python
 from aiavatar.sts.vad.silero import SileroSpeechDetector
 
-# Create SileroSpeechDetector with custom parameters
 vad = SileroSpeechDetector(
     speech_probability_threshold=0.5,    # AI model confidence threshold (0.0-1.0)
     silence_duration_threshold=0.5,      # Seconds of silence to end recording
-    volume_db_threshold=-30.0,           # Voice detection threshold in dB (Default is None: set value only when you want to filter out non-speaker voices)
+    volume_db_threshold=None,            # Optional: filter by volume in dB (e.g., -30.0)
     max_duration=10.0,                   # Maximum recording duration
     min_duration=0.2,                    # Minimum recording duration
     sample_rate=16000,                   # Audio sample rate
@@ -761,26 +766,65 @@ vad = SileroSpeechDetector(
     debug=True
 )
 
-# Create AIAvatar with Silero VAD
-aiavatar_app = AIAvatar(
-    vad=vad,
-    openai_api_key=OPENAI_API_KEY
-)
+aiavatar_app = AIAvatar(vad=vad, openai_api_key=OPENAI_API_KEY)
 ```
 
-For applications with many concurrent users:
+For high-concurrency applications:
 
 ```python
-# High-performance configuration for 100+ concurrent sessions
 vad = SileroSpeechDetector(
     speech_probability_threshold=0.6,    # Stricter threshold for noisy environments
     model_pool_size=4,                   # 4 parallel AI models for load balancing
-    chunk_size=512,                      # Optimized chunk size
-    debug=False                          # Disable debug for production
+    debug=False
 )
 ```
 
-You can also make custom VAD components by implementing `SpeechDetector` interface.
+
+### Silero Stream Speech Detector
+
+`SileroStreamSpeechDetector` extends `SileroSpeechDetector` with segment-based speech recognition. It performs partial transcription during recording, allowing you to receive intermediate results before the final transcription.
+
+```python
+from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
+from aiavatar.sts.stt.google import GoogleSpeechRecognizer
+
+vad = SileroStreamSpeechDetector(
+    speech_recognizer=GoogleSpeechRecognizer(...),
+    segment_silence_threshold=0.2,       # Silence duration to trigger segment recognition
+    silence_duration_threshold=0.5,      # Silence duration to finalize recording
+    # Inherits all SileroSpeechDetector parameters
+)
+```
+
+#### Segment Recognition Callback
+
+The `on_speech_detecting` callback is triggered when a speech segment is recognized:
+
+```python
+@vad.on_speech_detecting
+async def on_speech_detecting(text, session):
+    print(f"Partial text: {text}")
+
+    # For WebSocket apps, send partial text to client via info message
+    # resp = STSResponse(
+    #     type="info",
+    #     session_id=session.session_id,
+    #     metadata={"partial_request_text": text}
+    # )
+    # await ws_app.handle_response(resp)
+```
+
+#### Text Validation
+
+Use `validate_recognized_text` to filter out invalid recognition results:
+
+```python
+@vad.validate_recognized_text
+def validate(text):
+    if len(text) < 2:
+        return "Text too short"  # Return error message to reject
+    return None  # Return None to accept
+```
 
 
 ### Azure Stream Speech Detector
@@ -793,34 +837,85 @@ pip install azure-cognitiveservices-speech
 
 ```python
 from aiavatar.sts.vad.azure_stream import AzureStreamSpeechDetector
+
 vad = AzureStreamSpeechDetector(
     azure_subscription_key=AZURE_API_KEY,
     azure_region=AZURE_REGION
 )
 ```
 
-This VAD performs incremental transcription internally, and you can receive partial transcription results through the `on_speech_detecting` callback to perform custom processing. The following code shows an example of notifying the client of partial transcription results when using the WebSocket adapter.
+This detector also supports the `on_speech_detecting` callback for partial transcription results:
 
 ```python
 @vad.on_speech_detecting
-async def on_speech_detecting(text, sess):
-    resp = STSResponse(
-        type="info",
-        session_id=sess.session_id,
-        metadata={"partial_request_text": text}
-    )
-    await ws_app.handle_response(resp)
+async def on_speech_detecting(text, session):
+    print(f"Partial text: {text}")
+
+    # For WebSocket apps, send partial text to client via info message
+    # resp = STSResponse(
+    #     type="info",
+    #     session_id=session.session_id,
+    #     metadata={"partial_request_text": text}
+    # )
+    # await ws_app.handle_response(resp)
 ```
 
 
-### Standard Speech Detector
+### Customization
 
-`StandardSpeechDetector` simply uses volume-based detection with configurable thresholds, that works well in the limited computing resorces:
+#### on_recording_started Callback
+
+The `on_recording_started` callback is triggered when recording has been active long enough to be considered meaningful speech. This is useful for stopping AI speech when the user starts talking.
+
+```python
+# Option 1: Pass callback in constructor
+async def my_recording_started_handler(session_id: str):
+    print(f"Recording started for session: {session_id}")
+    await stop_ai_speech()
+
+vad = SileroSpeechDetector(
+    on_recording_started=my_recording_started_handler,
+    on_recording_started_min_duration=1.5,    # Trigger after 1.5 sec of speech (default)
+    # other parameters...
+)
+
+# Option 2: Use decorator
+@vad.on_recording_started
+async def on_recording_started(session_id):
+    await stop_ai_speech()
+```
+
+For stream-based detectors (`SileroStreamSpeechDetector`, `AzureStreamSpeechDetector`), the callback can also be triggered by recognized text length:
+
+```python
+vad = SileroStreamSpeechDetector(
+    speech_recognizer=speech_recognizer,
+    on_recording_started_min_duration=1.5,    # Trigger after 1.5 sec of speech
+    on_recording_started_min_text_length=2,   # OR trigger when text >= 2 chars
+)
+```
+
+#### Custom Trigger Condition
+
+You can customize when `on_recording_started` fires using the `should_trigger_recording_started` decorator:
+
+```python
+@vad.should_trigger_recording_started
+def custom_trigger(text, session):
+    # text: Recognized text (None for non-stream detectors)
+    # session: Recording session object
+    # Return True to trigger the callback
+    return text and len(text) >= 5
+```
+
+
+### Standard Speech Detector (Legacy)
+
+`StandardSpeechDetector` uses simple volume-based detection. Consider using `SileroSpeechDetector` for better accuracy. This detector is suitable for environments with limited computing resources:
 
 ```python
 from aiavatar.sts.vad.standard import StandardSpeechDetector
 
-# Create StandardSpeechDetector with custom parameters
 vad = StandardSpeechDetector(
     volume_db_threshold=-30.0,           # Voice detection threshold in dB
     silence_duration_threshold=0.5,      # Seconds of silence to end recording
@@ -830,32 +925,6 @@ vad = StandardSpeechDetector(
     channels=1,                          # Audio channels
     preroll_buffer_count=5,              # Pre-recording buffer size
     debug=True
-)
-
-# Create AIAvatar with custom VAD
-aiavatar_app = AIAvatar(
-    vad=vad,
-    openai_api_key=OPENAI_API_KEY
-)
-```
-
-
-### Speech Detection Callback
-
-SpeechDetectors supports an `on_recording_started` callback that gets triggered when speech recording starts and meets the minimum duration threshold. The callback will be executed asynchronously as a background task.
-
-```python
-from aiavatar.sts.vad.standard import StandardSpeechDetector
-
-async def my_recording_started_handler(session_id: str):
-    print(f"Recording started for session: {session_id}")
-    # Add your custom logic here
-
-detector = StandardSpeechDetector(
-    on_recording_started=my_recording_started_handler,
-    volume_db_threshold=-30.0,
-    silence_duration_threshold=0.5,
-    # other parameters...
 )
 ```
 

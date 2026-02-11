@@ -1,33 +1,21 @@
 import asyncio
-from collections import deque
 import logging
 import math
 import struct
 from typing import AsyncGenerator, Callable, Optional, Dict, List, Awaitable
 from . import SpeechDetector
+from .base import RecordingSessionBase
 
 logger = logging.getLogger(__name__)
 
 
-class RecordingSession:
+class RecordingSession(RecordingSessionBase):
     def __init__(self, session_id: str, preroll_buffer_count: int = 5):
-        self.session_id = session_id
-        self.is_recording: bool = False
-        self.buffer: bytearray = bytearray()
-        self.silence_duration: float = 0
-        self.record_duration: float = 0
-        self.preroll_buffer: deque = deque(maxlen=preroll_buffer_count)
+        super().__init__(session_id, preroll_buffer_count)
         self.amplitude_threshold: float = 0
-        self.data: dict = {}
-        self.on_recording_started_triggered: bool = False
 
     def reset(self):
-        # Reset status data except for preroll_buffer
-        self.buffer.clear()
-        self.is_recording = False
-        self.silence_duration = 0
-        self.record_duration = 0
-        self.on_recording_started_triggered = False
+        super().reset()
 
 
 class StandardSpeechDetector(SpeechDetector):
@@ -43,22 +31,24 @@ class StandardSpeechDetector(SpeechDetector):
         preroll_buffer_count: int = 5,
         to_linear16: Optional[Callable[[bytes], bytes]] = None,
         on_recording_started: Optional[Callable[[str], Awaitable[None]]] = None,
+        on_recording_started_min_duration: float = 1.5,
         debug: bool = False
     ):
+        super().__init__(
+            sample_rate=sample_rate,
+            on_recording_started_min_duration=on_recording_started_min_duration
+        )
         self._volume_db_threshold = volume_db_threshold
         self.amplitude_threshold = 32767 * (10 ** (self.volume_db_threshold / 20.0))
         self.silence_duration_threshold = silence_duration_threshold
         self.max_duration = max_duration
         self.min_duration = min_duration
-        self.sample_rate = sample_rate
         self.channels = channels
-        self._on_recording_started: List[Callable[[str], Awaitable[None]]] = []
         if on_recording_started:
             self._on_recording_started.append(on_recording_started)
         self.debug = debug
         self.preroll_buffer_count = preroll_buffer_count
         self.to_linear16 = to_linear16
-        self.should_mute = lambda: False
         self.recording_sessions: Dict[str, RecordingSession] = {}
 
     def get_config(self) -> dict:
@@ -135,19 +125,8 @@ class StandardSpeechDetector(SpeechDetector):
             else:
                 session.silence_duration += sample_duration
 
-            # Check if we've exceeded min_duration and call callback once
-            if (session.record_duration - session.silence_duration >= self.min_duration and 
-                not session.on_recording_started_triggered and 
-                self._on_recording_started
-            ):
-                session.on_recording_started_triggered = True
-                for handler in self._on_recording_started:
-                    async def _run(h, session_id):
-                        try:
-                            await h(session_id)
-                        except Exception as ex:
-                            logger.error("Error in on_recording_started callback", exc_info=True)
-                    asyncio.create_task(_run(handler, session_id))
+            # Check on_recording_started trigger condition
+            await self._check_and_trigger_recording_started(session)
 
             if session.silence_duration >= self.silence_duration_threshold:
                 recorded_duration = session.record_duration - session.silence_duration

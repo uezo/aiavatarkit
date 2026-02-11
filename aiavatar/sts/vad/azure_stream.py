@@ -72,6 +72,7 @@ class AzureStreamSpeechDetector(SpeechDetector):
         if on_recording_started:
             self._on_recording_started.append(on_recording_started)
         self._on_speech_detecting: Callable[[str, RecordingSession], Awaitable[None]] = None
+        self._on_speech_recognition_error: Callable[[Exception, str], Awaitable[None]] = None
         self._validate_recognized_text: Callable[[str], Optional[str]] = None
 
     def get_config(self) -> dict:
@@ -225,6 +226,13 @@ class AzureStreamSpeechDetector(SpeechDetector):
             def on_canceled(evt):
                 if self.debug:
                     logger.info(f"[VAD_DEBUG] on_canceled: reason={evt.reason}, is_recording={session.is_recording}, buffer_bytes={len(session.buffer)}")
+                # Notify error callback only for actual errors (not EndOfStream or CancelledByUser)
+                if evt.reason == speechsdk.CancellationReason.Error and self._on_speech_recognition_error:
+                    try:
+                        error = Exception(f"Azure speech recognition error: {evt.error_details}")
+                        asyncio.run_coroutine_threadsafe(self._on_speech_recognition_error(error, session.session_id), session.event_loop)
+                    except Exception as ex:
+                        logger.error(f"Error in on_speech_recognition_error callback: {ex}", exc_info=True)
                 session.reset(reason="canceled", debug=self.debug)
 
             session.azure_recognizer.recognizing.connect(on_recognizing)
@@ -272,6 +280,10 @@ class AzureStreamSpeechDetector(SpeechDetector):
 
     def validate_recognized_text(self, func):
         self._validate_recognized_text = func
+        return func
+
+    def on_speech_recognition_error(self, func):
+        self._on_speech_recognition_error = func
         return func
 
     async def execute_on_speech_detected(self, recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):

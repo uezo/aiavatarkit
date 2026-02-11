@@ -256,11 +256,12 @@ async def test_on_recording_started_callback():
         sample_rate=16000,
         channels=1,
         on_recording_started=mock_callback,
+        on_recording_started_min_duration=0.5,  # Trigger when recording exceeds 0.5 sec
         debug=True
     )
-    
+
     session_id = "test_callback"
-    
+
     # Start recording with loud samples
     loud_samples1 = generate_samples(amplitude=1200, num_samples=4000)  # 0.25 sec
     is_recording = await detector.process_samples(loud_samples1, session_id)
@@ -354,9 +355,10 @@ async def test_on_recording_started_callback_reset():
         sample_rate=16000,
         channels=1,
         on_recording_started=mock_callback,
+        on_recording_started_min_duration=0.5,  # Trigger when recording exceeds 0.5 sec
         debug=True
     )
-    
+
     session_id = "test_reset_callback"
     
     # First recording
