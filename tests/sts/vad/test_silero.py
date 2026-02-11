@@ -243,6 +243,7 @@ async def test_on_recording_started_callback(stt_wav_path):
         chunk_size=512,
         use_vad_iterator=False,
         on_recording_started=mock_callback,
+        on_recording_started_min_duration=0.3,  # Trigger quickly
         debug=True
     )
 
@@ -490,6 +491,7 @@ async def test_on_recording_started_callback_error_handling(stt_wav_path):
         chunk_size=512,
         use_vad_iterator=False,
         on_recording_started=failing_callback,
+        on_recording_started_min_duration=0.3,  # Trigger quickly
         debug=True
     )
 
@@ -819,3 +821,337 @@ async def test_volume_db_threshold_filtering(stt_wav_path):
 
     # Cleanup
     detector.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_on_recording_started_min_duration(stt_wav_path):
+    """
+    Test that on_recording_started callback is triggered based on on_recording_started_min_duration.
+    """
+    callback_calls = []
+
+    async def mock_callback(session_id: str):
+        callback_calls.append(session_id)
+
+    # Set min_duration to 0.5 sec so callback triggers quickly
+    detector = SileroSpeechDetector(
+        silence_duration_threshold=0.5,
+        max_duration=10.0,
+        min_duration=0.2,
+        sample_rate=16000,
+        channels=1,
+        preroll_buffer_count=5,
+        speech_probability_threshold=0.5,
+        chunk_size=512,
+        use_vad_iterator=False,
+        on_recording_started=mock_callback,
+        on_recording_started_min_duration=0.5,  # Trigger after 0.5 sec
+        debug=True
+    )
+
+    session_id = "test_min_duration"
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    chunk_size = 3200  # 100ms at 16kHz
+
+    # Send enough audio to exceed min_duration (0.5 sec = 5 chunks)
+    for i in range(0, min(len(wave_data), chunk_size * 10), chunk_size):
+        chunk = wave_data[i:i + chunk_size]
+        if chunk:
+            await detector.process_samples(chunk, session_id)
+            await asyncio.sleep(0.01)
+
+    await asyncio.sleep(0.3)
+
+    # Callback should have been triggered after min_duration
+    assert len(callback_calls) >= 1, "on_recording_started should be triggered after min_duration"
+    assert callback_calls[0] == session_id
+
+    # Cleanup
+    detector.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_on_recording_started_not_triggered_for_short_recording(stt_wav_path):
+    """
+    Test that on_recording_started callback is NOT triggered if recording
+    ends before on_recording_started_min_duration.
+    """
+    callback_calls = []
+
+    async def mock_callback(session_id: str):
+        callback_calls.append(session_id)
+
+    # Set min_duration very long so callback won't trigger
+    detector = SileroSpeechDetector(
+        silence_duration_threshold=0.3,
+        max_duration=10.0,
+        min_duration=0.1,
+        sample_rate=16000,
+        channels=1,
+        preroll_buffer_count=5,
+        speech_probability_threshold=0.5,
+        chunk_size=512,
+        use_vad_iterator=False,
+        on_recording_started=mock_callback,
+        on_recording_started_min_duration=10.0,  # Very long - won't be reached
+        debug=True
+    )
+
+    session_id = "test_no_trigger"
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    chunk_size = 3200
+
+    # Send short audio
+    for i in range(0, min(len(wave_data), chunk_size * 5), chunk_size):
+        chunk = wave_data[i:i + chunk_size]
+        if chunk:
+            await detector.process_samples(chunk, session_id)
+            await asyncio.sleep(0.01)
+
+    # Send silence to end recording
+    silence_chunk = b'\x00' * chunk_size
+    for _ in range(10):
+        await detector.process_samples(silence_chunk, session_id)
+        await asyncio.sleep(0.01)
+
+    await asyncio.sleep(0.3)
+
+    # Callback should NOT have been triggered
+    assert len(callback_calls) == 0, "on_recording_started should not trigger for short recording"
+
+    # Cleanup
+    detector.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_on_recording_started_decorator(stt_wav_path):
+    """
+    Test on_recording_started decorator functionality.
+    """
+    callback_calls = []
+
+    detector = SileroSpeechDetector(
+        silence_duration_threshold=0.5,
+        max_duration=10.0,
+        min_duration=0.2,
+        sample_rate=16000,
+        channels=1,
+        preroll_buffer_count=5,
+        speech_probability_threshold=0.5,
+        chunk_size=512,
+        use_vad_iterator=False,
+        on_recording_started_min_duration=0.3,
+        debug=True
+    )
+
+    @detector.on_recording_started
+    async def on_recording_started(session_id: str):
+        callback_calls.append(session_id)
+
+    session_id = "test_decorator"
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    chunk_size = 3200
+
+    # Send audio
+    for i in range(0, min(len(wave_data), chunk_size * 10), chunk_size):
+        chunk = wave_data[i:i + chunk_size]
+        if chunk:
+            await detector.process_samples(chunk, session_id)
+            await asyncio.sleep(0.01)
+
+    await asyncio.sleep(0.3)
+
+    # Callback should have been triggered
+    assert len(callback_calls) >= 1, "Decorator-registered callback should be triggered"
+    assert callback_calls[0] == session_id
+
+    # Cleanup
+    detector.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_should_trigger_recording_started_custom(stt_wav_path):
+    """
+    Test custom should_trigger_recording_started condition.
+    """
+    callback_calls = []
+    trigger_check_calls = []
+
+    detector = SileroSpeechDetector(
+        silence_duration_threshold=0.5,
+        max_duration=10.0,
+        min_duration=0.2,
+        sample_rate=16000,
+        channels=1,
+        preroll_buffer_count=5,
+        speech_probability_threshold=0.5,
+        chunk_size=512,
+        use_vad_iterator=False,
+        on_recording_started_min_duration=0.1,  # Low default
+        debug=True
+    )
+
+    @detector.on_recording_started
+    async def on_recording_started(session_id: str):
+        callback_calls.append(session_id)
+
+    @detector.should_trigger_recording_started
+    def custom_trigger(text, session):
+        trigger_check_calls.append(session.record_duration)
+        # Only trigger if recording duration >= 0.5 sec
+        return session.record_duration - session.silence_duration >= 0.5
+
+    session_id = "test_custom_trigger"
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    chunk_size = 3200
+
+    # Send audio
+    for i in range(0, len(wave_data), chunk_size):
+        chunk = wave_data[i:i + chunk_size]
+        if chunk:
+            await detector.process_samples(chunk, session_id)
+            await asyncio.sleep(0.01)
+
+    await asyncio.sleep(0.3)
+
+    # Custom trigger function should have been called
+    assert len(trigger_check_calls) > 0, "Custom trigger function should be called"
+
+    # Callback should have been triggered after custom condition met
+    assert len(callback_calls) >= 1, "Callback should be triggered after custom condition met"
+
+    # Cleanup
+    detector.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_should_trigger_recording_started_blocks_callback(stt_wav_path):
+    """
+    Test that custom should_trigger_recording_started can prevent callback.
+    """
+    callback_calls = []
+
+    detector = SileroSpeechDetector(
+        silence_duration_threshold=0.3,
+        max_duration=10.0,
+        min_duration=0.1,
+        sample_rate=16000,
+        channels=1,
+        preroll_buffer_count=5,
+        speech_probability_threshold=0.5,
+        chunk_size=512,
+        use_vad_iterator=False,
+        on_recording_started_min_duration=0.1,
+        debug=True
+    )
+
+    @detector.on_recording_started
+    async def on_recording_started(session_id: str):
+        callback_calls.append(session_id)
+
+    @detector.should_trigger_recording_started
+    def never_trigger(text, session):
+        # Always return False - never trigger
+        return False
+
+    session_id = "test_block_trigger"
+
+    # Load WAV file
+    with wave.open(str(stt_wav_path), 'rb') as wav_file:
+        wave_data = wav_file.readframes(wav_file.getnframes())
+
+    chunk_size = 3200
+
+    # Send audio
+    for i in range(0, len(wave_data), chunk_size):
+        chunk = wave_data[i:i + chunk_size]
+        if chunk:
+            await detector.process_samples(chunk, session_id)
+            await asyncio.sleep(0.01)
+
+    # Send silence to end recording
+    silence_chunk = b'\x00' * chunk_size
+    for _ in range(10):
+        await detector.process_samples(silence_chunk, session_id)
+        await asyncio.sleep(0.01)
+
+    await asyncio.sleep(0.3)
+
+    # Callback should NOT have been triggered due to custom condition
+    assert len(callback_calls) == 0, "Callback should not trigger when custom condition returns False"
+
+    # Cleanup
+    detector.delete_session(session_id)
+
+
+def test_on_recording_started_triggered_flag():
+    """
+    Test that on_recording_started_triggered flag is set correctly in session.
+    """
+    detector = SileroSpeechDetector(
+        silence_duration_threshold=0.5,
+        max_duration=10.0,
+        min_duration=0.2,
+        sample_rate=16000,
+        debug=True
+    )
+
+    session_id = "test_flag"
+    session = detector.get_session(session_id)
+
+    # Initially False
+    assert session.on_recording_started_triggered is False
+
+    # After reset, still False
+    session.on_recording_started_triggered = True
+    session.reset()
+    assert session.on_recording_started_triggered is False
+
+    # Cleanup
+    detector.delete_session(session_id)
+
+
+def test_session_inherits_from_base():
+    """
+    Test that RecordingSession properly inherits from RecordingSessionBase.
+    """
+    from aiavatar.sts.vad.silero import RecordingSession
+    from aiavatar.sts.vad.base import RecordingSessionBase
+
+    session = RecordingSession("test_session", preroll_buffer_count=5)
+
+    # Check inheritance
+    assert isinstance(session, RecordingSessionBase)
+
+    # Check base attributes exist
+    assert hasattr(session, 'session_id')
+    assert hasattr(session, 'is_recording')
+    assert hasattr(session, 'buffer')
+    assert hasattr(session, 'silence_duration')
+    assert hasattr(session, 'record_duration')
+    assert hasattr(session, 'preroll_buffer')
+    assert hasattr(session, 'data')
+    assert hasattr(session, 'on_recording_started_triggered')
+    assert hasattr(session, 'last_recognized_text')
+
+    # Check silero-specific attributes
+    assert hasattr(session, 'amplitude_threshold')
+    assert hasattr(session, 'vad_buffer')
+    assert hasattr(session, 'vad_iterator')
+    assert hasattr(session, 'is_speech_active')

@@ -1,5 +1,4 @@
 import asyncio
-from collections import deque
 import logging
 import numpy as np
 import struct
@@ -7,32 +6,21 @@ import threading
 import torch
 from typing import AsyncGenerator, Callable, Optional, Dict, Awaitable
 from . import SpeechDetector
+from .base import RecordingSessionBase
 
 logger = logging.getLogger(__name__)
 
 
-class RecordingSession:
+class RecordingSession(RecordingSessionBase):
     def __init__(self, session_id: str, preroll_buffer_count: int = 5, vad_iterator=None):
-        self.session_id = session_id
-        self.is_recording: bool = False
-        self.buffer: bytearray = bytearray()
-        self.silence_duration: float = 0
-        self.record_duration: float = 0
-        self.preroll_buffer: deque = deque(maxlen=preroll_buffer_count)
+        super().__init__(session_id, preroll_buffer_count)
         self.amplitude_threshold: Optional[float] = None
-        self.data: dict = {}
         self.vad_buffer: bytearray = bytearray()
         self.vad_iterator = vad_iterator
-        self.on_recording_started_triggered: bool = False
         self.is_speech_active: bool = False  # VAD state: True after 'start', False after 'end'
 
     def reset(self):
-        # Reset status data except for preroll_buffer
-        self.buffer.clear()
-        self.is_recording = False
-        self.silence_duration = 0
-        self.record_duration = 0
-        self.on_recording_started_triggered = False
+        super().reset()
         self.is_speech_active = False
         self.amplitude_threshold = None
         # Reset VAD iterator state for next utterance
@@ -59,9 +47,13 @@ class SileroSpeechDetector(SpeechDetector):
         chunk_size: int = 512,
         model_pool_size: int = 1,
         on_recording_started: Optional[Callable[[str], Awaitable[None]]] = None,
+        on_recording_started_min_duration: float = 1.5,
         use_vad_iterator: bool = False
     ):
-        super().__init__(sample_rate=sample_rate)
+        super().__init__(
+            sample_rate=sample_rate,
+            on_recording_started_min_duration=on_recording_started_min_duration
+        )
         self._volume_db_threshold = volume_db_threshold
         if volume_db_threshold is not None:
             self.amplitude_threshold = 32767 * (10 ** (self.volume_db_threshold / 20.0))
@@ -300,18 +292,8 @@ class SileroSpeechDetector(SpeechDetector):
                 session.silence_duration += sample_duration
 
             # Check if we've exceeded min_duration and call callback once
-            if (session.record_duration - session.silence_duration >= self.min_duration and 
-                not session.on_recording_started_triggered and 
-                self._on_recording_started
-            ):
-                session.on_recording_started_triggered = True
-                for handler in self._on_recording_started:
-                    async def _run(h, session_id):
-                        try:
-                            await h(session_id)
-                        except Exception as ex:
-                            logger.error("Error in on_recording_started callback", exc_info=True)
-                    asyncio.create_task(_run(handler, session_id))
+            # Check on_recording_started trigger condition
+            await self._check_and_trigger_recording_started(session)
 
             if session.silence_duration >= self.silence_duration_threshold:
                 recorded_duration = session.record_duration - session.silence_duration
