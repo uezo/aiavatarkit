@@ -1,7 +1,7 @@
 import asyncio
 from collections import deque
 import logging
-from typing import AsyncGenerator, Callable, Optional, Dict, Awaitable
+from typing import AsyncGenerator, Callable, Optional, Dict, List, Awaitable
 # pip install azure-cognitiveservices-speech
 import azure.cognitiveservices.speech as speechsdk
 from . import SpeechDetector
@@ -71,8 +71,8 @@ class AzureStreamSpeechDetector(SpeechDetector):
         self.recording_sessions: Dict[str, RecordingSession] = {}
         if on_recording_started:
             self._on_recording_started.append(on_recording_started)
-        self._on_speech_detecting: Callable[[str, RecordingSession], Awaitable[None]] = None
-        self._on_speech_recognition_error: Callable[[Exception, str], Awaitable[None]] = None
+        self._on_speech_detecting: List[Callable[[str, RecordingSession], Awaitable[None]]] = []
+        self._on_speech_recognition_error: List[Callable[[Exception, str], Awaitable[None]]] = []
         self._validate_recognized_text: Callable[[str], Optional[str]] = None
 
     def get_config(self) -> dict:
@@ -164,9 +164,9 @@ class AzureStreamSpeechDetector(SpeechDetector):
 
                 if self._on_speech_detecting:
                     try:
-                        asyncio.run_coroutine_threadsafe(self._on_speech_detecting(evt.result.text, session), session.event_loop)
+                        asyncio.run_coroutine_threadsafe(self._execute_on_speech_detecting(evt.result.text, session), session.event_loop)
                     except Exception as ex:
-                        logger.error("Error in on_speech_detecting callback", exc_info=True)
+                        logger.error("Error scheduling on_speech_detecting callback", exc_info=True)
 
                 # Trigger on_recording_started callback on first recognizing event
                 if not session.on_recording_started_triggered and self._on_recording_started:
@@ -230,9 +230,9 @@ class AzureStreamSpeechDetector(SpeechDetector):
                 if evt.reason == speechsdk.CancellationReason.Error and self._on_speech_recognition_error:
                     try:
                         error = Exception(f"Azure speech recognition error: {evt.error_details}")
-                        asyncio.run_coroutine_threadsafe(self._on_speech_recognition_error(error, session.session_id), session.event_loop)
+                        asyncio.run_coroutine_threadsafe(self._execute_on_speech_recognition_error(error, session.session_id), session.event_loop)
                     except Exception as ex:
-                        logger.error(f"Error in on_speech_recognition_error callback: {ex}", exc_info=True)
+                        logger.error("Error scheduling on_speech_recognition_error callback", exc_info=True)
                 session.reset(reason="canceled", debug=self.debug)
 
             session.azure_recognizer.recognizing.connect(on_recognizing)
@@ -274,23 +274,44 @@ class AzureStreamSpeechDetector(SpeechDetector):
             if self.debug:
                 logger.warning(f"Azure push stream is None for session {session.session_id}")
 
-    def on_speech_detecting(self, func):
-        self._on_speech_detecting = func
+    def on_speech_detecting(self, func: Callable[[str, RecordingSession], Awaitable[None]]) -> Callable[[str, RecordingSession], Awaitable[None]]:
+        """Register callback for speech detecting (partial results).
+
+        The callback is called with (text: str, session: RecordingSession).
+        """
+        self._on_speech_detecting.append(func)
         return func
 
     def validate_recognized_text(self, func):
         self._validate_recognized_text = func
         return func
 
-    def on_speech_recognition_error(self, func):
-        self._on_speech_recognition_error = func
+    def on_speech_recognition_error(self, func: Callable[[Exception, str], Awaitable[None]]) -> Callable[[Exception, str], Awaitable[None]]:
+        """Register callback for speech recognition errors.
+
+        The callback is called with (error: Exception, session_id: str).
+        """
+        self._on_speech_recognition_error.append(func)
         return func
 
+    async def _execute_on_speech_detecting(self, text: str, session: RecordingSession):
+        """Execute on_speech_detecting callbacks."""
+        for handler in self._on_speech_detecting:
+            try:
+                await handler(text, session)
+            except Exception:
+                logger.error("Error in on_speech_detecting callback", exc_info=True)
+
+    async def _execute_on_speech_recognition_error(self, error: Exception, session_id: str):
+        """Execute on_speech_recognition_error callbacks."""
+        for handler in self._on_speech_recognition_error:
+            try:
+                await handler(error, session_id)
+            except Exception:
+                logger.error("Error in on_speech_recognition_error callback", exc_info=True)
+
     async def execute_on_speech_detected(self, recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
-        try:
-            await self._on_speech_detected(recorded_data, text, metadata, recorded_duration, session_id)
-        except Exception as ex:
-            logger.error(f"Error in task for session {session_id}: {ex}", exc_info=True)
+        await self._execute_on_speech_detected(recorded_data, text, metadata, recorded_duration, session_id)
 
     async def process_samples(self, samples: bytes, session_id: str) -> bool:
         if self.to_linear16:

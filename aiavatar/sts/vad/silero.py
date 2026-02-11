@@ -226,10 +226,7 @@ class SileroSpeechDetector(SpeechDetector):
             return False
 
     async def execute_on_speech_detected(self, recorded_data: bytes, recorded_duration: float, session_id: str):
-        try:
-            await self._on_speech_detected(recorded_data, None, None, recorded_duration, session_id)
-        except Exception as ex:
-            logger.error(f"Error in task for session {session_id}: {ex}", exc_info=True)
+        await self._execute_on_speech_detected(recorded_data, None, None, recorded_duration, session_id)
 
     async def process_samples(self, samples: bytes, session_id: str) -> bool:
         if self.to_linear16:
@@ -268,6 +265,9 @@ class SileroSpeechDetector(SpeechDetector):
 
         if self.debug:
             logger.debug(f"Speech detected: {speech_detected}, duration: {session.record_duration:.2f}, silence: {session.silence_duration:.2f}, session: {session.session_id}")
+
+        if speech_detected:
+            await self._execute_on_voiced(session_id)
 
         if not session.is_recording:
             if speech_detected:
