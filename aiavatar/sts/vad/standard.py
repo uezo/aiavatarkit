@@ -74,10 +74,7 @@ class StandardSpeechDetector(SpeechDetector):
         logger.debug(f"Updated volume_db_threshold to {value} dB, amplitude_threshold={self.amplitude_threshold}")
 
     async def execute_on_speech_detected(self, recorded_data: bytes, recorded_duration: float, session_id: str):
-        try:
-            await self._on_speech_detected(recorded_data, None, None, recorded_duration, session_id)
-        except Exception as ex:
-            logger.error(f"Error in task for session {session_id}: {ex}", exc_info=True)
+        await self._execute_on_speech_detected(recorded_data, None, None, recorded_duration, session_id)
 
     async def process_samples(self, samples: bytes, session_id: str) -> bool:
         if self.to_linear16:
@@ -96,6 +93,8 @@ class StandardSpeechDetector(SpeechDetector):
         max_amplitude = float(max(abs(sample) for sample, in struct.iter_unpack("<h", samples)))
         sample_duration = (len(samples) / 2) / (self.sample_rate * self.channels)
 
+        speech_detected = max_amplitude > session.amplitude_threshold
+
         if self.debug:
             if max_amplitude > 0:
                 current_db = 20 * math.log10(max_amplitude / 32767)
@@ -103,8 +102,11 @@ class StandardSpeechDetector(SpeechDetector):
                 current_db = -100.0
             logger.debug(f"dB: {current_db:.2f}, duration: {session.record_duration:.2f}, session: {session.session_id}")
 
+        if speech_detected:
+            await self._execute_on_voiced(session_id)
+
         if not session.is_recording:
-            if max_amplitude > session.amplitude_threshold:
+            if speech_detected:
                 # Start recording
                 session.reset()
                 session.is_recording = True
@@ -120,7 +122,7 @@ class StandardSpeechDetector(SpeechDetector):
             session.buffer.extend(samples)
             session.record_duration += sample_duration
 
-            if max_amplitude > session.amplitude_threshold:
+            if speech_detected:
                 session.silence_duration = 0
             else:
                 session.silence_duration += sample_duration

@@ -39,24 +39,55 @@ class SpeechDetector(ABC):
         on_recording_started_min_text_length: int = 2
     ):
         self.sample_rate = sample_rate
-        self._on_speech_detected = self.on_speech_detected_default
+        self._on_speech_detected: List[Callable[[bytes, str, dict, float, str], Awaitable[None]]] = []
         self.should_mute = lambda: False
         self._on_recording_started: List[Callable[[str], Awaitable[None]]] = []
+        self._on_voiced: List[Callable[[str], Awaitable[None]]] = []
         self._should_trigger_recording_started: Optional[Callable[[Optional[str], Any], bool]] = None
         # Parameters for on_recording_started trigger
         self.on_recording_started_min_duration = on_recording_started_min_duration
         self.on_recording_started_min_text_length = on_recording_started_min_text_length
 
-    def on_speech_detected(self, func):
-        self._on_speech_detected = func
+    def on_speech_detected(self, func: Callable[[bytes, str, dict, float, str], Awaitable[None]]) -> Callable[[bytes, str, dict, float, str], Awaitable[None]]:
+        """Register callback for speech detection.
+
+        The callback is called with (data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str).
+        """
+        self._on_speech_detected.append(func)
         return func
 
-    async def on_speech_detected_default(self, data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
-        logger.info(f"Speech detected: len={recorded_duration} sec")
+    async def _execute_on_speech_detected(self, data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
+        """Execute on_speech_detected callbacks."""
+        if not self._on_speech_detected:
+            logger.info(f"Speech detected: len={recorded_duration} sec")
+            return
+        for handler in self._on_speech_detected:
+            try:
+                await handler(data, text, metadata, recorded_duration, session_id)
+            except Exception:
+                logger.error("Error in on_speech_detected callback", exc_info=True)
 
     def on_recording_started(self, func: Callable[[str], Awaitable[None]]) -> Callable[[str], Awaitable[None]]:
         self._on_recording_started.append(func)
         return func
+
+    def on_voiced(self, func: Callable[[str], Awaitable[None]]) -> Callable[[str], Awaitable[None]]:
+        """Register callback for voice activity detection.
+
+        The callback is called with (session_id: str) when voice is detected.
+        """
+        self._on_voiced.append(func)
+        return func
+
+    async def _execute_on_voiced(self, session_id: str):
+        """Execute on_voiced callbacks if registered."""
+        if not self._on_voiced:
+            return
+        for handler in self._on_voiced:
+            try:
+                await handler(session_id)
+            except Exception:
+                logger.error("Error in on_voiced callback", exc_info=True)
 
     def should_trigger_recording_started(self, func: Callable[[Optional[str], Any], bool]):
         """Decorator to set custom trigger condition for on_recording_started callback.
