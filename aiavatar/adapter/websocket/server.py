@@ -4,8 +4,8 @@ import io
 import logging
 import re
 import wave
-from typing import List, Dict, Callable, Awaitable
-from fastapi import APIRouter, WebSocket
+from typing import List, Dict, Callable, Awaitable, Optional
+from fastapi import APIRouter, WebSocket, WebSocketException, status
 from ...database import PoolProvider
 from ...sts.models import STSRequest, STSResponse
 from ...sts.pipeline import STSPipeline
@@ -85,6 +85,8 @@ class AIAvatarWebSocketServer(Adapter):
 
         # WebSocket processing
         response_audio_chunk_size: int = 0, # 0 = Send whole audio data at once
+        # API server auth
+        api_key: str = None,
         # Debug
         debug: bool = False,
     ):
@@ -143,6 +145,9 @@ class AIAvatarWebSocketServer(Adapter):
 
         # WebSocket processing
         self.response_audio_chunk_size = response_audio_chunk_size
+
+        # API Key
+        self.api_key = api_key
 
         # Mute immediately on barge-in
         if mute_on_barge_in:
@@ -368,12 +373,44 @@ class AIAvatarWebSocketServer(Adapter):
             context_id=context_id
         ))
 
+    def _authenticate_websocket(self, websocket: WebSocket) -> Optional[str]:
+        """Authenticate WebSocket connection using Authorization header or Sec-WebSocket-Protocol.
+
+        Returns the accepted subprotocol name if authenticated via Sec-WebSocket-Protocol, or None.
+        """
+        # Check Authorization header (for native clients)
+        auth_header = websocket.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer ") and auth_header[7:] == self.api_key:
+            return None
+
+        # Check Sec-WebSocket-Protocol (for browser clients)
+        # Format: "Authorization.<base64_encoded_api_key>"
+        for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","):
+            protocol = protocol.strip()
+            if protocol.startswith("Authorization."):
+                try:
+                    b64_key = protocol[14:]
+                    b64_key += "=" * (-len(b64_key) % 4)  # Restore padding stripped by browser
+                    decoded_key = base64.b64decode(b64_key).decode("utf-8")
+                    if decoded_key == self.api_key:
+                        return protocol
+                except Exception:
+                    pass
+
+        raise WebSocketException(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="Invalid or missing API Key",
+        )
+
     def get_websocket_router(self, path: str = "/ws"):
         router = APIRouter()
 
         @router.websocket(path)
         async def websocket_endpoint(websocket: WebSocket):
-            await websocket.accept()
+            subprotocol = None
+            if self.api_key:
+                subprotocol = self._authenticate_websocket(websocket)
+            await websocket.accept(subprotocol=subprotocol)
             session_data = WebSocketSessionData()
 
             try:

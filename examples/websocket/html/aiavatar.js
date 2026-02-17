@@ -1,10 +1,11 @@
 class AIAvatarClient {
-    constructor({ webSocketUrl, faceImage, faceImagePaths, sampleRate = 16000, playbackAnalyzeHz = 60 }) {
+    constructor({ webSocketUrl, faceImage, faceImagePaths, sampleRate = 16000, playbackAnalyzeHz = 60, apiKey = null }) {
         this.webSocketUrl = webSocketUrl;
         this.faceImage = faceImage;
         this.faceImagePaths = faceImagePaths;
         this.sampleRate = sampleRate;
         this.playbackAnalyzeHz = playbackAnalyzeHz;
+        this.apiKey = apiKey;
 
         this.ws = null;
         this.audioContext = null;
@@ -28,7 +29,10 @@ class AIAvatarClient {
     }
 
     async startListening(sessionId, userId) {
-        this.ws = new WebSocket(this.webSocketUrl);
+        const protocols = this.apiKey
+            ? ["Authorization." + btoa(this.apiKey)]
+            : undefined;
+        this.ws = new WebSocket(this.webSocketUrl, protocols);
         this.ws.onopen = () => {
             console.log(`Connected to server: ${this.webSocketUrl}`);
             const startMessage = {
