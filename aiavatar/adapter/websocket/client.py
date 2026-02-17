@@ -26,6 +26,7 @@ class AIAvatarWebSocketClient(AIAvatarClientBase):
         output_chunk_size = 1024,
         audio_devices = None,
         cancel_echo = True,
+        api_key: str = None,
         debug = False,
     ):
         super().__init__(
@@ -43,6 +44,7 @@ class AIAvatarWebSocketClient(AIAvatarClientBase):
         )
 
         self.url = url
+        self.api_key = api_key
         self.websocket_connection = None
         self.websocket_task = None
 
@@ -97,7 +99,10 @@ class AIAvatarWebSocketClient(AIAvatarClientBase):
         await self.websocket_connection.send(json.dumps(start_message))
 
     async def start_listening(self, session_id: str = "ws_session", user_id: str = "ws_user", context_id: str = None):
-        async with websockets.connect(self.url) as ws:
+        connect_kwargs = {}
+        if self.api_key:
+            connect_kwargs["additional_headers"] = {"Authorization": f"Bearer {self.api_key}"}
+        async with websockets.connect(self.url, **connect_kwargs) as ws:
             self.websocket_connection = ws
 
             self.receive_response_task = asyncio.create_task(self.receive_response_worker())

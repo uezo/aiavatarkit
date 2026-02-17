@@ -157,6 +157,10 @@
             <input type="text" id="wsUrl" value="ws://localhost:8000/ws/stt">
         </div>
         <div class="form-group">
+            <label for="apiKey">API Key (optional)</label>
+            <input type="text" id="apiKey" value="" placeholder="Leave empty if not required">
+        </div>
+        <div class="form-group">
             <label for="sessionId">Session ID</label>
             <input type="text" id="sessionId" value="">
         </div>
@@ -203,6 +207,7 @@
 
         // DOM elements
         const wsUrlInput = document.getElementById('wsUrl');
+        const apiKeyInput = document.getElementById('apiKey');
         const sessionIdInput = document.getElementById('sessionId');
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
@@ -265,9 +270,11 @@
             }
 
             // Create client
+            const apiKey = apiKeyInput.value.trim() || null;
             client = new SpeechRecognitionClient({
                 webSocketUrl: wsUrl,
-                sampleRate: 16000
+                sampleRate: 16000,
+                apiKey: apiKey
             });
 
             // Setup callbacks

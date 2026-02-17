@@ -4,7 +4,8 @@
  * Usage:
  *   const client = new SpeechRecognitionClient({
  *     webSocketUrl: "ws://localhost:8000/ws/stt",
- *     sampleRate: 16000
+ *     sampleRate: 16000,
+ *     apiKey: "my-api-key-123"  // optional
  *   });
  *
  *   client.onPartialResult = (text) => console.log("Partial:", text);
@@ -21,12 +22,14 @@ class SpeechRecognitionClient {
      * @param {number} [options.sampleRate=16000] - Audio sample rate
      * @param {number} [options.bufferSize=512] - Audio buffer size (matches Silero VAD chunk size)
      * @param {string} [options.workletUrl="audio-processor.js"] - AudioWorklet processor URL
+     * @param {string} [options.apiKey=null] - API key for authentication (sent via Sec-WebSocket-Protocol)
      */
-    constructor({ webSocketUrl, sampleRate = 16000, bufferSize = 512, workletUrl = "audio-processor.js" }) {
+    constructor({ webSocketUrl, sampleRate = 16000, bufferSize = 512, workletUrl = "audio-processor.js", apiKey = null }) {
         this.webSocketUrl = webSocketUrl;
         this.sampleRate = sampleRate;
         this.bufferSize = bufferSize;
         this.workletUrl = workletUrl;
+        this.apiKey = apiKey;
 
         // Internal state
         this.ws = null;
@@ -55,7 +58,10 @@ class SpeechRecognitionClient {
         this.sessionId = sessionId;
 
         // Setup WebSocket
-        this.ws = new WebSocket(this.webSocketUrl);
+        const protocols = this.apiKey
+            ? ["Authorization." + btoa(this.apiKey)]
+            : undefined;
+        this.ws = new WebSocket(this.webSocketUrl, protocols);
 
         this.ws.onopen = () => {
             console.log(`[SpeechRecognitionClient] Connected to ${this.webSocketUrl}`);
