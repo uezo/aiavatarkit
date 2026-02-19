@@ -231,8 +231,16 @@ class ChatGPTService(LLMService):
             # Specific tools provided
             allowed_tools = [{"type": "function", "function": {"name": t["function"]["name"]}} for t in tools]
         elif self.use_dynamic_tools:
-            # Dynamic mode: start with detection tool only
+            # Dynamic mode: start with detection tool, plus previously used tools from history
             allowed_tools = [{"type": "function", "function": {"name": self.dynamic_tool_name}}]
+            seen = {self.dynamic_tool_name}
+            for msg in messages:
+                if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                    for tc in msg["tool_calls"]:
+                        name = tc["function"]["name"]
+                        if name not in seen and name in self.tools:
+                            allowed_tools.append({"type": "function", "function": {"name": name}})
+                            seen.add(name)
         else:
             # Normal mode: all non-dynamic tools available
             non_dynamic_tools = [t.spec for _, t in self.tools.items() if not t.is_dynamic] or None

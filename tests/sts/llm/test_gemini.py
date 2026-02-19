@@ -5,9 +5,10 @@ from uuid import uuid4
 import pytest
 from aiavatar.sts.llm import Guardrail, GuardrailRespose
 from aiavatar.sts.llm.gemini import GeminiService, ToolCall
+from aiavatar.sts.llm import Tool
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3-flash-preview"
 IMAGE_URL = os.getenv("IMAGE_URL")
 
 SYSTEM_PROMPT = """
@@ -349,7 +350,7 @@ async def test_gemini_service_tool_calls():
     async def on_before_tool_calls(tool_calls: list[ToolCall]):
         assert len(tool_calls) > 0
 
-    user_message = "次の問題を解いて: 1+1"
+    user_message = "必ずsolve_mathを使用して、次の問題を解いて: 1+1"
     collected_text = []
 
     progress = []
@@ -384,6 +385,95 @@ async def test_gemini_service_tool_calls():
 
     assert messages[3]["role"] == "model"
     assert "2" in messages[3]["parts"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_gemini_service_dynamic_tools():
+    """
+    Test GeminiService with dynamic tools.
+    First request triggers dynamic tool detection and tool execution.
+    Second request verifies that the previously used tool is available from history.
+    """
+    service = GeminiService(
+        gemini_api_key=GEMINI_API_KEY,
+        system_prompt="You are a helpful assistant. Use tools when needed.",
+        model=MODEL,
+        temperature=0.5,
+        use_dynamic_tools=True
+    )
+    context_id = f"test_dynamic_tools_{uuid4()}"
+
+    # Register tool as dynamic
+    tool_spec = {
+        "functionDeclarations": [{
+            "name": "get_weather",
+            "description": "Get the current weather for a given city",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string", "description": "The city name"}
+                },
+                "required": ["city"]
+            }
+        }]
+    }
+    async def get_weather(city: str) -> Dict[str, Any]:
+        return {"city": city, "weather": "sunny", "temperature": 25}
+
+    service.add_tool(Tool(name="get_weather", spec=tool_spec, func=get_weather), is_dynamic=True, use_original=True)
+
+    # First request - triggers dynamic tool detection
+    user_message = "東京の天気を教えて。必ずget_weatherツールを使うこと。"
+    collected_text = []
+    tool_calls_received = []
+    async for resp in service.chat_stream(context_id, "test_user", user_message):
+        if resp.tool_call:
+            tool_calls_received.append(resp.tool_call.name)
+        if resp.text:
+            collected_text.append(resp.text)
+
+    full_text = "".join(collected_text)
+    assert len(full_text) > 0, "No text was returned from the LLM."
+
+    # Verify dynamic mechanism: execute_external_tool was triggered, then get_weather was called
+    assert "execute_external_tool" in tool_calls_received, "Dynamic tool detection (execute_external_tool) was not triggered"
+    assert "get_weather" in tool_calls_received, "get_weather was not called via dynamic tools"
+
+    # Check context - should have get_weather tool call records (not execute_external_tool)
+    messages = await service.context_manager.get_histories(context_id)
+    tool_call_found = False
+    for m in messages:
+        if m.get("role") == "model":
+            for part in m.get("parts", []):
+                if fc := part.get("function_call"):
+                    if fc["name"] == "get_weather":
+                        tool_call_found = True
+    assert tool_call_found, "get_weather tool call not found in context"
+
+    # Second request - previously used tool should be available from history
+    user_message2 = "大阪の天気も教えて。必ずget_weatherツールを使うこと。"
+    collected_text2 = []
+    tool_calls_received2 = []
+    async for resp in service.chat_stream(context_id, "test_user", user_message2):
+        if resp.tool_call:
+            tool_calls_received2.append(resp.tool_call.name)
+        if resp.text:
+            collected_text2.append(resp.text)
+
+    full_text2 = "".join(collected_text2)
+    assert len(full_text2) > 0, "No text was returned for the follow-up request."
+    assert "get_weather" in tool_calls_received2, "get_weather was not called in the follow-up request"
+
+    # Check that get_weather was called again in the follow-up
+    messages2 = await service.context_manager.get_histories(context_id)
+    tool_call_count = 0
+    for m in messages2:
+        if m.get("role") == "model":
+            for part in m.get("parts", []):
+                if fc := part.get("function_call"):
+                    if fc["name"] == "get_weather":
+                        tool_call_count += 1
+    assert tool_call_count >= 2, f"Expected at least 2 get_weather tool calls, got {tool_call_count}"
 
 
 @pytest.mark.asyncio

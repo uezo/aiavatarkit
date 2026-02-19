@@ -1,5 +1,4 @@
 import base64
-import copy
 from logging import getLogger
 import re
 from typing import AsyncGenerator, Dict, List
@@ -103,6 +102,11 @@ class GeminiService(LLMService):
         )
         while histories and histories[0]["role"] != "user":
             histories.pop(0)
+        # Decode thought_signature back to bytes for Gemini API (Gemini 3+)
+        for h in histories:
+            for part in h.get("parts", []):
+                if isinstance(part.get("thought_signature"), str):
+                    part["thought_signature"] = base64.b64decode(part["thought_signature"])
         messages.extend(histories)
 
         parts = []
@@ -134,6 +138,9 @@ class GeminiService(LLMService):
                 inline_data = part.get("inline_data")
                 if inline_data and "data" in inline_data:
                     inline_data["data"] = base64.b64encode(inline_data["data"]).decode("utf-8")
+                # Encode thought_signature bytes for JSON serialization (Gemini 3+)
+                if isinstance(part.get("thought_signature"), bytes):
+                    part["thought_signature"] = base64.b64encode(part["thought_signature"]).decode("utf-8")
             dict_messages.append(dumped)
 
         if self._update_context_filter:
@@ -218,24 +225,6 @@ class GeminiService(LLMService):
 
         return tools
 
-    def rename_tool_names(self, messages: list) -> list:
-        renamed_messages = copy.deepcopy(messages)
-        dynamic_tool_name = self.dynamic_tool_name
-
-        for message in renamed_messages:
-            if isinstance(message, types.Content):
-                m = message.model_dump()
-            else:
-                m = message
-
-            for part in m["parts"]:
-                if fc := part.get("function_call"):
-                    fc["name"] = dynamic_tool_name
-                if fr := part.get("function_response"):
-                    fr["name"] = dynamic_tool_name
-
-        return renamed_messages
-
     async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None) -> AsyncGenerator[LLMResponse, None]:
         if self.thinking_budget >= 0:
             thinking_config = types.ThinkingConfig(
@@ -249,13 +238,30 @@ class GeminiService(LLMService):
         if tools:
             filtered_tools = tools
             for t in filtered_tools:
-                if ti := self.tools.get(t["functionDeclarations"][0]["name"]).instruction:
-                    tool_instruction += f"{ti}\n\n"
+                if tool := self.tools.get(t["functionDeclarations"][0]["name"]):
+                    if ti := tool.instruction:
+                        tool_instruction += f"{ti}\n\n"
         elif self.use_dynamic_tools:
             filtered_tools = [self.dynamic_tool_spec]
             tool_instruction = self.dynamic_tool_instruction.format(
                 dynamic_tool_name=self.dynamic_tool_name
             )
+            # Include previously used tools from history
+            seen = {self.dynamic_tool_name}
+            for msg in messages:
+                if isinstance(msg, types.Content):
+                    m = msg.model_dump()
+                else:
+                    m = msg
+                if m.get("role") == "model":
+                    for part in m.get("parts", []):
+                        if fc := part.get("function_call"):
+                            name = fc["name"]
+                            if name not in seen and name in self.tools:
+                                filtered_tools.append(self.tools[name].spec)
+                                if ti := self.tools[name].instruction:
+                                    tool_instruction += f"{ti}\n\n"
+                                seen.add(name)
         else:
             filtered_tools = [t.spec for _, t in self.tools.items() if not t.is_dynamic] or None
 
@@ -272,16 +278,18 @@ class GeminiService(LLMService):
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
                 thinking_config=thinking_config
             ),
-            contents=self.rename_tool_names(messages) if not tools and self.use_dynamic_tools else messages
+            contents=messages
         )
 
         tool_calls: List[ToolCall] = []
+        model_response_parts: List = []  # Keep original parts to preserve thought_signature (Gemini 3+)
         try_dynamic_tools = False
         response_text = ""
         async for chunk in stream_resp:
             if not chunk.candidates or not chunk.candidates[0].content.parts:
                 continue
             for part in chunk.candidates[0].content.parts:
+                model_response_parts.append(part)
                 if content := part.text:
                     response_text += content
                     if tools and messages[-1].parts[0].function_response is None:
@@ -340,13 +348,9 @@ class GeminiService(LLMService):
                     logger.info(f"ToolCall result: {tool_result}")
 
                 if tool_result:
-                    model_parts = []
-                    if response_text:
-                        model_parts.append(types.Part.from_text(text=response_text))
-                    model_parts.append(types.Part.from_function_call(name=tc.name, args=tc.arguments))
                     messages.append(types.Content(
                         role="model",
-                        parts=model_parts
+                        parts=model_response_parts
                     ))
                     messages.append(types.Content(
                         role="user",

@@ -194,13 +194,25 @@ class LiteLLMService(LLMService):
         if tools:
             filtered_tools = tools
             for t in filtered_tools:
-                if ti := self.tools.get(t["function"]["name"]).instruction:
-                    tool_instruction += f"{ti}\n\n"
+                if tool := self.tools.get(t["function"]["name"]):
+                    if ti := tool.instruction:
+                        tool_instruction += f"{ti}\n\n"
         elif self.use_dynamic_tools:
             filtered_tools = [self.dynamic_tool_spec]
             tool_instruction = self.dynamic_tool_instruction.format(
                 dynamic_tool_name=self.dynamic_tool_name
             )
+            # Include previously used tools from history
+            seen = {self.dynamic_tool_name}
+            for msg in messages:
+                if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                    for tc in msg["tool_calls"]:
+                        name = tc["function"]["name"]
+                        if name not in seen and name in self.tools:
+                            filtered_tools.append(self.tools[name].spec)
+                            if ti := self.tools[name].instruction:
+                                tool_instruction += f"{ti}\n\n"
+                            seen.add(name)
         else:
             filtered_tools = [t.spec for _, t in self.tools.items() if not t.is_dynamic] or None
 
