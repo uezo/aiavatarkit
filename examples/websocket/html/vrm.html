@@ -1,0 +1,1544 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>AIAvatarKit</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000;
+            font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", "メイリオ", sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* ── Full-screen VRM canvas ── */
+        #vrmCanvas {
+            position: fixed;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .vrm-placeholder {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: rgba(255, 255, 255, 0.4);
+            font-size: 16px;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        /* ── Visual-novel message box ── */
+        .message-box {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            pointer-events: none;
+        }
+
+        .message-box .message-inner {
+            opacity: 1;
+            transform: translateY(0);
+            transition: opacity 0.4s ease, transform 0.4s ease;
+        }
+
+        .message-box.hidden .message-text {
+            opacity: 0;
+        }
+
+        .message-box.hidden .message-speaker {
+            opacity: 0;
+        }
+
+        .message-box.visible .message-text {
+            opacity: 1;
+            transition: opacity 0.3s ease;
+        }
+
+        .message-box.visible .message-speaker {
+            opacity: 1;
+            transition: opacity 0.3s ease;
+        }
+
+        .message-box.auto-hidden .message-inner {
+            display: none;
+        }
+
+        .message-inner {
+            position: relative;
+            margin: 0 24px 24px;
+            max-width: 900px;
+            margin-left: auto;
+            margin-right: auto;
+            margin-bottom: 24px;
+            background: var(--vn-msg-bg, linear-gradient(
+                180deg,
+                rgba(10, 10, 30, 0.82) 0%,
+                rgba(5, 5, 20, 0.92) 100%
+            ));
+            border: 1px solid var(--vn-msg-border-color, rgba(180, 200, 255, 0.18));
+            border-radius: var(--vn-msg-border-radius, 6px);
+            padding: 0;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            box-shadow: var(--vn-msg-shadow,
+                0 0 30px rgba(0, 0, 0, 0.5),
+                inset 0 1px 0 rgba(255, 255, 255, 0.06));
+            transition: opacity 0.4s ease, transform 0.4s ease;
+        }
+
+        /* Name plate (aligned with vn-menu tabs) */
+        .message-speaker {
+            position: absolute;
+            top: 0;
+            left: 16px;
+            transform: translateY(-100%);
+            font-size: var(--vn-speaker-font-size, 13px);
+            font-family: var(--vn-text-font-family, inherit);
+            font-weight: bold;
+            padding: 5px 20px;
+            border-radius: 4px 4px 0 0;
+            letter-spacing: 0.08em;
+            line-height: 1;
+            border: 1px solid var(--vn-msg-border-color, rgba(180, 200, 255, 0.18));
+            border-bottom: none;
+        }
+
+        .message-speaker.ai {
+            background: var(--vn-speaker-ai-bg, linear-gradient(
+                135deg,
+                rgba(100, 140, 220, 0.9) 0%,
+                rgba(130, 100, 200, 0.9) 100%
+            ));
+            color: var(--vn-speaker-ai-color, #fff);
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+        }
+
+        .message-speaker.user {
+            background: var(--vn-speaker-user-bg, linear-gradient(
+                135deg,
+                rgba(80, 180, 140, 0.9) 0%,
+                rgba(60, 160, 120, 0.9) 100%
+            ));
+            color: var(--vn-speaker-user-color, #fff);
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+        }
+
+        /* Text area (fixed height for ~3 lines) */
+        .message-text {
+            padding: 20px 24px;
+            font-size: var(--vn-text-font-size, 16px);
+            font-family: var(--vn-text-font-family, inherit);
+            line-height: var(--vn-text-line-height, 1.85);
+            color: var(--vn-text-color, rgba(255, 255, 255, 0.95));
+            height: 110px;
+            overflow-y: auto;
+            text-align: left;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Blinking cursor indicator */
+        .message-text::after {
+            content: "\25bc";
+            animation: blink 1s steps(2) infinite;
+            color: var(--vn-cursor-color, rgba(180, 200, 255, 0.6));
+            margin-left: 4px;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        /* ── Tool status (above message box) ── */
+        .tool-status {
+            position: fixed;
+            bottom: 160px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(180, 200, 255, 0.6);
+            font-size: 12px;
+            text-align: center;
+            z-index: 100;
+            pointer-events: none;
+        }
+
+        /* ── VN-style menu buttons (message box top-right) ── */
+        .vn-menu {
+            position: absolute;
+            top: 0;
+            right: 12px;
+            transform: translateY(-100%);
+            display: flex;
+            gap: 2px;
+            z-index: 10;
+            pointer-events: auto;
+        }
+
+        /* Hide the original vrmi-toggle gear button */
+        .vrmi-toggle {
+            display: none !important;
+        }
+
+        .vn-menu-btn {
+            background: var(--vn-menu-bg, rgba(40, 40, 60, 0.85));
+            border: 1px solid var(--vn-menu-border-color, rgba(180, 200, 255, 0.12));
+            border-bottom: none;
+            border-radius: 4px 4px 0 0;
+            color: var(--vn-menu-color, rgba(200, 210, 240, 0.55));
+            font-size: 12px;
+            font-family: inherit;
+            letter-spacing: 0.06em;
+            padding: 5px 0;
+            width: 76px;
+            text-align: center;
+            cursor: pointer;
+            transition: color 0.2s, background 0.2s;
+            line-height: 1;
+            white-space: nowrap;
+            min-height: 0;
+        }
+
+        .vn-menu-btn:hover {
+            color: var(--vn-menu-hover-color, rgba(220, 230, 255, 0.85));
+            background: var(--vn-menu-hover-bg, rgba(60, 60, 90, 0.9));
+        }
+
+        .vn-menu-btn.active {
+            color: var(--vn-menu-active-color, rgba(160, 200, 255, 1));
+            background: var(--vn-menu-active-bg, rgba(70, 80, 130, 0.9));
+        }
+
+        /* Volume wrapper (same size as other menu buttons) */
+        .vn-vol-wrap {
+            position: relative;
+            width: 76px;
+            display: flex;
+        }
+
+        .vn-vol-wrap .vn-menu-btn {
+            width: 100%;
+        }
+
+        .volume-popup {
+            position: absolute;
+            bottom: calc(100% + 6px);
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(10, 10, 30, 0.92);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid rgba(180, 200, 255, 0.12);
+            border-radius: 8px;
+            padding: 14px 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s, visibility 0.2s;
+            pointer-events: auto;
+        }
+
+        .volume-popup.open {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .volume-popup .volume-value {
+            color: rgba(200, 210, 240, 0.5);
+            font-size: 10px;
+        }
+
+        .volume-slider-vertical {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 90px;
+            height: 3px;
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 2px;
+            outline: none;
+            cursor: pointer;
+            transform: rotate(-90deg);
+            transform-origin: center center;
+            margin: 38px 0;
+        }
+
+        .volume-slider-vertical::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            background: rgba(200, 210, 240, 0.85);
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .volume-slider-vertical::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            background: rgba(200, 210, 240, 0.85);
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+        }
+
+        /* ── Mic activity glow (bottom edge) ── */
+        .mic-glow {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: transparent;
+            z-index: 99;
+            transition: background 0.15s;
+            pointer-events: none;
+        }
+
+        .mic-glow.active {
+            background: linear-gradient(
+                90deg,
+                transparent 0%,
+                rgba(255, 160, 60, 0.6) 30%,
+                rgba(255, 180, 80, 0.8) 50%,
+                rgba(255, 160, 60, 0.6) 70%,
+                transparent 100%
+            );
+            box-shadow: 0 0 20px rgba(255, 160, 60, 0.3);
+        }
+
+        /* ── Drag & drop overlay ── */
+        .drop-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 999;
+            pointer-events: none;
+        }
+
+        .drop-overlay.show {
+            display: flex;
+        }
+
+        .drop-overlay-text {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 18px;
+            border: 2px dashed rgba(255, 255, 255, 0.3);
+            padding: 40px 60px;
+            border-radius: 12px;
+        }
+
+        /* ── iOS-style toggle switch (compact) ── */
+        .toggle-switch {
+            position: relative;
+            width: 40px;
+            height: 24px;
+            appearance: none;
+            -webkit-appearance: none;
+            background-color: #C8C8CC;
+            border-radius: 24px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            outline: none;
+            border: none;
+            flex-shrink: 0;
+        }
+
+        .toggle-switch::before {
+            content: "";
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background-color: #fff;
+            border-radius: 50%;
+            transition: transform 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .toggle-switch:checked {
+            background-color: #34C759;
+        }
+
+        .toggle-switch:checked::before {
+            transform: translateX(16px);
+        }
+
+        /* ── Input level (hidden by default) ── */
+        .input-level {
+            display: none;
+        }
+
+        /* ── Background image layer ── */
+        #bgLayer {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            background: #000;
+        }
+
+        #bgLayer img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        /* ── Avatar frame (above background) ── */
+        #avatarFrame {
+            position: fixed;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+    </style>
+    <!-- Optional theme: place a theme.css in the same directory to override styles -->
+    <link rel="stylesheet" href="vrm-themes/theme-girly.css">
+</head>
+
+<body>
+    <!-- Background image layer -->
+    <div id="bgLayer"></div>
+
+    <!-- Full-screen VRM canvas -->
+    <div id="avatarFrame">
+        <canvas id="vrmCanvas"></canvas>
+        <div class="vrm-placeholder" id="vrmPlaceholder">Drop or load a VRM file</div>
+    </div>
+
+    <!-- Mic activity glow -->
+    <div class="mic-glow" id="micGlow"></div>
+
+    <!-- Drop overlay -->
+    <div class="drop-overlay" id="dropOverlay">
+        <div class="drop-overlay-text">VRM file をドロップ</div>
+    </div>
+
+    <!-- Visual-novel message box -->
+    <div id="messageBox" class="message-box hidden">
+        <div class="message-inner">
+            <div id="messageSpeaker" class="message-speaker ai">AI</div>
+            <!-- VN-style menu buttons -->
+            <div class="vn-menu">
+                <button class="vn-menu-btn" id="chatBtn">START</button>
+                <button class="vn-menu-btn" id="bargeInBtn">BARGE-IN</button>
+                <div class="vn-vol-wrap" id="volumeControl">
+                    <button class="vn-menu-btn" id="volumeBtn">VOL</button>
+                    <div class="volume-popup" id="volumePopup">
+                        <input type="range" id="volumeSlider" class="volume-slider-vertical" min="0" max="100" value="100">
+                        <span class="volume-value" id="volumeValue">100</span>
+                    </div>
+                </div>
+                <button class="vn-menu-btn" id="configBtn">CONFIG</button>
+            </div>
+            <div id="messageText" class="message-text"></div>
+        </div>
+    </div>
+
+    <div id="toolStatus" class="tool-status"></div>
+
+    <!-- Hidden elements -->
+    <div class="input-level">
+        <span>Input: </span>
+        <span id="inputLevel">0.0 dB</span>
+    </div>
+    <video id="cameraVideo" style="display: none;" playsinline></video>
+    <canvas id="cameraCanvas" style="display: none;"></canvas>
+    <input type="checkbox" id="interruptToggle" style="display:none;">
+    <input type="checkbox" id="cameraToggle" style="display:none;">
+
+    <script src="aiavatar.js"></script>
+    <script src="camera.js"></script>
+    <script src="lipsync.js"></script>
+    <script src="ui.js"></script>
+    <script src="vrm-idle.js"></script>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/",
+            "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.1.1/lib/three-vrm.module.min.js"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+
+        // ============================================================
+        // VRM Idle
+        // ============================================================
+        const idle = new VRMIdle({
+            isAudioPlaying: () => aiavatar.isAudioPlaying,
+        });
+        idle.swayPauseWhen = () => aiavatar.isAudioPlaying || ui.isServerProcessing;
+        idle.swayResumeDelay = 20;
+
+        // ============================================================
+        // Inspector
+        // ============================================================
+        const inspector = idle.createInspector();
+
+        // ============================================================
+        // Lighting Settings
+        // ============================================================
+        const LIGHT_STORAGE_KEY = 'vrm_lighting';
+
+        function kelvinToRGB(K) {
+            const t = K / 100;
+            let r, g, b;
+            if (t <= 66) {
+                r = 255;
+                g = 99.4708025861 * Math.log(t) - 161.1195681661;
+                b = t <= 19 ? 0 : 138.5177312231 * Math.log(t - 10) - 305.0447927307;
+            } else {
+                r = 329.698727446 * Math.pow(t - 60, -0.1332047592);
+                g = 288.1221695283 * Math.pow(t - 60, -0.0755148492);
+                b = 255;
+            }
+            return [
+                Math.min(255, Math.max(0, r)) / 255,
+                Math.min(255, Math.max(0, g)) / 255,
+                Math.min(255, Math.max(0, b)) / 255,
+            ];
+        }
+
+        const lightDefs = {
+            ambient:  { def: 100,  min: 0,    max: 500,   label: 'Ambient',    fmt: v => (v / 100).toFixed(1) },
+            direct:   { def: 100,  min: 0,    max: 500,   label: 'Direct',     fmt: v => (v / 100).toFixed(1) },
+            hAngle:   { def: 20,   min: -180, max: 180,   label: 'H angle',    fmt: v => v + '\u00b0' },
+            vAngle:   { def: 30,   min: -90,  max: 90,    label: 'V angle',    fmt: v => v + '\u00b0' },
+            temp:     { def: 6500, min: 2000, max: 10000, label: 'Color temp', fmt: v => v + 'K' },
+        };
+        const L = {};
+        let lightSliders = {};
+
+        function loadLighting() {
+            let saved = {};
+            try { saved = JSON.parse(localStorage.getItem(LIGHT_STORAGE_KEY) || '{}'); } catch {}
+            for (const [k, d] of Object.entries(lightDefs)) {
+                L[k] = saved[k] ?? d.def;
+            }
+        }
+
+        function saveLighting() {
+            localStorage.setItem(LIGHT_STORAGE_KEY, JSON.stringify(L));
+        }
+
+        let applyLighting;
+
+        // ---- Load tab ----
+        inspector.addTab('Load', (panel) => {
+            const urlRow = document.createElement('div');
+            urlRow.style.cssText = 'display:flex;gap:6px;margin-bottom:8px';
+            const urlInput = document.createElement('input');
+            urlInput.type = 'text';
+            urlInput.placeholder = 'VRM file URL';
+            urlInput.style.cssText = 'flex:1;padding:4px 8px;border:1px solid #ccc;border-radius:4px;font-size:12px';
+            const urlBtn = document.createElement('button');
+            urlBtn.className = 'vrmi-sampler-btn';
+            urlBtn.textContent = 'Load URL';
+            urlBtn.addEventListener('click', async () => {
+                const url = urlInput.value.trim();
+                if (!url) return;
+                try {
+                    const resp = await fetch(url);
+                    const blob = await resp.blob();
+                    await loadAndCacheVRM(blob);
+                } catch (err) {
+                    // CORS fallback: load without cache
+                    loadVRM(url).catch(e => {
+                        console.error('Failed to load VRM:', e);
+                        alert('Failed to load VRM from URL.');
+                    });
+                }
+            });
+            urlRow.appendChild(urlInput);
+            urlRow.appendChild(urlBtn);
+            panel.appendChild(urlRow);
+
+            const fileInput = document.createElement('input');
+            fileInput.type = 'file';
+            fileInput.accept = '.vrm';
+            fileInput.style.display = 'none';
+            const fileBtn = document.createElement('button');
+            fileBtn.className = 'vrmi-sampler-btn';
+            fileBtn.textContent = 'Local file';
+            fileBtn.addEventListener('click', () => fileInput.click());
+            fileInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                loadAndCacheVRM(file).catch(err => {
+                    console.error('Failed to load VRM:', err);
+                    alert('Failed to load VRM file.');
+                });
+            });
+            panel.appendChild(fileBtn);
+            panel.appendChild(fileInput);
+
+            const hint = document.createElement('div');
+            hint.style.cssText = 'margin-top:10px;font-size:11px;color:#999';
+            hint.textContent = 'You can also drag & drop a .vrm file onto the screen.';
+            panel.appendChild(hint);
+
+            const unloadBtn = document.createElement('button');
+            unloadBtn.className = 'vrmi-sampler-btn';
+            unloadBtn.textContent = 'Unload VRM';
+            unloadBtn.style.cssText = 'margin-top:10px';
+            unloadBtn.addEventListener('click', async () => {
+                if (currentVrm) {
+                    scene.remove(currentVrm.scene);
+                    VRMUtils.deepDispose(currentVrm.scene);
+                    currentVrm = null;
+                    idle.vrm = null;
+                    document.getElementById('vrmPlaceholder').style.display = '';
+                }
+                await cacheDB.del('vrm_file');
+                localStorage.removeItem(CAMERA_KEY);
+            });
+            panel.appendChild(unloadBtn);
+        }, { position: 0, active: true });
+
+        // ---- Light tab ----
+        inspector.addTab('Light', (panel) => {
+            loadLighting();
+            const grid = document.createElement('div');
+            grid.className = 'vrmi-sliders';
+            for (const [k, d] of Object.entries(lightDefs)) {
+                const label = document.createElement('span');
+                label.textContent = d.label;
+                const slider = document.createElement('input');
+                slider.type = 'range';
+                slider.min = d.min;
+                slider.max = d.max;
+                slider.value = L[k];
+                const display = document.createElement('span');
+                display.textContent = d.fmt(L[k]);
+                slider.addEventListener('input', () => {
+                    L[k] = parseFloat(slider.value);
+                    display.textContent = d.fmt(L[k]);
+                    applyLighting?.();
+                    saveLighting();
+                });
+                lightSliders[k] = { slider, display };
+                grid.appendChild(label);
+                grid.appendChild(slider);
+                grid.appendChild(display);
+            }
+            panel.appendChild(grid);
+        }, { position: 1 });
+
+        // ---- IndexedDB cache helper ----
+        const cacheDB = (() => {
+            const DB_NAME = 'vrm_galge_cache';
+            const DB_VER = 1;
+            const STORE = 'blobs';
+            function open() {
+                return new Promise((resolve, reject) => {
+                    const req = indexedDB.open(DB_NAME, DB_VER);
+                    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+                    req.onsuccess = () => resolve(req.result);
+                    req.onerror = () => reject(req.error);
+                });
+            }
+            return {
+                async get(key) {
+                    const db = await open();
+                    return new Promise((resolve, reject) => {
+                        const tx = db.transaction(STORE, 'readonly');
+                        const req = tx.objectStore(STORE).get(key);
+                        req.onsuccess = () => resolve(req.result ?? null);
+                        req.onerror = () => reject(req.error);
+                    });
+                },
+                async put(key, value) {
+                    const db = await open();
+                    return new Promise((resolve, reject) => {
+                        const tx = db.transaction(STORE, 'readwrite');
+                        tx.objectStore(STORE).put(value, key);
+                        tx.oncomplete = () => resolve();
+                        tx.onerror = () => reject(tx.error);
+                    });
+                },
+                async del(key) {
+                    const db = await open();
+                    return new Promise((resolve, reject) => {
+                        const tx = db.transaction(STORE, 'readwrite');
+                        tx.objectStore(STORE).delete(key);
+                        tx.oncomplete = () => resolve();
+                        tx.onerror = () => reject(tx.error);
+                    });
+                }
+            };
+        })();
+
+        // ---- UI tab (message box, toggles, mic mute, background) ----
+        const DISPLAY_STORAGE_KEY = 'vrm_display';
+        let msgBoxOpacity = 80;
+        let savedCharName = '';
+        let savedUserName = '';
+        let showUserText = true;
+        let showAIText = true;
+        let showMicGlow = true;
+        let showVnMenu = true;
+        let autoHideMsgBox = false;
+        let msgSpeed = 70;
+        try {
+            const saved = JSON.parse(localStorage.getItem(DISPLAY_STORAGE_KEY) || '{}');
+            if (saved.msgBoxOpacity != null) msgBoxOpacity = saved.msgBoxOpacity;
+            if (saved.charName) savedCharName = saved.charName;
+            if (saved.userName) savedUserName = saved.userName;
+            if (saved.showUserText != null) showUserText = saved.showUserText;
+            if (saved.showAIText != null) showAIText = saved.showAIText;
+            if (saved.showMicGlow != null) showMicGlow = saved.showMicGlow;
+            if (saved.showVnMenu != null) showVnMenu = saved.showVnMenu;
+            if (saved.autoHideMsgBox != null) autoHideMsgBox = saved.autoHideMsgBox;
+            if (saved.msgSpeed != null) msgSpeed = saved.msgSpeed;
+        } catch {}
+        let displaySlider;
+        let speedSliderRef;
+        let nameInputs = {};
+        let toggleInputs = {};
+        let lastSpeechTime = Date.now();
+        let msgBoxAutoHidden = false;
+
+        function applyMsgBoxOpacity() {
+            const inner = document.querySelector('.message-inner');
+            if (inner) inner.style.opacity = msgBoxOpacity / 100;
+        }
+        applyMsgBoxOpacity();
+
+        function applyAutoHide() {
+            const box = document.getElementById('messageBox');
+            if (autoHideMsgBox) {
+                msgBoxAutoHidden = true;
+                box.classList.add('auto-hidden');
+            } else {
+                msgBoxAutoHidden = false;
+                box.classList.remove('auto-hidden');
+            }
+        }
+        applyAutoHide();
+
+        function applyVnMenu() {
+            const menu = document.querySelector('.vn-menu');
+            if (menu) menu.style.display = showVnMenu ? 'flex' : 'none';
+        }
+        applyVnMenu();
+
+        function saveDisplay() {
+            localStorage.setItem(DISPLAY_STORAGE_KEY, JSON.stringify({
+                msgBoxOpacity,
+                charName: savedCharName,
+                userName: savedUserName,
+                showUserText,
+                showAIText,
+                showMicGlow,
+                showVnMenu,
+                autoHideMsgBox,
+                msgSpeed,
+            }));
+        }
+
+        // -- Background image (IndexedDB) --
+        const bgLayer = document.getElementById('bgLayer');
+        let bgImageUrl = '';
+
+        function applyBgImage() {
+            if (bgImageUrl) {
+                let img = bgLayer.querySelector('img');
+                if (!img) {
+                    img = document.createElement('img');
+                    bgLayer.appendChild(img);
+                }
+                img.src = bgImageUrl;
+            } else {
+                bgLayer.innerHTML = '';
+            }
+        }
+
+        async function saveBgBlob(blob) {
+            await cacheDB.put('bg_image', blob);
+        }
+
+        // Restore background from cache
+        cacheDB.get('bg_image').then(blob => {
+            if (blob) {
+                bgImageUrl = URL.createObjectURL(blob);
+                applyBgImage();
+            }
+        }).catch(() => {});
+        // Migrate old localStorage data URL if present
+        try {
+            const old = localStorage.getItem('vrm_bg_image');
+            if (old) {
+                fetch(old).then(r => r.blob()).then(blob => {
+                    cacheDB.put('bg_image', blob);
+                    localStorage.removeItem('vrm_bg_image');
+                }).catch(() => {});
+            }
+        } catch {}
+
+        inspector.addTab('UI', (panel) => {
+            // Helper: section heading
+            function sectionHeading(text) {
+                const h = document.createElement('div');
+                h.style.cssText = 'font-size:11px;color:#999;margin-bottom:6px';
+                h.textContent = text;
+                return h;
+            }
+
+            // Helper: toggle switch
+            function makeToggle(labelText, checked, onChange) {
+                const row = document.createElement('label');
+                row.style.cssText = 'display:flex;align-items:center;gap:10px;cursor:pointer';
+                const sw = document.createElement('input');
+                sw.type = 'checkbox';
+                sw.className = 'toggle-switch';
+                sw.checked = checked;
+                sw.addEventListener('change', () => onChange(sw.checked));
+                const span = document.createElement('span');
+                span.style.cssText = 'font-size:12px;color:#666';
+                span.textContent = labelText;
+                row.appendChild(sw);
+                row.appendChild(span);
+                return { row, sw };
+            }
+
+            // ====== Message box section ======
+            const msgSection = document.createElement('div');
+            msgSection.appendChild(sectionHeading('Message box'));
+
+            // Sliders
+            const grid = document.createElement('div');
+            grid.className = 'vrmi-sliders';
+            const label = document.createElement('span');
+            label.textContent = 'Opacity';
+            const slider = document.createElement('input');
+            slider.type = 'range';
+            slider.min = 0;
+            slider.max = 100;
+            slider.value = msgBoxOpacity;
+            const display = document.createElement('span');
+            display.textContent = msgBoxOpacity + '%';
+            slider.addEventListener('input', () => {
+                msgBoxOpacity = parseInt(slider.value);
+                display.textContent = msgBoxOpacity + '%';
+                applyMsgBoxOpacity();
+                saveDisplay();
+            });
+            displaySlider = { slider, display };
+            grid.appendChild(label);
+            grid.appendChild(slider);
+            grid.appendChild(display);
+
+            const speedLabel = document.createElement('span');
+            speedLabel.textContent = 'Speed';
+            const speedSlider = document.createElement('input');
+            speedSlider.type = 'range';
+            speedSlider.min = 1;
+            speedSlider.max = 100;
+            speedSlider.value = msgSpeed;
+            const speedDisplay = document.createElement('span');
+            speedDisplay.textContent = msgSpeed;
+            speedSlider.addEventListener('input', () => {
+                msgSpeed = parseInt(speedSlider.value);
+                twSpeed = Math.max(1, 101 - msgSpeed);
+                speedDisplay.textContent = msgSpeed;
+                saveDisplay();
+            });
+            speedSliderRef = { slider: speedSlider, display: speedDisplay };
+            grid.appendChild(speedLabel);
+            grid.appendChild(speedSlider);
+            grid.appendChild(speedDisplay);
+            msgSection.appendChild(grid);
+
+            // Message box toggles
+            const msgToggles = document.createElement('div');
+            msgToggles.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:10px';
+
+            const userTextToggle = makeToggle('Show user speech', showUserText, (v) => {
+                showUserText = v;
+                saveDisplay();
+            });
+            const aiTextToggle = makeToggle('Show AI speech', showAIText, (v) => {
+                showAIText = v;
+                saveDisplay();
+            });
+            const autoHideToggle = makeToggle('Auto-hide', autoHideMsgBox, (v) => {
+                autoHideMsgBox = v;
+                applyAutoHide();
+                saveDisplay();
+            });
+            const vnMenuToggle = makeToggle('Show menu buttons', showVnMenu, (v) => {
+                showVnMenu = v;
+                applyVnMenu();
+                saveDisplay();
+            });
+            msgToggles.appendChild(userTextToggle.row);
+            msgToggles.appendChild(aiTextToggle.row);
+            msgToggles.appendChild(autoHideToggle.row);
+            msgToggles.appendChild(vnMenuToggle.row);
+            msgSection.appendChild(msgToggles);
+            panel.appendChild(msgSection);
+
+            // ====== Speaker names section ======
+            const nameSection = document.createElement('div');
+            nameSection.style.cssText = 'margin-top:12px;';
+            nameSection.appendChild(sectionHeading('Speaker names'));
+
+            const nameGrid = document.createElement('div');
+            nameGrid.style.cssText = 'display:grid;grid-template-columns:auto 1fr;gap:6px 8px;align-items:center';
+            const inputStyle = 'padding:4px 8px;border:1px solid #ccc;border-radius:4px;font-size:12px;width:100%;box-sizing:border-box';
+
+            const charLabel = document.createElement('span');
+            charLabel.style.cssText = 'font-size:11px;color:#666';
+            charLabel.textContent = 'Character';
+            const charInput = document.createElement('input');
+            charInput.type = 'text';
+            charInput.placeholder = 'AI';
+            charInput.value = savedCharName;
+            charInput.style.cssText = inputStyle;
+            charInput.addEventListener('input', () => {
+                savedCharName = charInput.value.trim();
+                if (savedCharName) ui.speakerLabelAI = savedCharName;
+                else ui.speakerLabelAI = 'AI';
+                saveDisplay();
+            });
+
+            const userLabel = document.createElement('span');
+            userLabel.style.cssText = 'font-size:11px;color:#666';
+            userLabel.textContent = 'User';
+            const userInput = document.createElement('input');
+            userInput.type = 'text';
+            userInput.placeholder = 'User';
+            userInput.value = savedUserName;
+            userInput.style.cssText = inputStyle;
+            userInput.addEventListener('input', () => {
+                savedUserName = userInput.value.trim();
+                if (savedUserName) ui.speakerLabelUser = savedUserName;
+                else ui.speakerLabelUser = 'User';
+                saveDisplay();
+            });
+
+            nameGrid.appendChild(charLabel);
+            nameGrid.appendChild(charInput);
+            nameGrid.appendChild(userLabel);
+            nameGrid.appendChild(userInput);
+            nameSection.appendChild(nameGrid);
+            panel.appendChild(nameSection);
+            nameInputs = { charInput, userInput };
+
+            // ====== Microphone section ======
+            const micSection = document.createElement('div');
+            micSection.style.cssText = 'margin-top:12px;';
+            micSection.appendChild(sectionHeading('Microphone'));
+
+            const micToggles = document.createElement('div');
+            micToggles.style.cssText = 'display:flex;flex-direction:column;gap:10px';
+
+            const micGlowToggle = makeToggle('Show indicator', showMicGlow, (v) => {
+                showMicGlow = v;
+                if (!v) document.getElementById('micGlow').classList.remove('active');
+                saveDisplay();
+            });
+            const micMuteToggle = makeToggle('Mute', false, (v) => {
+                if (typeof aiavatar !== 'undefined') {
+                    if (v) aiavatar.mute(); else aiavatar.unmute();
+                }
+            });
+            micToggles.appendChild(micGlowToggle.row);
+            micToggles.appendChild(micMuteToggle.row);
+            micSection.appendChild(micToggles);
+            panel.appendChild(micSection);
+
+            toggleInputs = { userText: userTextToggle.sw, aiText: aiTextToggle.sw, micGlow: micGlowToggle.sw, vnMenu: vnMenuToggle.sw, autoHide: autoHideToggle.sw, micMute: micMuteToggle.sw };
+
+            // -- Background image --
+            const bgSection = document.createElement('div');
+            bgSection.style.cssText = 'margin-top:12px;';
+
+            const bgLabel = document.createElement('div');
+            bgLabel.style.cssText = 'font-size:11px;color:#999;margin-bottom:6px';
+            bgLabel.textContent = 'Background image';
+            bgSection.appendChild(bgLabel);
+
+            const bgUrlRow = document.createElement('div');
+            bgUrlRow.style.cssText = 'display:flex;gap:6px;margin-bottom:6px';
+            const bgUrlInput = document.createElement('input');
+            bgUrlInput.type = 'text';
+            bgUrlInput.placeholder = 'Image URL';
+            bgUrlInput.style.cssText = 'flex:1;padding:4px 8px;border:1px solid #ccc;border-radius:4px;font-size:12px';
+            const bgUrlBtn = document.createElement('button');
+            bgUrlBtn.className = 'vrmi-sampler-btn';
+            bgUrlBtn.textContent = 'Load';
+            bgUrlBtn.addEventListener('click', async () => {
+                const url = bgUrlInput.value.trim();
+                if (!url) return;
+                try {
+                    const resp = await fetch(url);
+                    const blob = await resp.blob();
+                    await saveBgBlob(blob);
+                    bgImageUrl = URL.createObjectURL(blob);
+                    applyBgImage();
+                } catch (err) {
+                    // CORS fallback: use URL directly (no cache)
+                    bgImageUrl = url;
+                    applyBgImage();
+                }
+            });
+            bgUrlRow.appendChild(bgUrlInput);
+            bgUrlRow.appendChild(bgUrlBtn);
+            bgSection.appendChild(bgUrlRow);
+
+            const bgBtnRow = document.createElement('div');
+            bgBtnRow.style.cssText = 'display:flex;gap:6px';
+            const bgFileInput = document.createElement('input');
+            bgFileInput.type = 'file';
+            bgFileInput.accept = 'image/*';
+            bgFileInput.style.display = 'none';
+            const bgFileBtn = document.createElement('button');
+            bgFileBtn.className = 'vrmi-sampler-btn';
+            bgFileBtn.textContent = 'Local file';
+            bgFileBtn.addEventListener('click', () => bgFileInput.click());
+            bgFileInput.addEventListener('change', async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                await saveBgBlob(file);
+                bgImageUrl = URL.createObjectURL(file);
+                applyBgImage();
+            });
+            const bgClearBtn = document.createElement('button');
+            bgClearBtn.className = 'vrmi-sampler-btn';
+            bgClearBtn.textContent = 'Clear';
+            bgClearBtn.addEventListener('click', async () => {
+                bgImageUrl = '';
+                bgUrlInput.value = '';
+                applyBgImage();
+                await cacheDB.del('bg_image');
+            });
+            bgBtnRow.appendChild(bgFileBtn);
+            bgBtnRow.appendChild(bgFileInput);
+            bgBtnRow.appendChild(bgClearBtn);
+            bgSection.appendChild(bgBtnRow);
+
+            panel.appendChild(bgSection);
+
+            // ====== Connection info section ======
+            const connSection = document.createElement('div');
+            connSection.style.cssText = 'margin-top:12px;';
+
+            const connHeader = document.createElement('div');
+            connHeader.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:6px';
+            const connDot = document.createElement('span');
+            connDot.style.cssText = 'display:inline-block;width:8px;height:8px;border-radius:50%;background:#e67e22;flex-shrink:0';
+            const connLabel = document.createElement('span');
+            connLabel.style.cssText = 'font-size:11px;color:#999';
+            connLabel.textContent = 'Disconnected';
+            connHeader.appendChild(connDot);
+            connHeader.appendChild(connLabel);
+            connSection.appendChild(connHeader);
+
+            const connGrid = document.createElement('div');
+            connGrid.style.cssText = 'display:grid;grid-template-columns:auto 1fr;gap:4px 8px;align-items:center;font-size:11px';
+            const connFields = {};
+            for (const key of ['session_id', 'context_id', 'user_id']) {
+                const lbl = document.createElement('span');
+                lbl.style.cssText = 'color:#666';
+                lbl.textContent = key;
+                const val = document.createElement('span');
+                val.style.cssText = 'color:#999;word-break:break-all;-webkit-user-select:text;user-select:text';
+                val.textContent = '-';
+                connGrid.appendChild(lbl);
+                connGrid.appendChild(val);
+                connFields[key] = val;
+            }
+            connSection.appendChild(connGrid);
+            panel.appendChild(connSection);
+
+            // Expose update function
+            window._updateConnInfo = (connected, data) => {
+                connDot.style.background = connected ? '#2ecc71' : '#e67e22';
+                connLabel.textContent = connected ? 'Connected' : 'Disconnected';
+                for (const key of ['session_id', 'context_id', 'user_id']) {
+                    connFields[key].textContent = (data && data[key]) ? data[key] : '-';
+                }
+            };
+        }, { position: 2 });
+
+        inspector.onTabReset('Light', () => {
+            localStorage.removeItem(LIGHT_STORAGE_KEY);
+            for (const [k, d] of Object.entries(lightDefs)) {
+                L[k] = d.def;
+            }
+            applyLighting?.();
+        });
+
+        inspector.onTabReset('Load', async () => {
+            await cacheDB.del('vrm_file');
+            localStorage.removeItem(CAMERA_KEY);
+        });
+
+        inspector.onTabReset('UI', async () => {
+            localStorage.removeItem(DISPLAY_STORAGE_KEY);
+            msgBoxOpacity = 80;
+            applyMsgBoxOpacity();
+            msgSpeed = 70;
+            twSpeed = 31;
+            savedCharName = '';
+            savedUserName = '';
+            ui.speakerLabelAI = 'AI';
+            ui.speakerLabelUser = 'User';
+            showUserText = true;
+            showAIText = true;
+            showMicGlow = true;
+            showVnMenu = true;
+            autoHideMsgBox = false;
+            if (typeof aiavatar !== 'undefined') aiavatar.unmute();
+            applyAutoHide();
+            applyVnMenu();
+            bgImageUrl = '';
+            applyBgImage();
+            await cacheDB.del('bg_image');
+        });
+
+        // ============================================================
+        // Three.js Scene (full-screen)
+        // ============================================================
+        const canvas = document.getElementById('vrmCanvas');
+        const scene = new THREE.Scene();
+
+        const camera = new THREE.PerspectiveCamera(
+            20, window.innerWidth / window.innerHeight, 0.1, 100
+        );
+        camera.position.set(0, 1.35, 2.5);
+        camera.lookAt(0, 1.35, 0);
+
+        const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        dirLight.position.set(1, 2, 3);
+        scene.add(dirLight);
+
+        applyLighting = () => {
+            ambientLight.intensity = L.ambient / 100;
+            dirLight.intensity = L.direct / 100;
+            const h = L.hAngle * Math.PI / 180;
+            const v = L.vAngle * Math.PI / 180;
+            dirLight.position.set(
+                Math.cos(v) * Math.sin(h),
+                Math.sin(v),
+                Math.cos(v) * Math.cos(h)
+            );
+            const [r, g, b] = kelvinToRGB(L.temp);
+            dirLight.color.setRGB(r, g, b);
+        };
+        applyLighting();
+
+        // OrbitControls
+        const controls = new OrbitControls(camera, canvas);
+        controls.target.set(0, 1.35, 0);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.1;
+        controls.enablePan = true;
+        controls.minDistance = 0.5;
+        controls.maxDistance = 5;
+        controls.update();
+
+        // Camera state persistence
+        const CAMERA_KEY = 'vrm_camera';
+        let cameraSaveTimer = null;
+
+        function saveCameraState() {
+            const state = {
+                px: camera.position.x, py: camera.position.y, pz: camera.position.z,
+                tx: controls.target.x,  ty: controls.target.y,  tz: controls.target.z,
+            };
+            localStorage.setItem(CAMERA_KEY, JSON.stringify(state));
+        }
+
+        function restoreCameraState() {
+            try {
+                const s = JSON.parse(localStorage.getItem(CAMERA_KEY));
+                if (!s) return false;
+                camera.position.set(s.px, s.py, s.pz);
+                controls.target.set(s.tx, s.ty, s.tz);
+                controls.update();
+                return true;
+            } catch { return false; }
+        }
+
+        // Debounced save on user interaction
+        controls.addEventListener('change', () => {
+            clearTimeout(cameraSaveTimer);
+            cameraSaveTimer = setTimeout(saveCameraState, 300);
+        });
+
+        // Resize (full-screen)
+        window.addEventListener('resize', () => {
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+        });
+
+        // ============================================================
+        // VRM Loader
+        // ============================================================
+        let currentVrm = null;
+        const clock = new THREE.Clock();
+        const gltfLoader = new GLTFLoader();
+        gltfLoader.register((parser) => new VRMLoaderPlugin(parser));
+
+        async function loadVRM(url) {
+            const gltf = await gltfLoader.loadAsync(url);
+            const vrm = gltf.userData.vrm;
+            if (!vrm) throw new Error('No VRM data found');
+
+            if (currentVrm) {
+                scene.remove(currentVrm.scene);
+                VRMUtils.deepDispose(currentVrm.scene);
+            }
+            currentVrm = vrm;
+            idle.vrm = vrm;
+
+            VRMUtils.rotateVRM0(vrm);
+            scene.add(vrm.scene);
+
+            const head = vrm.humanoid?.getNormalizedBoneNode('head');
+            if (head) {
+                const headPos = new THREE.Vector3();
+                head.getWorldPosition(headPos);
+                camera.position.set(0, headPos.y, 2.5);
+                camera.lookAt(0, headPos.y - 0.05, 0);
+                controls.target.set(0, headPos.y - 0.05, 0);
+                controls.update();
+            }
+
+            if (vrm.lookAt) {
+                vrm.lookAt.target = camera;
+            }
+
+            document.getElementById('vrmPlaceholder').style.display = 'none';
+            console.log('VRM loaded');
+        }
+
+        // Cache VRM blob and load
+        async function loadAndCacheVRM(blob) {
+            const url = URL.createObjectURL(blob);
+            await loadVRM(url);
+            await cacheDB.put('vrm_file', blob);
+        }
+
+        // Restore VRM from cache on startup
+        cacheDB.get('vrm_file').then(async blob => {
+            if (blob) {
+                const url = URL.createObjectURL(blob);
+                await loadVRM(url);
+                // Override auto-positioning with saved camera state
+                restoreCameraState();
+            }
+        }).catch(() => {});
+
+        // Drag & drop (full-screen)
+        const dropOverlay = document.getElementById('dropOverlay');
+        document.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropOverlay.classList.add('show');
+        });
+        document.addEventListener('dragleave', (e) => {
+            if (e.relatedTarget === null) {
+                dropOverlay.classList.remove('show');
+            }
+        });
+        document.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropOverlay.classList.remove('show');
+            const file = e.dataTransfer.files[0];
+            if (file && file.name.toLowerCase().endsWith('.vrm')) {
+                loadAndCacheVRM(file).catch(err => console.error('Failed to load VRM:', err));
+            }
+        });
+
+        // ============================================================
+        // AIAvatar Integration
+        // ============================================================
+        const aiavatar = new AIAvatarClient({
+            webSocketUrl: "../ws",
+            faceImage: null,
+            faceImagePaths: null,
+        });
+
+        aiavatar.updateFace = function (faceName, faceDuration) {
+            idle.applyExpression(faceName, faceDuration || 2);
+        };
+
+        aiavatar.resetFace = function () {
+            idle.applyExpression('neutral');
+            this.onResetFace?.();
+        };
+
+        const lipsyncEngine = new LipSyncEngine();
+
+        aiavatar.onPlaybackAnalyze = ({ rms, centroid01, tSec }) => {
+            const shape = lipsyncEngine.update({ rms, centroid01, tSec });
+            idle.applyViseme(shape);
+        };
+
+        aiavatar.onResetFace = () => idle.clearVisemes();
+        aiavatar.onPlaybackEnd = () => idle.clearVisemes();
+
+        // Camera (vision)
+        const cam = new Camera({
+            videoElement: document.getElementById('cameraVideo'),
+            canvasElement: document.getElementById('cameraCanvas'),
+            onCapture: (imageDataUrl) => {
+                aiavatar.ws.send(JSON.stringify({
+                    type: "invoke",
+                    session_id: ui.sessionId,
+                    user_id: ui.userId,
+                    files: [{ url: imageDataUrl }],
+                    allow_merge: false,
+                    wait_in_queue: true
+                }));
+            }
+        });
+
+        // Shared UI
+        const ui = new AvatarUI({ aiavatar, camera: cam });
+        if (savedCharName) ui.speakerLabelAI = savedCharName;
+        if (savedUserName) ui.speakerLabelUser = savedUserName;
+
+        // Typewriter effect for AI messages
+        let twFullText = '';
+        let twDisplayedLen = 0;
+        let twTimer = null;
+        let twSpeed = Math.max(1, 101 - msgSpeed); // slider 70 → 31ms/char
+
+        function twTick() {
+            if (twDisplayedLen >= twFullText.length) {
+                twTimer = null;
+                return;
+            }
+            twDisplayedLen++;
+            ui.messageText.textContent = twFullText.substring(0, twDisplayedLen);
+            // Show message box on first displayed character
+            if (twDisplayedLen === 1) {
+                ui.messageBox.classList.remove('hidden');
+                ui.messageBox.classList.remove('auto-hidden');
+                ui.messageBox.classList.add('visible');
+            }
+            twTimer = setTimeout(twTick, twSpeed);
+        }
+
+        function twStart() {
+            if (!twTimer) twTimer = setTimeout(twTick, twSpeed);
+        }
+
+        function twStop() {
+            if (twTimer) { clearTimeout(twTimer); twTimer = null; }
+        }
+
+        // Suppress speech display when toggled off + typewriter
+        const origUpdateMessage = ui.updateMessage.bind(ui);
+        let twResponseComplete = false;
+        ui.updateMessage = (speaker, text, isPartial) => {
+            resetSpeechTimer();
+            if (speaker === 'user' && !showUserText) return;
+            if (speaker === 'ai' && !showAIText) return;
+
+            if (speaker === 'ai' && isPartial) {
+                // New response starting? Reset typewriter
+                if (twResponseComplete) {
+                    twStop();
+                    twFullText = '';
+                    twDisplayedLen = 0;
+                    twResponseComplete = false;
+                }
+                // Accumulate and typewrite
+                twFullText += text;
+                ui.currentAIText = twFullText;
+                ui.messageSpeaker.className = 'message-speaker ai';
+                ui.messageSpeaker.textContent = ui.speakerLabelAI;
+                // Box will be shown by twTick on first displayed character
+                twStart();
+            } else if (speaker === 'ai') {
+                // AI final/error: let typewriter finish if running
+                twResponseComplete = true;
+                if (!twTimer && twFullText === '') {
+                    // No chunks were received, show text directly
+                    origUpdateMessage(speaker, text, isPartial);
+                }
+            } else {
+                // User messages: stop typewriter, pass through
+                twStop();
+                twFullText = '';
+                twDisplayedLen = 0;
+                twResponseComplete = false;
+                origUpdateMessage(speaker, text, isPartial);
+            }
+        };
+        const origShowMessage = ui.showMessage.bind(ui);
+        ui.showMessage = (speaker, text) => {
+            resetSpeechTimer();
+            if (speaker === 'user' && !showUserText) return;
+            if (speaker === 'ai' && !showAIText) return;
+            origShowMessage(speaker, text);
+        };
+
+        // Auto-hide message box after inactivity
+        const messageBoxEl = document.getElementById('messageBox');
+
+        function resetSpeechTimer() {
+            lastSpeechTime = Date.now();
+            if (msgBoxAutoHidden) {
+                msgBoxAutoHidden = false;
+                // Keep auto-hidden (display:none) — twTick will remove it on first character
+                // Clear stale text and typewriter state
+                ui.messageText.textContent = '';
+                twStop();
+                twFullText = '';
+                twDisplayedLen = 0;
+                twResponseComplete = false;
+            }
+        }
+
+        setInterval(() => {
+            if (!autoHideMsgBox || msgBoxAutoHidden) return;
+            // Don't count down while audio is playing or typewriter is running
+            if (aiavatar.isAudioPlaying || twTimer) {
+                lastSpeechTime = Date.now();
+                return;
+            }
+            if (Date.now() - lastSpeechTime > 10000) {
+                msgBoxAutoHidden = true;
+                messageBoxEl.classList.add('auto-hidden');
+            }
+        }, 1000);
+
+        // ============================================================
+        // Galge-style control wiring
+        // ============================================================
+        const micGlow = document.getElementById('micGlow');
+        const chatBtn = document.getElementById('chatBtn');
+        const bargeInBtn = document.getElementById('bargeInBtn');
+
+        // Override mic activity visual: use bottom glow instead of frame color
+        const origMicCallback = aiavatar.onMicrophoneDataSend;
+        aiavatar.onMicrophoneDataSend = (rms) => {
+            origMicCallback?.(rms);
+            if (!showMicGlow) return;
+            if (rms > 0.01) {
+                micGlow.classList.add('active');
+            } else {
+                micGlow.classList.remove('active');
+            }
+        };
+
+        // Chat button: toggle START / STOP label
+        let isChatActive = false;
+        chatBtn.addEventListener('click', () => {
+            isChatActive = !isChatActive;
+            chatBtn.textContent = isChatActive ? 'STOP' : 'START';
+            chatBtn.classList.toggle('active', isChatActive);
+            if (!isChatActive) {
+                window._updateConnInfo?.(false, null);
+            }
+        });
+
+        // Barge-in button
+        let bargeInEnabled = false;
+        bargeInBtn.addEventListener('click', () => {
+            bargeInEnabled = !bargeInEnabled;
+            document.getElementById('interruptToggle').checked = bargeInEnabled;
+            document.getElementById('interruptToggle').dispatchEvent(new Event('change'));
+            bargeInBtn.classList.toggle('active', bargeInEnabled);
+        });
+
+        // Keep VOL label (ui.js overwrites it with emoji)
+        document.getElementById('volumeSlider').addEventListener('input', () => {
+            document.getElementById('volumeBtn').textContent = 'VOL';
+        });
+
+        // Config button: toggle the inspector panel directly
+        document.getElementById('configBtn').addEventListener('click', () => {
+            const panel = document.querySelector('.vrmi-panel');
+            if (panel) panel.classList.toggle('open');
+        });
+
+        // ESC key: toggle config panel (useful when menu is hidden)
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const panel = document.querySelector('.vrmi-panel');
+                if (panel) panel.classList.toggle('open');
+            }
+        });
+
+        // Response handling
+        aiavatar.onResponseReceived = (response) => {
+            if (response.avatar_control_request?.animation_name) {
+                idle.playAnimation(
+                    response.avatar_control_request.animation_name,
+                    response.avatar_control_request.animation_duration
+                );
+            }
+
+            if (response.type === "chunk" && response.metadata.is_first_chunk) {
+                aiavatar.updateFace("neutral", 0);
+            } else if (response.type === "tool_call") {
+                console.log(response.metadata);
+            }
+            // Update connection info
+            if (response.type === "connected") {
+                window._updateConnInfo?.(true, response);
+            }
+            ui.handleResponse(response);
+        };
+
+        // ============================================================
+        // Render Loop
+        // ============================================================
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            idle.update(clock.getDelta());
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+</body>
+
+</html>

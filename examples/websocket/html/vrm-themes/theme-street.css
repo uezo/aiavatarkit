@@ -1,0 +1,82 @@
+/* ===========================================
+   Street Theme - Street Style
+   =========================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@700;800&family=Dela+Gothic+One&display=swap');
+
+:root {
+    /* Message box */
+    --vn-msg-bg: rgba(0, 0, 0, 0.88);
+    --vn-msg-border-color: transparent;
+    --vn-msg-border-radius: 0;
+    --vn-msg-shadow:
+        4px 4px 0 rgba(255, 220, 0, 0.7),
+        0 8px 24px rgba(0, 0, 0, 0.4);
+
+    /* Speaker plate */
+    --vn-speaker-font-size: 14px;
+    --vn-speaker-ai-bg: #ffdc00;
+    --vn-speaker-ai-color: #000;
+    --vn-speaker-user-bg: #00e5ff;
+    --vn-speaker-user-color: #000;
+
+    /* Text */
+    --vn-text-color: #fff;
+    --vn-text-font-size: 16px;
+    --vn-text-font-family: 'M PLUS Rounded 1c', 'Hiragino Kaku Gothic ProN', sans-serif;
+    --vn-text-line-height: 1.85;
+    --vn-cursor-color: rgba(255, 220, 0, 0.6);
+
+    /* Menu buttons */
+    --vn-menu-bg: rgba(0, 0, 0, 0.92);
+    --vn-menu-color: rgba(255, 255, 255, 0.45);
+    --vn-menu-border-color: rgba(255, 255, 255, 0.15);
+    --vn-menu-hover-bg: rgba(255, 220, 0, 0.9);
+    --vn-menu-hover-color: #000;
+    --vn-menu-active-bg: #ffdc00;
+    --vn-menu-active-color: #000;
+}
+
+.message-inner {
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 3px solid #ffdc00;
+    border-left: 6px solid #ffdc00;
+}
+
+.message-speaker {
+    border: none;
+    border-radius: 0;
+    padding: 5px 16px;
+    letter-spacing: 0.05em;
+    text-shadow: none;
+    font-family: 'Dela Gothic One', 'M PLUS Rounded 1c', sans-serif;
+    transform: translateY(-100%) rotate(-1.5deg);
+}
+
+.message-speaker.ai {
+    box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.5);
+}
+
+.message-speaker.user {
+    box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.5);
+}
+
+.message-text {
+    text-shadow: none;
+    font-weight: 700;
+}
+
+.message-text::after {
+    content: "_";
+    font-weight: 800;
+}
+
+.vn-menu-btn {
+    border-radius: 0;
+    font-family: 'Dela Gothic One', sans-serif;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    transition: color 0.15s, background 0.15s;
+}

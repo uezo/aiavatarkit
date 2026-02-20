@@ -1,0 +1,63 @@
+/* ===========================================
+   Ocean Theme - Aqua & Transparent
+   =========================================== */
+
+:root {
+    /* Message box */
+    --vn-msg-bg: linear-gradient(
+        180deg,
+        rgba(10, 40, 70, 0.78) 0%,
+        rgba(5, 25, 50, 0.88) 100%
+    );
+    --vn-msg-border-color: rgba(100, 200, 240, 0.25);
+    --vn-msg-border-radius: 10px;
+    --vn-msg-shadow:
+        0 4px 24px rgba(0, 40, 80, 0.3),
+        inset 0 1px 0 rgba(140, 220, 255, 0.12);
+
+    /* Speaker plate */
+    --vn-speaker-font-size: 13px;
+    --vn-speaker-ai-bg: linear-gradient(135deg, rgba(30, 140, 180, 0.88) 0%, rgba(20, 100, 160, 0.92) 100%);
+    --vn-speaker-ai-color: #e8f8ff;
+    --vn-speaker-user-bg: linear-gradient(135deg, rgba(40, 170, 130, 0.88) 0%, rgba(25, 140, 110, 0.92) 100%);
+    --vn-speaker-user-color: #e8fff4;
+
+    /* Text */
+    --vn-text-color: rgba(220, 245, 255, 0.95);
+    --vn-text-font-size: 16px;
+    --vn-text-font-family: inherit;
+    --vn-text-line-height: 1.85;
+    --vn-cursor-color: rgba(100, 200, 240, 0.55);
+
+    /* Menu buttons */
+    --vn-menu-bg: rgba(8, 30, 55, 0.88);
+    --vn-menu-color: rgba(100, 200, 240, 0.45);
+    --vn-menu-border-color: rgba(100, 200, 240, 0.18);
+    --vn-menu-hover-bg: rgba(15, 50, 80, 0.92);
+    --vn-menu-hover-color: rgba(140, 220, 255, 0.85);
+    --vn-menu-active-bg: rgba(30, 140, 180, 0.35);
+    --vn-menu-active-color: rgba(180, 240, 255, 1);
+}
+
+.message-inner {
+    backdrop-filter: blur(16px) saturate(1.2);
+    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+}
+
+.message-speaker {
+    border-radius: 8px 8px 0 0;
+    letter-spacing: 0.1em;
+    text-shadow: 0 1px 4px rgba(0, 30, 60, 0.5);
+}
+
+.message-text {
+    text-shadow: 0 1px 3px rgba(0, 20, 50, 0.3);
+}
+
+.message-text::after {
+    content: "\25be";
+}
+
+.vn-menu-btn {
+    border-radius: 8px 8px 0 0;
+}

@@ -24,6 +24,7 @@ class AIAvatarClient {
         this.analyser = null;
         this.onPlaybackAnalyze = null;
         this.isMicrophoneMuted = () => this.isAudioPlaying;
+        this._userMuted = false;
         this.volume = 1.0;
         this.gainNode = null;
     }
@@ -97,7 +98,7 @@ class AIAvatarClient {
                 const pcmBuffer = this.float32To16BitPCMBuffer(inputData);
                 const base64Data = this.arrayBufferToBase64(pcmBuffer);
                 if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                    if (!this.isMicrophoneMuted()) {
+                    if (!this._userMuted && !this.isMicrophoneMuted()) {
                         this.onMicrophoneDataSend(rms);
                         const dataMessage = {
                             type: "data",
@@ -237,6 +238,23 @@ class AIAvatarClient {
                 reject(e);
             }
         });
+    }
+
+    mute() {
+        this._userMuted = true;
+    }
+
+    unmute() {
+        this._userMuted = false;
+    }
+
+    toggleMute() {
+        this._userMuted = !this._userMuted;
+        return this._userMuted;
+    }
+
+    get isMuted() {
+        return this._userMuted;
     }
 
     setVolume(value) {

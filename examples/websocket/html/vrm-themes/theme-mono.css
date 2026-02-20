@@ -1,0 +1,67 @@
+/* ===========================================
+   Mono Theme - Monochrome Minimal
+   =========================================== */
+
+:root {
+    /* Message box */
+    --vn-msg-bg: linear-gradient(
+        180deg,
+        rgba(245, 245, 245, 0.9) 0%,
+        rgba(235, 235, 235, 0.94) 100%
+    );
+    --vn-msg-border-color: rgba(0, 0, 0, 0.1);
+    --vn-msg-border-radius: 4px;
+    --vn-msg-shadow:
+        0 2px 16px rgba(0, 0, 0, 0.08),
+        inset 0 1px 0 rgba(255, 255, 255, 0.8);
+
+    /* Speaker plate */
+    --vn-speaker-font-size: 11px;
+    --vn-speaker-ai-bg: #333;
+    --vn-speaker-ai-color: #fff;
+    --vn-speaker-user-bg: #888;
+    --vn-speaker-user-color: #fff;
+
+    /* Text */
+    --vn-text-color: #222;
+    --vn-text-font-size: 15px;
+    --vn-text-font-family: 'Helvetica Neue', 'Hiragino Kaku Gothic ProN', Arial, sans-serif;
+    --vn-text-line-height: 1.85;
+    --vn-cursor-color: rgba(0, 0, 0, 0.25);
+
+    /* Menu buttons */
+    --vn-menu-bg: rgba(240, 240, 240, 0.92);
+    --vn-menu-color: rgba(0, 0, 0, 0.35);
+    --vn-menu-border-color: rgba(0, 0, 0, 0.08);
+    --vn-menu-hover-bg: rgba(230, 230, 230, 0.95);
+    --vn-menu-hover-color: rgba(0, 0, 0, 0.65);
+    --vn-menu-active-bg: #333;
+    --vn-menu-active-color: #fff;
+}
+
+.message-inner {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+.message-speaker {
+    border-radius: 3px 3px 0 0;
+    letter-spacing: 0.12em;
+    text-shadow: none;
+    text-transform: uppercase;
+    font-weight: 700;
+}
+
+.message-text {
+    text-shadow: none;
+}
+
+.message-text::after {
+    content: "\25bc";
+}
+
+.vn-menu-btn {
+    border-radius: 3px 3px 0 0;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}

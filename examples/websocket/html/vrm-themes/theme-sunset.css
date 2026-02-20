@@ -1,0 +1,63 @@
+/* ===========================================
+   Sunset Theme - Twilight Nostalgia
+   =========================================== */
+
+:root {
+    /* Message box */
+    --vn-msg-bg: linear-gradient(
+        180deg,
+        rgba(60, 25, 40, 0.82) 0%,
+        rgba(35, 15, 30, 0.92) 100%
+    );
+    --vn-msg-border-color: rgba(240, 160, 100, 0.25);
+    --vn-msg-border-radius: 6px;
+    --vn-msg-shadow:
+        0 4px 24px rgba(40, 10, 20, 0.35),
+        inset 0 1px 0 rgba(255, 180, 120, 0.1);
+
+    /* Speaker plate */
+    --vn-speaker-font-size: 13px;
+    --vn-speaker-ai-bg: linear-gradient(135deg, rgba(220, 120, 60, 0.9) 0%, rgba(180, 80, 100, 0.92) 100%);
+    --vn-speaker-ai-color: #fff5ee;
+    --vn-speaker-user-bg: linear-gradient(135deg, rgba(100, 80, 160, 0.88) 0%, rgba(80, 60, 140, 0.92) 100%);
+    --vn-speaker-user-color: #f0eaff;
+
+    /* Text */
+    --vn-text-color: rgba(255, 240, 220, 0.95);
+    --vn-text-font-size: 16px;
+    --vn-text-font-family: inherit;
+    --vn-text-line-height: 1.9;
+    --vn-cursor-color: rgba(240, 160, 100, 0.5);
+
+    /* Menu buttons */
+    --vn-menu-bg: rgba(45, 18, 30, 0.88);
+    --vn-menu-color: rgba(240, 160, 100, 0.45);
+    --vn-menu-border-color: rgba(240, 160, 100, 0.18);
+    --vn-menu-hover-bg: rgba(65, 28, 42, 0.92);
+    --vn-menu-hover-color: rgba(255, 190, 140, 0.85);
+    --vn-menu-active-bg: rgba(220, 120, 60, 0.3);
+    --vn-menu-active-color: rgba(255, 200, 150, 1);
+}
+
+.message-inner {
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+}
+
+.message-speaker {
+    border-radius: 5px 5px 0 0;
+    letter-spacing: 0.1em;
+    text-shadow: 0 1px 4px rgba(40, 10, 20, 0.5);
+}
+
+.message-text {
+    text-shadow: 0 1px 3px rgba(30, 10, 15, 0.3);
+}
+
+.message-text::after {
+    content: "\25bc";
+}
+
+.vn-menu-btn {
+    border-radius: 5px 5px 0 0;
+}

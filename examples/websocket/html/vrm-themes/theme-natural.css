@@ -1,0 +1,66 @@
+/* ===========================================
+   Natural Theme - Earthy & Calm
+   =========================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&display=swap');
+
+:root {
+    /* Message box */
+    --vn-msg-bg: linear-gradient(
+        180deg,
+        rgba(62, 48, 34, 0.82) 0%,
+        rgba(45, 35, 25, 0.92) 100%
+    );
+    --vn-msg-border-color: rgba(180, 160, 120, 0.3);
+    --vn-msg-border-radius: 4px;
+    --vn-msg-shadow:
+        0 4px 20px rgba(30, 20, 10, 0.4),
+        inset 0 1px 0 rgba(220, 200, 160, 0.1);
+
+    /* Speaker plate */
+    --vn-speaker-font-size: 12px;
+    --vn-speaker-ai-bg: linear-gradient(135deg, rgba(140, 120, 80, 0.9) 0%, rgba(120, 100, 65, 0.92) 100%);
+    --vn-speaker-ai-color: #f5f0e0;
+    --vn-speaker-user-bg: linear-gradient(135deg, rgba(90, 130, 90, 0.9) 0%, rgba(75, 115, 75, 0.92) 100%);
+    --vn-speaker-user-color: #f0f5e8;
+
+    /* Text */
+    --vn-text-color: rgba(240, 230, 210, 0.95);
+    --vn-text-font-size: 16px;
+    --vn-text-font-family: 'Noto Serif JP', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+    --vn-text-line-height: 2.0;
+    --vn-cursor-color: rgba(200, 180, 140, 0.5);
+
+    /* Menu buttons */
+    --vn-menu-bg: rgba(55, 42, 30, 0.88);
+    --vn-menu-color: rgba(200, 180, 140, 0.55);
+    --vn-menu-border-color: rgba(180, 160, 120, 0.2);
+    --vn-menu-hover-bg: rgba(70, 55, 38, 0.92);
+    --vn-menu-hover-color: rgba(230, 210, 170, 0.85);
+    --vn-menu-active-bg: rgba(120, 100, 65, 0.8);
+    --vn-menu-active-color: #f5f0e0;
+}
+
+.message-inner {
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+.message-speaker {
+    border-radius: 3px 3px 0 0;
+    letter-spacing: 0.15em;
+    text-shadow: 0 1px 2px rgba(30, 20, 10, 0.5);
+}
+
+.message-text {
+    text-shadow: none;
+}
+
+.message-text::after {
+    content: "\25c7";
+}
+
+.vn-menu-btn {
+    border-radius: 3px 3px 0 0;
+    letter-spacing: 0.06em;
+}
