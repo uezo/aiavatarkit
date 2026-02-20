@@ -1,0 +1,66 @@
+/* ===========================================
+   Horror Theme - Dark & Eerie
+   =========================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;900&display=swap');
+
+:root {
+    /* Message box */
+    --vn-msg-bg: linear-gradient(
+        180deg,
+        rgba(15, 0, 0, 0.9) 0%,
+        rgba(8, 0, 0, 0.96) 100%
+    );
+    --vn-msg-border-color: rgba(140, 20, 20, 0.4);
+    --vn-msg-border-radius: 0;
+    --vn-msg-shadow:
+        0 0 30px rgba(100, 0, 0, 0.2),
+        inset 0 0 40px rgba(60, 0, 0, 0.15);
+
+    /* Speaker plate */
+    --vn-speaker-font-size: 13px;
+    --vn-speaker-ai-bg: linear-gradient(135deg, rgba(120, 15, 15, 0.92) 0%, rgba(80, 5, 5, 0.96) 100%);
+    --vn-speaker-ai-color: rgba(255, 200, 200, 0.9);
+    --vn-speaker-user-bg: linear-gradient(135deg, rgba(50, 50, 65, 0.9) 0%, rgba(30, 30, 45, 0.95) 100%);
+    --vn-speaker-user-color: rgba(180, 180, 200, 0.85);
+
+    /* Text */
+    --vn-text-color: rgba(200, 180, 180, 0.9);
+    --vn-text-font-size: 16px;
+    --vn-text-font-family: 'Noto Serif JP', 'Hiragino Mincho ProN', serif;
+    --vn-text-line-height: 2.0;
+    --vn-cursor-color: rgba(180, 30, 30, 0.6);
+
+    /* Menu buttons */
+    --vn-menu-bg: rgba(12, 0, 0, 0.92);
+    --vn-menu-color: rgba(140, 60, 60, 0.5);
+    --vn-menu-border-color: rgba(140, 20, 20, 0.25);
+    --vn-menu-hover-bg: rgba(40, 5, 5, 0.95);
+    --vn-menu-hover-color: rgba(220, 100, 100, 0.85);
+    --vn-menu-active-bg: rgba(120, 15, 15, 0.5);
+    --vn-menu-active-color: rgba(255, 160, 160, 1);
+}
+
+.message-inner {
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
+
+.message-speaker {
+    border-radius: 0;
+    letter-spacing: 0.15em;
+    text-shadow: 0 0 8px rgba(180, 0, 0, 0.4);
+}
+
+.message-text {
+    text-shadow: 0 0 6px rgba(100, 0, 0, 0.2);
+}
+
+.message-text::after {
+    content: "\2592";
+    animation: blink 0.8s steps(2) infinite;
+}
+
+.vn-menu-btn {
+    border-radius: 0;
+}

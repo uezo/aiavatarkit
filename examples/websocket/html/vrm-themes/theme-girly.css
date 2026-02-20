@@ -1,0 +1,69 @@
+/* ===========================================
+   Girly Theme - Pastel Pink & Lavender
+   =========================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;700&display=swap');
+
+:root {
+    /* Message box */
+    --vn-msg-bg: linear-gradient(
+        180deg,
+        rgba(255, 182, 210, 0.88) 0%,
+        rgba(255, 160, 200, 0.94) 100%
+    );
+    --vn-msg-border-color: rgba(255, 255, 255, 0.5);
+    --vn-msg-border-radius: 16px;
+    --vn-msg-shadow:
+        0 4px 24px rgba(220, 120, 160, 0.35),
+        inset 0 1px 0 rgba(255, 255, 255, 0.6);
+
+    /* Speaker plate */
+    --vn-speaker-font-size: 13px;
+    --vn-speaker-ai-bg: linear-gradient(135deg, #f48fb1 0%, #ce93d8 100%);
+    --vn-speaker-ai-color: #fff;
+    --vn-speaker-user-bg: linear-gradient(135deg, #81d4fa 0%, #b39ddb 100%);
+    --vn-speaker-user-color: #fff;
+
+    /* Text */
+    --vn-text-color: #5d3054;
+    --vn-text-font-size: 16px;
+    --vn-text-font-family: 'Zen Maru Gothic', 'Hiragino Maru Gothic ProN', 'rounded-mplus-1p', sans-serif;
+    --vn-text-line-height: 1.9;
+    --vn-cursor-color: rgba(180, 80, 140, 0.6);
+
+    /* Menu buttons */
+    --vn-menu-bg: rgba(255, 200, 220, 0.85);
+    --vn-menu-color: rgba(140, 60, 100, 0.7);
+    --vn-menu-border-color: rgba(255, 255, 255, 0.45);
+    --vn-menu-hover-bg: rgba(255, 170, 200, 0.95);
+    --vn-menu-hover-color: rgba(140, 40, 90, 0.95);
+    --vn-menu-active-bg: linear-gradient(135deg, #f48fb1, #ce93d8);
+    --vn-menu-active-color: #fff;
+}
+
+/* Extra touches beyond variables */
+
+.message-inner {
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+}
+
+.message-speaker {
+    border-radius: 12px 12px 0 0;
+    letter-spacing: 0.12em;
+    text-shadow: 0 1px 4px rgba(180, 60, 120, 0.3);
+}
+
+.message-text {
+    text-shadow: none;
+}
+
+.message-text::after {
+    content: "\2665";
+}
+
+.vn-menu-btn {
+    border-radius: 12px 12px 0 0;
+    letter-spacing: 0.08em;
+    font-weight: bold;
+}

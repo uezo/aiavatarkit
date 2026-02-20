@@ -1,0 +1,68 @@
+/* ===========================================
+   Cyber Theme - Futuristic Neon
+   =========================================== */
+
+:root {
+    /* Message box */
+    --vn-msg-bg: linear-gradient(
+        180deg,
+        rgba(0, 8, 20, 0.88) 0%,
+        rgba(0, 4, 12, 0.95) 100%
+    );
+    --vn-msg-border-color: rgba(0, 200, 255, 0.3);
+    --vn-msg-border-radius: 2px;
+    --vn-msg-shadow:
+        0 0 20px rgba(0, 180, 255, 0.15),
+        0 0 60px rgba(0, 100, 200, 0.08),
+        inset 0 1px 0 rgba(0, 200, 255, 0.1);
+
+    /* Speaker plate */
+    --vn-speaker-font-size: 11px;
+    --vn-speaker-ai-bg: linear-gradient(135deg, rgba(0, 180, 255, 0.85) 0%, rgba(0, 120, 220, 0.9) 100%);
+    --vn-speaker-ai-color: #e0f4ff;
+    --vn-speaker-user-bg: linear-gradient(135deg, rgba(0, 220, 160, 0.85) 0%, rgba(0, 180, 140, 0.9) 100%);
+    --vn-speaker-user-color: #e0fff4;
+
+    /* Text */
+    --vn-text-color: rgba(200, 240, 255, 0.92);
+    --vn-text-font-size: 15px;
+    --vn-text-font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    --vn-text-line-height: 1.8;
+    --vn-cursor-color: rgba(0, 200, 255, 0.7);
+
+    /* Menu buttons */
+    --vn-menu-bg: rgba(0, 10, 25, 0.9);
+    --vn-menu-color: rgba(0, 180, 255, 0.45);
+    --vn-menu-border-color: rgba(0, 200, 255, 0.2);
+    --vn-menu-hover-bg: rgba(0, 30, 60, 0.95);
+    --vn-menu-hover-color: rgba(0, 220, 255, 0.9);
+    --vn-menu-active-bg: rgba(0, 160, 255, 0.25);
+    --vn-menu-active-color: rgba(0, 240, 255, 1);
+}
+
+.message-inner {
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+
+.message-speaker {
+    border-radius: 0;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    text-shadow: 0 0 8px rgba(0, 200, 255, 0.5);
+}
+
+.message-text {
+    text-shadow: 0 0 6px rgba(0, 160, 255, 0.15);
+}
+
+.message-text::after {
+    content: "\25b8";
+}
+
+.vn-menu-btn {
+    border-radius: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    font-size: 10px;
+}

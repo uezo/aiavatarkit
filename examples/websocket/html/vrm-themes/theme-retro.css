@@ -1,0 +1,63 @@
+/* ===========================================
+   Retro Theme - 8-bit / Pixel Game
+   =========================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=DotGothic16&display=swap');
+
+:root {
+    /* Message box */
+    --vn-msg-bg: rgba(0, 0, 0, 0.92);
+    --vn-msg-border-color: #44aaff;
+    --vn-msg-border-radius: 0;
+    --vn-msg-shadow: none;
+
+    /* Speaker plate */
+    --vn-speaker-font-size: 13px;
+    --vn-speaker-ai-bg: #cc4400;
+    --vn-speaker-ai-color: #fff;
+    --vn-speaker-user-bg: #2266aa;
+    --vn-speaker-user-color: #fff;
+
+    /* Text */
+    --vn-text-color: #ffffff;
+    --vn-text-font-size: 16px;
+    --vn-text-font-family: 'DotGothic16', 'MS Gothic', monospace;
+    --vn-text-line-height: 1.9;
+    --vn-cursor-color: #44aaff;
+
+    /* Menu buttons */
+    --vn-menu-bg: rgba(0, 0, 0, 0.95);
+    --vn-menu-color: #44aaff;
+    --vn-menu-border-color: #44aaff;
+    --vn-menu-hover-bg: #44aaff;
+    --vn-menu-hover-color: #000;
+    --vn-menu-active-bg: #44aaff;
+    --vn-menu-active-color: #000;
+}
+
+.message-inner {
+    border-width: 3px;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+.message-speaker {
+    border-radius: 0;
+    border-width: 3px;
+    letter-spacing: 0.1em;
+    text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.8);
+}
+
+.message-text {
+    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
+}
+
+.message-text::after {
+    content: "\25bc";
+}
+
+.vn-menu-btn {
+    border-radius: 0;
+    border-width: 3px;
+    font-family: 'DotGothic16', 'MS Gothic', monospace;
+}

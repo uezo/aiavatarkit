@@ -1,0 +1,71 @@
+/* ===========================================
+   Japanese Theme - Traditional Wafuu
+   =========================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Zen+Old+Mincho:wght@400;700&display=swap');
+
+:root {
+    /* Message box */
+    --vn-msg-bg: linear-gradient(
+        180deg,
+        rgba(40, 30, 20, 0.85) 0%,
+        rgba(30, 22, 15, 0.93) 100%
+    );
+    --vn-msg-border-color: rgba(180, 140, 80, 0.35);
+    --vn-msg-border-radius: 2px;
+    --vn-msg-shadow:
+        0 4px 20px rgba(0, 0, 0, 0.4),
+        inset 0 1px 0 rgba(200, 160, 90, 0.08);
+
+    /* Speaker plate */
+    --vn-speaker-font-size: 12px;
+    --vn-speaker-ai-bg: linear-gradient(135deg, rgba(180, 50, 40, 0.9) 0%, rgba(150, 35, 30, 0.95) 100%);
+    --vn-speaker-ai-color: #f5ede0;
+    --vn-speaker-user-bg: linear-gradient(135deg, rgba(60, 80, 100, 0.9) 0%, rgba(45, 65, 85, 0.95) 100%);
+    --vn-speaker-user-color: #e8e4dc;
+
+    /* Text */
+    --vn-text-color: rgba(235, 225, 200, 0.95);
+    --vn-text-font-size: 16px;
+    --vn-text-font-family: 'Zen Old Mincho', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+    --vn-text-line-height: 2.1;
+    --vn-cursor-color: rgba(180, 50, 40, 0.5);
+
+    /* Menu buttons */
+    --vn-menu-bg: rgba(35, 25, 18, 0.9);
+    --vn-menu-color: rgba(180, 140, 80, 0.5);
+    --vn-menu-border-color: rgba(180, 140, 80, 0.2);
+    --vn-menu-hover-bg: rgba(50, 35, 25, 0.95);
+    --vn-menu-hover-color: rgba(220, 180, 110, 0.85);
+    --vn-menu-active-bg: rgba(180, 50, 40, 0.3);
+    --vn-menu-active-color: rgba(240, 200, 130, 1);
+}
+
+.message-inner {
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-top: 2px solid rgba(180, 140, 80, 0.25);
+    border-bottom: 2px solid rgba(180, 140, 80, 0.25);
+    border-left: 1px solid rgba(180, 140, 80, 0.15);
+    border-right: 1px solid rgba(180, 140, 80, 0.15);
+}
+
+.message-speaker {
+    border-radius: 2px 2px 0 0;
+    letter-spacing: 0.25em;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.message-text {
+    text-shadow: none;
+}
+
+.message-text::after {
+    content: "\25a0";
+    font-size: 0.6em;
+}
+
+.vn-menu-btn {
+    border-radius: 2px 2px 0 0;
+    letter-spacing: 0.12em;
+}

@@ -1,0 +1,68 @@
+/* ===========================================
+   Default Theme - Balanced & Universal
+   =========================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;600&display=swap');
+
+:root {
+    /* Message box */
+    --vn-msg-bg: linear-gradient(
+        180deg,
+        rgba(20, 22, 28, 0.82) 0%,
+        rgba(14, 16, 22, 0.92) 100%
+    );
+    --vn-msg-border-color: rgba(255, 255, 255, 0.1);
+    --vn-msg-border-radius: 8px;
+    --vn-msg-shadow:
+        0 4px 24px rgba(0, 0, 0, 0.35),
+        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+
+    /* Speaker plate */
+    --vn-speaker-font-size: 12px;
+    --vn-speaker-ai-bg: linear-gradient(135deg, rgba(100, 120, 180, 0.88) 0%, rgba(90, 100, 160, 0.92) 100%);
+    --vn-speaker-ai-color: rgba(255, 255, 255, 0.95);
+    --vn-speaker-user-bg: linear-gradient(135deg, rgba(80, 150, 130, 0.88) 0%, rgba(65, 130, 115, 0.92) 100%);
+    --vn-speaker-user-color: rgba(255, 255, 255, 0.95);
+
+    /* Text */
+    --vn-text-color: rgba(245, 245, 248, 0.94);
+    --vn-text-font-size: 15.5px;
+    --vn-text-font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
+    --vn-text-line-height: 1.9;
+    --vn-cursor-color: rgba(160, 175, 210, 0.45);
+
+    /* Menu buttons */
+    --vn-menu-bg: rgba(20, 22, 28, 0.85);
+    --vn-menu-color: rgba(255, 255, 255, 0.35);
+    --vn-menu-border-color: rgba(255, 255, 255, 0.08);
+    --vn-menu-hover-bg: rgba(40, 44, 55, 0.9);
+    --vn-menu-hover-color: rgba(255, 255, 255, 0.7);
+    --vn-menu-active-bg: rgba(100, 120, 180, 0.35);
+    --vn-menu-active-color: rgba(200, 210, 240, 0.95);
+}
+
+.message-inner {
+    backdrop-filter: blur(16px) saturate(1.1);
+    -webkit-backdrop-filter: blur(16px) saturate(1.1);
+}
+
+.message-speaker {
+    border-radius: 6px 6px 0 0;
+    letter-spacing: 0.1em;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    font-weight: 600;
+}
+
+.message-text {
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+    font-weight: 400;
+}
+
+.message-text::after {
+    content: "\25bc";
+}
+
+.vn-menu-btn {
+    border-radius: 6px 6px 0 0;
+    letter-spacing: 0.06em;
+}
