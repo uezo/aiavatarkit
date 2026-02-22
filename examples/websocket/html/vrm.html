@@ -152,6 +152,7 @@
             overflow-y: auto;
             text-align: left;
             text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+            pointer-events: auto;
         }
 
         /* Blinking cursor indicator */
@@ -1070,7 +1071,7 @@
             const connGrid = document.createElement('div');
             connGrid.style.cssText = 'display:grid;grid-template-columns:auto 1fr;gap:4px 8px;align-items:center;font-size:11px';
             const connFields = {};
-            for (const key of ['session_id', 'context_id', 'user_id']) {
+            for (const key of ['session_id', 'context_id']) {
                 const lbl = document.createElement('span');
                 lbl.style.cssText = 'color:#666';
                 lbl.textContent = key;
@@ -1081,6 +1082,23 @@
                 connGrid.appendChild(val);
                 connFields[key] = val;
             }
+            // user_id: editable input
+            const userIdLbl = document.createElement('span');
+            userIdLbl.style.cssText = 'color:#666';
+            userIdLbl.textContent = 'user_id';
+            const userIdInput = document.createElement('input');
+            userIdInput.type = 'text';
+            userIdInput.value = localStorage.getItem('userId') || 'user01';
+            userIdInput.style.cssText = 'padding:2px 6px;border:1px solid #ccc;border-radius:3px;font-size:11px;width:100%;box-sizing:border-box;background:#fff;color:#333';
+            userIdInput.addEventListener('change', () => {
+                const v = userIdInput.value.trim();
+                if (v) {
+                    ui.userId = v;
+                    localStorage.setItem('userId', v);
+                }
+            });
+            connGrid.appendChild(userIdLbl);
+            connGrid.appendChild(userIdInput);
             connSection.appendChild(connGrid);
             panel.appendChild(connSection);
 
@@ -1088,8 +1106,11 @@
             window._updateConnInfo = (connected, data) => {
                 connDot.style.background = connected ? '#2ecc71' : '#e67e22';
                 connLabel.textContent = connected ? 'Connected' : 'Disconnected';
-                for (const key of ['session_id', 'context_id', 'user_id']) {
+                for (const key of ['session_id', 'context_id']) {
                     connFields[key].textContent = (data && data[key]) ? data[key] : '-';
+                }
+                if (data && data.user_id) {
+                    userIdInput.value = data.user_id;
                 }
             };
         }, { position: 2 });
