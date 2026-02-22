@@ -39,6 +39,11 @@ class SpeechRequest(BaseModel):
         example="local_session",
         description="Session Id to route the response to a specific client (e.g., WebSocket connection)"
     )
+    user_id: Optional[str] = Field(
+        default=None,
+        example="user_001",
+        description="User Id to resolve session. Used when session_id is not provided."
+    )
 
 
 class ChatRequest(BaseModel):
@@ -107,6 +112,13 @@ class ControlAPI:
             """
             try:
                 session_id = request.session_id or self.default_session_id
+                if not session_id and request.user_id:
+                    if hasattr(self.adapter, "get_session_by_user_id"):
+                        session_data = self.adapter.get_session_by_user_id(request.user_id)
+                        if session_data:
+                            session_id = session_data.id
+                if not session_id:
+                    raise HTTPException(status_code=400, detail="No active session found")
                 voice = await self.adapter.sts.tts.synthesize(text=self.remove_control_tags(request.text))
 
                 await self.adapter.stop_response(session_id, "_")

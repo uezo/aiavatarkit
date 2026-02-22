@@ -5,7 +5,7 @@ import logging
 import re
 import wave
 from typing import List, Dict, Callable, Awaitable, Optional
-from fastapi import APIRouter, WebSocket, WebSocketException, status
+from fastapi import APIRouter, Header, HTTPException, WebSocket, WebSocketException, status
 from ...database import PoolProvider
 from ...sts.models import STSRequest, STSResponse
 from ...sts.pipeline import STSPipeline
@@ -402,8 +402,24 @@ class AIAvatarWebSocketServer(Adapter):
             reason="Invalid or missing API Key",
         )
 
+    def get_session_by_user_id(self, user_id: str) -> Optional[WebSocketSessionData]:
+        for session_id, session_data in reversed(self.sessions.items()):
+            if self.sts.vad.get_session_data(session_id, "user_id") == user_id:
+                return session_data
+        return None
+
     def get_websocket_router(self, path: str = "/ws"):
         router = APIRouter()
+
+        @router.get(path + "/sessions")
+        async def get_session_by_user_id_endpoint(user_id: str, authorization: str = Header(default=None)):
+            if self.api_key:
+                if not authorization or not authorization.lower().startswith("bearer ") or authorization[7:] != self.api_key:
+                    raise HTTPException(status_code=401, detail="Invalid or missing API Key")
+            session_data = self.get_session_by_user_id(user_id)
+            if session_data is None:
+                return {"session_id": None}
+            return {"session_id": session_data.id, "data": session_data.data}
 
         @router.websocket(path)
         async def websocket_endpoint(websocket: WebSocket):
