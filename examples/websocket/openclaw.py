@@ -2,6 +2,7 @@
 import logging
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+import uvicorn
 from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer
 from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
 from aiavatar.sts.stt.openai import OpenAISpeechRecognizer
@@ -16,7 +17,8 @@ OPENCLAW_BASE_URL = "http://127.0.0.1:18789/v1"
 AIAVATAR_ADMIN_USER = "admin"
 AIAVATAR_API_KEY = None     # Set API key if you protect this service
 OPENCLAW_REQUEST_PREFIX = "[channel:voice]"
-
+SSL_CERT_PATH = None
+SSL_KEY_PATH = None
 
 logger = logging.getLogger("aiavatar")
 logger.setLevel(logging.INFO)
@@ -97,6 +99,38 @@ tts = OpenAISpeechSynthesizer(
 #     speaker=46     # Sayo
 # )
 
+# # Aivis Cloud API for Japanese users
+# from aiavatar.sts.tts import create_instant_synthesizer
+# from aiavatar.sts.tts import AudioConverter
+# aivis_tts = create_instant_synthesizer(
+#     method="POST",
+#     url="https://api.aivis-project.com/v1/tts/synthesize",
+#     headers={
+#         "Content-Type": "application/json",
+#         "Authorization": f"Bearer {AIVIS_API_KEY}"
+#     },
+#     json={
+#         "model_uuid": "22e8ed77-94fe-4ef2-871f-a86f94e9a579",   # Kohaku
+#         "text": "{text}"
+#     },
+#     response_parser=AudioConverter(debug=True).convert
+# )
+
+# # ElevenLabs
+# from aiavatar.sts.tts import create_instant_synthesizer
+# elevenlabs_tts = create_instant_synthesizer(
+#     method="POST",
+#     url=f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+#     headers={
+#         "xi-api-key": ELEVENLABS_API_KEY
+#     },
+#     json={
+#         "text": "{text}",
+#         "model_id": "eleven_v3",
+#         "output_format": "pcm_16000"
+#     }
+# )
+
 
 # =============================================================
 # Speech-to-Speech pipeline
@@ -138,4 +172,13 @@ setup_admin_panel(
     basic_auth_password=AIAVATAR_API_KEY
 )
 
-# Run `uvicorn server:app --port 8000` and open http://localhost:8000/static/vrm.html
+# Run
+uvicorn.run(
+    app,
+    host="0.0.0.0",
+    port=8000,
+    ssl_certfile=SSL_CERT_PATH,
+    ssl_keyfile=SSL_KEY_PATH
+)
+
+# open http://localhost:8000/static/vrm.html
