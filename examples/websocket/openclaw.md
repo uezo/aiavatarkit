@@ -17,7 +17,7 @@ Configure your OpenClaw `gateway` settings as follows:
     "bind": "lan",
     "auth": {
       "mode": "token",
-      "token": "YOUR_OPENCLAW_TOKEN"
+      "token": "YOUR_OPENCLAW_GATEWAY_TOKEN"
     },
     "tailscale": {
       "mode": "off",
@@ -55,7 +55,7 @@ OPENCLAW_BASE_URL = "http://127.0.0.1:18789/v1"
 Start OpenClaw first, then launch the server:
 
 ```sh
-uvicorn openclaw:app --port 8000
+python openclaw.py
 ```
 
 ## Browser Setup
@@ -144,4 +144,29 @@ To optimize responses for voice and enable avatar facial expression switching ba
 
 Example:
 [face:joy]I can see the ocean! [face:fun]Hey, let's go swimming!
+```
+
+## Accessing from Another Host
+
+When connecting from a browser on a different computer, HTTPS is required. Your options are:
+
+- **Obtain a domain and issue an SSL certificate**: Permanent, but requires more effort
+- **Use a tunneling service such as ngrok**: Temporary, but fairly easy
+- **Use a self-signed certificate**: Browser will show a warning, but this is the simplest option
+
+You can generate a self-signed certificate using `mkcert` or [cert.py](https://github.com/uezo/aiavatarkit/blob/main/examples/websocket/cert.py) provided by AIAvatarKit. Replace the IP address with the address or hostname that clients use to reach this server.
+
+```sh
+pip install cryptography
+```
+
+```sh
+python cert.py 192.168.1.123
+```
+
+Set the paths to the generated certificate and key in `openclaw.py`, then start the server to enable HTTPS access.
+
+```python
+SSL_CERT_PATH = "192.168.1.123.pem"
+SSL_KEY_PATH = "192.168.1.123-key.pem"
 ```
