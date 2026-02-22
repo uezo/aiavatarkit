@@ -408,7 +408,8 @@ The list of tools is as follows:
             logger.info(f"User: {text}")
         if self._request_filter:
             text = self._request_filter(text)
-            logger.info(f"User(Filtered): {text}")
+            if self.debug:
+                logger.info(f"User(Filtered): {text}")
 
         if not text and not files:
             return

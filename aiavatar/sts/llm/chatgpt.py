@@ -58,6 +58,7 @@ class ChatGPTService(LLMService):
         self.reasoning_effort = reasoning_effort
         self.enable_tool_filtering = enable_tool_filtering
         self.extra_body = extra_body
+        self._edit_chat_completion_params = None
 
         client_module = custom_openai_module or openai_module
         if "azure" in model:
@@ -102,6 +103,10 @@ class ChatGPTService(LLMService):
     @property
     def dynamic_tool_name(self) -> str:
         return self.dynamic_tool_spec["function"]["name"]
+
+    def edit_chat_completion_params(self, func):
+        self._edit_chat_completion_params = func
+        return func
 
     async def compose_messages(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
         messages = []
@@ -277,6 +282,12 @@ class ChatGPTService(LLMService):
                     chat_completion_params["tool_choice"] = {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": allowed_tools}}
                 else:
                     chat_completion_params["tool_choice"] = "none"
+
+        # Edit chat_completion_params
+        if self._edit_chat_completion_params:
+            self._edit_chat_completion_params(
+                chat_completion_params, context_id, user_id
+            )
 
         if self.debug:
             logger.info(f"Request to ChatGPT: {chat_completion_params}")
