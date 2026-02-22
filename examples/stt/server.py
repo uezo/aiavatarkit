@@ -9,6 +9,7 @@ from aiavatar.adapter.stt import StreamSpeechRecognitionServer
 # Configuration
 AZURE_API_KEY = os.environ.get("AZURE_API_KEY")
 AZURE_REGION = os.environ.get("AZURE_REGION")
+STT_API_KEY = os.environ.get("STT_API_KEY")  # Optional: set to enable API key auth
 
 
 @asynccontextmanager
@@ -37,7 +38,7 @@ vad = SileroStreamSpeechDetector(
 )
 
 # Create STT WebSocket server
-stt_server = StreamSpeechRecognitionServer(vad=vad, debug=True)
+stt_server = StreamSpeechRecognitionServer(vad=vad, api_key=STT_API_KEY, debug=True)
 
 # Optional: Add callbacks
 @stt_server.on_connect

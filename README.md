@@ -65,19 +65,16 @@ Install AIAvatarKit and additional dependencies.
 pip install aiavatar fastapi uvicorn websockets
 ```
 
-Download the example UI.
-
-```sh
-curl -L https://github.com/uezo/aiavatarkit/archive/refs/heads/main.tar.gz \
-  | tar xz --strip-components=3 aiavatarkit-main/examples/websocket/html
-```
-
 Make the script as `ws.py`.
 
 ```python
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer
+from aiavatar.util import download_example
+
+# Download example UI if not exists
+download_example("websocket/html")
 
 # Build Speech-to-Speech pipeline with WebSocket adapter
 aiavatar_app = AIAvatarWebSocketServer(

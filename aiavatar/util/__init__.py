@@ -1,0 +1,1 @@
+from aiavatar.util.example_downloader import download_example

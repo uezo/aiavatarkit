@@ -1,4 +1,5 @@
 # pip install aiavatar silero-vad uvicorn
+import os
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer
@@ -7,9 +8,11 @@ from aiavatar.sts.stt.openai import OpenAISpeechRecognizer
 from aiavatar.sts.llm.chatgpt import ChatGPTService
 from aiavatar.sts.tts.voicevox import VoicevoxSpeechSynthesizer
 from aiavatar.sts.tts.openai import OpenAISpeechSynthesizer
+from aiavatar.util import download_example
 
 
 OPENAI_API_KEY = "YOUR_OPENAI_API_KEY"
+AIAVATAR_API_KEY = os.environ.get("AIAVATAR_API_KEY")  # Optional: set to enable API key auth
 
 SYSTEM_PROMPT_JP = """
 以下の設定に従い、三毛猫の招き猫の化身である美少女キャラクター「いすず」をロールプレイして会話してください。
@@ -144,8 +147,12 @@ aiavatar_app = AIAvatarWebSocketServer(
     tts=tts,
     merge_request_threshold=3.0,
     use_invoke_queue=True,  # Enabled for vision sequence
+    api_key=AIAVATAR_API_KEY,
     debug=True
 )
+
+# Download example UI if not exists
+download_example("websocket/html")
 
 # Set router to FastAPI app
 app = FastAPI()
