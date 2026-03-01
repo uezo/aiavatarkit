@@ -483,7 +483,8 @@
         "imports": {
             "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
             "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/",
-            "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.1.1/lib/three-vrm.module.min.js"
+            "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.1.1/lib/three-vrm.module.min.js",
+            "@pixiv/three-vrm-animation": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm-animation@3.1.1/lib/three-vrm-animation.module.min.js"
         }
     }
     </script>
@@ -493,6 +494,7 @@
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+        import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from '@pixiv/three-vrm-animation';
 
         // ============================================================
         // VRM Idle
@@ -502,6 +504,7 @@
         });
         idle.swayPauseWhen = () => aiavatar.isAudioPlaying || ui.isServerProcessing;
         idle.swayResumeDelay = 20;
+        idle.setAnimationFactory(THREE.AnimationMixer, createVRMAnimationClip);
 
         // ============================================================
         // Inspector
@@ -555,9 +558,16 @@
         }
 
         let applyLighting;
+        let refreshVrmaList;
 
         // ---- Load tab ----
         inspector.addTab('Load', (panel) => {
+            // === VRM section ===
+            const vrmHeading = document.createElement('div');
+            vrmHeading.style.cssText = 'font-size:11px;color:#999;margin-bottom:6px';
+            vrmHeading.textContent = 'VRM';
+            panel.appendChild(vrmHeading);
+
             const urlRow = document.createElement('div');
             urlRow.style.cssText = 'display:flex;gap:6px;margin-bottom:8px';
             const urlInput = document.createElement('input');
@@ -586,15 +596,15 @@
             urlRow.appendChild(urlBtn);
             panel.appendChild(urlRow);
 
-            const fileInput = document.createElement('input');
-            fileInput.type = 'file';
-            fileInput.accept = '.vrm';
-            fileInput.style.display = 'none';
-            const fileBtn = document.createElement('button');
-            fileBtn.className = 'vrmi-sampler-btn';
-            fileBtn.textContent = 'Local file';
-            fileBtn.addEventListener('click', () => fileInput.click());
-            fileInput.addEventListener('change', (e) => {
+            const vrmFileInput = document.createElement('input');
+            vrmFileInput.type = 'file';
+            vrmFileInput.accept = '.vrm';
+            vrmFileInput.style.display = 'none';
+            const vrmFileBtn = document.createElement('button');
+            vrmFileBtn.className = 'vrmi-sampler-btn';
+            vrmFileBtn.textContent = 'Local file';
+            vrmFileBtn.addEventListener('click', () => vrmFileInput.click());
+            vrmFileInput.addEventListener('change', (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
                 loadAndCacheVRM(file).catch(err => {
@@ -602,18 +612,13 @@
                     alert('Failed to load VRM file.');
                 });
             });
-            panel.appendChild(fileBtn);
-            panel.appendChild(fileInput);
-
-            const hint = document.createElement('div');
-            hint.style.cssText = 'margin-top:10px;font-size:11px;color:#999';
-            hint.textContent = 'You can also drag & drop a .vrm file onto the screen.';
-            panel.appendChild(hint);
+            panel.appendChild(vrmFileBtn);
+            panel.appendChild(vrmFileInput);
 
             const unloadBtn = document.createElement('button');
             unloadBtn.className = 'vrmi-sampler-btn';
-            unloadBtn.textContent = 'Unload VRM';
-            unloadBtn.style.cssText = 'margin-top:10px';
+            unloadBtn.textContent = 'Unload';
+            unloadBtn.style.cssText = 'margin-left:6px';
             unloadBtn.addEventListener('click', async () => {
                 if (currentVrm) {
                     scene.remove(currentVrm.scene);
@@ -626,6 +631,121 @@
                 localStorage.removeItem(CAMERA_KEY);
             });
             panel.appendChild(unloadBtn);
+
+            // === VRMA section ===
+            const vrmaSection = document.createElement('div');
+            vrmaSection.style.cssText = 'margin-top:16px';
+
+            const vrmaHeading = document.createElement('div');
+            vrmaHeading.style.cssText = 'font-size:11px;color:#999;margin-bottom:6px';
+            vrmaHeading.textContent = 'VRMA';
+            vrmaSection.appendChild(vrmaHeading);
+
+            const vrmaFileInput = document.createElement('input');
+            vrmaFileInput.type = 'file';
+            vrmaFileInput.accept = '.vrma';
+            vrmaFileInput.multiple = true;
+            vrmaFileInput.style.display = 'none';
+            const vrmaAddBtn = document.createElement('button');
+            vrmaAddBtn.className = 'vrmi-sampler-btn';
+            vrmaAddBtn.textContent = 'Add animation';
+            vrmaAddBtn.addEventListener('click', () => vrmaFileInput.click());
+            vrmaFileInput.addEventListener('change', async (e) => {
+                for (const file of e.target.files) {
+                    const animName = file.name.replace(/\.vrma$/i, '');
+                    try {
+                        await loadAndCacheVRMA(animName, file);
+                    } catch (err) {
+                        console.error('Failed to load VRMA:', err);
+                        alert(`Failed to load VRMA: ${file.name}`);
+                    }
+                }
+                vrmaFileInput.value = '';
+                refreshVrmaList();
+            });
+            vrmaSection.appendChild(vrmaAddBtn);
+            vrmaSection.appendChild(vrmaFileInput);
+
+            const vrmaList = document.createElement('div');
+            vrmaList.style.cssText = 'margin-top:8px';
+
+            refreshVrmaList = function refreshVrmaList() {
+                vrmaList.innerHTML = '';
+                const names = idle.vrmaNames;
+                if (names.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.style.cssText = 'font-size:11px;color:#999;padding:4px 0';
+                    empty.textContent = 'No animations registered.';
+                    vrmaList.appendChild(empty);
+                    return;
+                }
+                for (const name of names) {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px';
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.value = name;
+                    input.style.cssText = 'flex:1;font-size:12px;padding:2px 6px;border:1px solid rgba(0,0,0,0.1);border-radius:4px;background:rgba(255,255,255,0.5);outline:none;min-width:0';
+                    input.addEventListener('focus', () => { input.style.borderColor = '#0071e3'; });
+                    input.addEventListener('blur', async () => {
+                        input.style.borderColor = 'rgba(0,0,0,0.1)';
+                        const newName = input.value.trim().toLowerCase();
+                        if (!newName || newName === name) {
+                            input.value = name;
+                            return;
+                        }
+                        if (!idle.renameVRMA(name, newName)) {
+                            alert('Rename failed. Name may already exist.');
+                            input.value = name;
+                            return;
+                        }
+                        const blob = await cacheDB.get('vrma_' + name);
+                        if (blob) {
+                            await cacheDB.put('vrma_' + newName, blob);
+                            await cacheDB.del('vrma_' + name);
+                        }
+                        const cachedNames = await cacheDB.get('vrma_names') || [];
+                        const idx = cachedNames.indexOf(name);
+                        if (idx !== -1) cachedNames[idx] = newName;
+                        else cachedNames.push(newName);
+                        await cacheDB.put('vrma_names', cachedNames);
+                        refreshVrmaList();
+                    });
+                    input.addEventListener('keydown', (ev) => {
+                        if (ev.key === 'Enter') input.blur();
+                        if (ev.key === 'Escape') { input.value = name; input.blur(); }
+                    });
+                    const delBtn = document.createElement('button');
+                    delBtn.className = 'vrmi-sampler-btn';
+                    delBtn.textContent = 'Delete';
+                    delBtn.style.cssText = 'font-size:11px;padding:2px 8px;color:#c33;flex-shrink:0';
+                    delBtn.addEventListener('click', async () => {
+                        idle.unregisterVRMA(name);
+                        await cacheDB.del('vrma_' + name);
+                        const cachedNames = await cacheDB.get('vrma_names') || [];
+                        const idx = cachedNames.indexOf(name);
+                        if (idx !== -1) {
+                            cachedNames.splice(idx, 1);
+                            await cacheDB.put('vrma_names', cachedNames);
+                        }
+                        refreshVrmaList();
+                    });
+                    row.appendChild(input);
+                    row.appendChild(delBtn);
+                    vrmaList.appendChild(row);
+                }
+            };
+
+            vrmaSection.appendChild(vrmaList);
+            panel.appendChild(vrmaSection);
+
+            // Initial render (restore callback will refresh again when done)
+            refreshVrmaList();
+
+            const hint = document.createElement('div');
+            hint.style.cssText = 'margin-top:12px;font-size:11px;color:#999';
+            hint.textContent = 'You can also drag & drop .vrm / .vrma files onto the screen.';
+            panel.appendChild(hint);
         }, { position: 0, active: true });
 
         // ---- Light tab ----
@@ -1243,6 +1363,7 @@
         const clock = new THREE.Clock();
         const gltfLoader = new GLTFLoader();
         gltfLoader.register((parser) => new VRMLoaderPlugin(parser));
+        gltfLoader.register((parser) => new VRMAnimationLoaderPlugin(parser));
 
         async function loadVRM(url) {
             const gltf = await gltfLoader.loadAsync(url);
@@ -1284,6 +1405,28 @@
             await cacheDB.put('vrm_file', blob);
         }
 
+        // VRMA loader
+        async function loadAndCacheVRMA(name, blob) {
+            name = name.toLowerCase();
+            const url = URL.createObjectURL(blob);
+            try {
+                const gltf = await gltfLoader.loadAsync(url);
+                const vrmAnimation = gltf.userData.vrmAnimations?.[0];
+                if (!vrmAnimation) throw new Error('No VRMAnimation data found');
+                idle.registerVRMA(name, vrmAnimation);
+                await cacheDB.put('vrma_' + name, blob);
+                // Persist the list of registered VRMA names
+                const names = await cacheDB.get('vrma_names') || [];
+                if (!names.includes(name)) {
+                    names.push(name);
+                    await cacheDB.put('vrma_names', names);
+                }
+                console.log(`VRMA registered: ${name}`);
+            } finally {
+                URL.revokeObjectURL(url);
+            }
+        }
+
         // Restore VRM from cache on startup
         cacheDB.get('vrm_file').then(async blob => {
             if (blob) {
@@ -1292,6 +1435,47 @@
                 // Override auto-positioning with saved camera state
                 restoreCameraState();
             }
+        }).catch(() => {});
+
+        // Restore VRMA animations from cache on startup
+        cacheDB.get('vrma_names').then(async names => {
+            if (!Array.isArray(names)) return;
+            // Migrate: lowercase keys, deduplicate, move blobs
+            const seen = new Set();
+            const normalized = [];
+            for (const orig of names) {
+                const lower = orig.toLowerCase();
+                if (seen.has(lower)) continue;
+                seen.add(lower);
+                normalized.push(lower);
+                if (orig !== lower) {
+                    const blob = await cacheDB.get('vrma_' + orig);
+                    if (blob) {
+                        await cacheDB.put('vrma_' + lower, blob);
+                        await cacheDB.del('vrma_' + orig);
+                    }
+                }
+            }
+            if (normalized.length !== names.length || normalized.some((n, i) => n !== names[i])) {
+                await cacheDB.put('vrma_names', normalized);
+            }
+            for (const name of normalized) {
+                const blob = await cacheDB.get('vrma_' + name);
+                if (blob) {
+                    const url = URL.createObjectURL(blob);
+                    try {
+                        const gltf = await gltfLoader.loadAsync(url);
+                        const vrmAnimation = gltf.userData.vrmAnimations?.[0];
+                        if (vrmAnimation) {
+                            idle.registerVRMA(name, vrmAnimation);
+                            console.log(`VRMA restored: ${name}`);
+                        }
+                    } finally {
+                        URL.revokeObjectURL(url);
+                    }
+                }
+            }
+            if (refreshVrmaList) refreshVrmaList();
         }).catch(() => {});
 
         // Drag & drop (full-screen)
@@ -1309,8 +1493,15 @@
             e.preventDefault();
             dropOverlay.classList.remove('show');
             const file = e.dataTransfer.files[0];
-            if (file && file.name.toLowerCase().endsWith('.vrm')) {
+            if (!file) return;
+            const lname = file.name.toLowerCase();
+            if (lname.endsWith('.vrm')) {
                 loadAndCacheVRM(file).catch(err => console.error('Failed to load VRM:', err));
+            } else if (lname.endsWith('.vrma')) {
+                const animName = file.name.replace(/\.vrma$/i, '');
+                loadAndCacheVRMA(animName, file).then(() => {
+                    if (refreshVrmaList) refreshVrmaList();
+                }).catch(err => console.error('Failed to load VRMA:', err));
             }
         });
 
