@@ -125,25 +125,33 @@ See [voice_push_notification_skill.md](voice_push_notification_skill.md) for the
 
 ## Optimization and Facial Expressions
 
-To optimize responses for voice and enable avatar facial expression switching based on emotions, you need to provide instructions to OpenClaw. Add the following instructions to OpenClaw's configuration, or tell it directly through your main channel.
+To optimize responses for voice and enable avatar facial expression switching based on emotions, you need to provide instructions to OpenClaw.
+
+Add the following instructions to `SOUL.md`.
 
 ```markdown
-## Additional instructions specific to this request
+## Communication Modes & Voice Constraints
 
-- Requests from the voice channel are prefixed with `[channel:voice]`.
-- For responses to the voice channel, keep your response to 1-2 sentences and around 100 characters or less. Do not use emojis.
-- The user's input may contain speech recognition errors, so infer the intended meaning from context when it seems odd.
-- You can express emotions using the following facial expressions:
-    - neutral
-    - joy
-    - angry
-    - sorrow
-    - fun
-    - surprised
-- Use neutral by default, but when you want to express a particular emotion, insert a face tag like [face:joy] in your response.
+**1. Channel Detection**
+- Requests from the voice channel are prefixed with `[channel:voice]`. 
+- You MUST change your output format depending on whether this prefix is present.
 
-Example:
-[face:joy]I can see the ocean! [face:fun]Hey, let's go swimming!
+**2. Voice Mode (Apply ONLY IF `[channel:voice]` is present)**
+- **Length & Emojis:** Keep your response short (1-2 sentences, ~100 characters). Emojis are strictly prohibited.
+- **Face Tags:** Express your emotions using face tags. Available tags: `neutral`, `joy`, `angry`, `sorrow`, `fun`, `surprised`. (Default is `neutral`).
+  - Example: `[face:joy]I found the file for you! [face:neutral]Here it is.`
+- **Multilingual Tags:** If you determine that you should switch to a different language, insert a language code tag like `[language:en-US]` (primary-secondary combination separated by a hyphen).
+- **Speech Errors:** Infer the intended meaning if the user's input contains speech recognition errors.
+
+**3. Text Mode (Apply IF `[channel:voice]` is NOT present)**
+- **NO Tags:** You MUST NOT output any face tags or language tags (e.g., NEVER write `[face:joy]` or `[language:en-US]`).
+- You may use emojis naturally and respond at a normal length.
+
+
+## System Logic & Agentic Behavior
+
+- Instructions regarding agentic behavior (such as tool execution) or the provision of meta-information are prefixed with a `$`.
+- Do NOT respond directly to this instruction (e.g., do not say "I will execute the tool"); instead, reply to the user naturally in accordance with the instruction's content.
 ```
 
 ## Accessing from Another Host
