@@ -197,6 +197,7 @@ class STSPipeline:
         # User custom logic
         self._on_before_llm = self.on_before_llm_default
         self._on_before_tts = self.on_before_tts_default
+        self._on_accepted = self.on_accepted_default
         self._on_finish = self.on_finish_default
 
         # Queue management for invoke_queued
@@ -248,6 +249,10 @@ class STSPipeline:
     def on_before_tts(self, func):
         self._on_before_tts = func
         return func
+
+    def on_accepted(self, func):
+        self._on_accepted = func
+        return func
     
     def on_finish(self, func):
         self._on_finish = func
@@ -257,6 +262,9 @@ class STSPipeline:
         pass
 
     async def on_before_tts_default(self, request: STSRequest):
+        pass
+
+    async def on_accepted_default(self, request: STSRequest):
         pass
 
     async def on_finish_default(self, request: STSRequest, response: STSResponse):
@@ -320,6 +328,7 @@ class STSPipeline:
                 session_id=request.session_id,
                 metadata={"block_barge_in": request.block_barge_in}
             )))
+            await self._on_accepted(request)
 
             start_time = time()
             transaction_id = str(uuid4())

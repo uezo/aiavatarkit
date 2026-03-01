@@ -206,9 +206,11 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                     try:
                         result = await self.speech_recognizer.recognize(sess.session_id, data)
                         # Only update if this is still the latest sequence
-                        if result.text and seq == sess.recognition_sequence:
-                            sess.last_recognized_text = result.text
-                            await self._execute_on_speech_detecting(result.text, sess)
+                        recognized_text = result.text or ""
+                        # Only update if this is still the latest sequence
+                        if recognized_text and seq == sess.recognition_sequence:
+                            sess.last_recognized_text = recognized_text
+                            await self._execute_on_speech_detecting(recognized_text, sess)
                             # Check on_recording_started trigger condition after recognition
                             await self._check_and_trigger_recording_started(sess)
                     except Exception as ex:
@@ -306,3 +308,48 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
         if session.amplitude_threshold is None:
             session.amplitude_threshold = self.amplitude_threshold
         return session
+
+    def reset_session_audio_state(self, session_id: str, clear_preroll: bool = True):
+        """Reset recording-related audio state while keeping session metadata.
+
+        Unlike reset(), this also clears preroll_buffer, vad_buffer, and
+        cancels any pending recognition tasks. reset() intentionally preserves
+        these for continuous recording operation. Use this at turn boundaries
+        to prevent residual audio from leaking into the next turn.
+        """
+        session = self.recording_sessions.get(session_id)
+        if not session:
+            return
+
+        dropped_buffer_bytes = len(session.buffer)
+        dropped_preroll_bytes = sum(len(f) for f in session.preroll_buffer)
+        dropped_vad_bytes = len(session.vad_buffer)
+        dropped_segment_bytes = len(session.segment_buffer)
+        dropped_record_duration = session.record_duration
+        dropped_silence_duration = session.silence_duration
+        dropped_segment_duration = session.segment_duration
+        pending_task_alive = session.pending_recognition_task is not None and not session.pending_recognition_task.done()
+        was_recording = session.is_recording
+
+        if session.pending_recognition_task is not None and not session.pending_recognition_task.done():
+            session.pending_recognition_task.cancel()
+
+        session.reset()
+        session.vad_buffer.clear()
+        if clear_preroll:
+            session.preroll_buffer.clear()
+        if self.debug:
+            logger.info(
+                "force_reset_session_audio_state: session=%s, clear_preroll=%s, was_recording=%s, pending_task_alive=%s, dropped_buffer_bytes=%s, dropped_preroll_bytes=%s, dropped_vad_bytes=%s, dropped_segment_bytes=%s, dropped_record_duration=%.3f, dropped_silence_duration=%.3f, dropped_segment_duration=%.3f",
+                session_id,
+                clear_preroll,
+                was_recording,
+                pending_task_alive,
+                dropped_buffer_bytes,
+                dropped_preroll_bytes,
+                dropped_vad_bytes,
+                dropped_segment_bytes,
+                dropped_record_duration,
+                dropped_silence_duration,
+                dropped_segment_duration
+            )

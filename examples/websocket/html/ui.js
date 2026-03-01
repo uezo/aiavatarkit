@@ -53,6 +53,10 @@ class AvatarUI {
         this._setupInterruptToggle();
         this._setupCameraToggle();
         this._setupVolumeControl();
+
+        this.aiavatar.getStartMetadata = () => ({
+            barge_in_enabled: this.interruptEnabled
+        });
     }
 
     // --- Microphone frame color & input level ---
@@ -125,6 +129,9 @@ class AvatarUI {
     _setupInterruptToggle() {
         this.interruptToggle.addEventListener("change", () => {
             this.interruptEnabled = this.interruptToggle.checked;
+            this.aiavatar.sendConfig(this.sessionId, {
+                barge_in_enabled: this.interruptEnabled
+            });
         });
     }
 
