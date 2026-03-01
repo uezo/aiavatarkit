@@ -476,6 +476,37 @@ tts = create_instant_synthesizer(
     request_maker=make_coefont_request,
     follow_redirects=True
 )
+
+# Amazon Polly (AWS)
+import boto3
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+
+region = "ap-northeast-1"
+voice_id = "Mizuki"
+
+session = boto3.Session()
+# Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY as environment variables
+credentials = session.get_credentials().get_frozen_credentials()
+
+convert_pcm_to_wave = AudioConverter(input_sample_rate=16000).pcm_to_wave
+
+def aws_polly_request_maker(text, style_info=None, language=None):
+    url = f"https://polly.{region}.amazonaws.com/v1/speech"
+    body = json.dumps({
+        "OutputFormat": "pcm",
+        "SampleRate": "16000",
+        "Text": text,
+        "VoiceId": voice_id,
+    })
+    aws_request = AWSRequest(method="POST", url=url, data=body, headers={"Content-Type": "application/json"})
+    SigV4Auth(credentials, "polly", region).add_auth(aws_request)
+    return httpx.Request(method="POST", url=url, headers=dict(aws_request.headers), content=body)
+
+tts = create_instant_synthesizer(
+    request_maker=aws_polly_request_maker,
+    response_parser=convert_pcm_to_wave,
+)
 ```
 
 The `{text}` and `{language}` placeholders in params, headers, and json will be automatically replaced with the processed text and language values during synthesis.
