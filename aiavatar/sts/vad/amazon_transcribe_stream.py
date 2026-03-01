@@ -28,6 +28,7 @@ class RecordingSession:
         # Silence duration tracking
         self.accumulated_texts: List[str] = []
         self.silence_timer_task: Optional[asyncio.Task] = None
+        self.stream_generation: int = 0
 
     def cancel_silence_timer(self):
         if self.silence_timer_task and not self.silence_timer_task.done():
@@ -57,12 +58,17 @@ class _TranscriptionEventHandler(TranscriptResultStreamHandler):
         super().__init__(output_stream)
         self._detector = detector
         self._session = session
+        self._generation = session.stream_generation
 
     async def handle_transcript_event(self, transcript_event: TranscriptEvent):
         detector = self._detector
         session = self._session
 
         for result in transcript_event.transcript.results:
+            # Ignore events from old stream or after mid-loop stream restart
+            if self._generation != session.stream_generation:
+                return
+
             if not result.alternatives:
                 continue
 
@@ -198,6 +204,16 @@ class _TranscriptionEventHandler(TranscriptResultStreamHandler):
             logger.error("Error scheduling execute_on_speech_detected", exc_info=True)
         finally:
             session.reset(reason="recognized_speech", debug=detector.debug)
+            # Restart Transcribe stream to prevent text carryover to next turn
+            session.stream_generation += 1
+            old_stream = session.transcribe_stream
+            old_task = session.event_handler_task
+            session.transcribe_stream = None
+            session.event_handler_task = None
+            if old_stream or old_task:
+                asyncio.create_task(
+                    detector._cleanup_old_transcribe_stream(old_stream, old_task, session.session_id)
+                )
 
 
 class AmazonTranscribeStreamSpeechDetector(SpeechDetector):
@@ -338,6 +354,21 @@ class AmazonTranscribeStreamSpeechDetector(SpeechDetector):
         except Exception as e:
             logger.error(f"Failed to stop Amazon Transcribe streaming: {e}")
 
+    async def _cleanup_old_transcribe_stream(self, old_stream, old_task, session_id: str):
+        """Clean up old Transcribe stream resources in the background."""
+        if old_stream:
+            try:
+                await old_stream.input_stream.end_stream()
+            except Exception:
+                pass
+        if old_task:
+            try:
+                await asyncio.wait_for(old_task, timeout=2.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                old_task.cancel()
+        if self.debug:
+            logger.info(f"Old Transcribe stream cleaned up for session {session_id}")
+
     async def _write_to_transcribe_stream(self, session: RecordingSession, audio_data: bytes):
         """Write audio data to Amazon Transcribe stream"""
         if session.transcribe_stream:
@@ -450,6 +481,16 @@ class AmazonTranscribeStreamSpeechDetector(SpeechDetector):
                     except Exception:
                         logger.error("Error scheduling execute_on_speech_detected", exc_info=True)
                     session.reset(reason="max_duration", debug=self.debug)
+                    # Restart Transcribe stream to prevent text carryover
+                    session.stream_generation += 1
+                    old_stream = session.transcribe_stream
+                    old_task = session.event_handler_task
+                    session.transcribe_stream = None
+                    session.event_handler_task = None
+                    if old_stream or old_task:
+                        asyncio.create_task(
+                            self._cleanup_old_transcribe_stream(old_stream, old_task, session_id)
+                        )
                 else:
                     if self.debug:
                         logger.info(f"[VAD_DEBUG] max_duration reached but no accumulated text, resetting")
