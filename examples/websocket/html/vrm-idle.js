@@ -15,12 +15,13 @@
 class VRMIdle {
 
     static DEG = Math.PI / 180;
+    static VRMA_FADE_TIME = 0.5; // seconds for crossfade transitions
 
     // --- Pose parameter schema ---
     static POSE_PARAMS = [
-        { key: 'armSpread', label: 'Arm spread',  min: -60, max: 120, def: 60,  fmt: v => v + '\u00b0' },
+        { key: 'armSpread', label: 'Arm spread',  min: -120, max: 120, def: 60,  fmt: v => v + '\u00b0' },
         { key: 'armFwd',    label: 'Arm forward', min: -30, max: 60,  def: 0,   fmt: v => v + '\u00b0' },
-        { key: 'elbow',     label: 'Elbow bend',  min: 0,   max: 60,  def: 7,   fmt: v => v + '\u00b0' },
+        { key: 'elbow',     label: 'Elbow bend',  min: -60,   max: 60,  def: 7,   fmt: v => v + '\u00b0' },
         { key: 'breath',    label: 'Breath',      min: 0,   max: 500, def: 200, fmt: v => v + '%' },
     ];
 
@@ -139,10 +140,82 @@ class VRMIdle {
         // Animation registry – caller populates, e.g.:
         //   idle.animations.wave = { label: 'Wave', fn: (dur) => { ... }, defaultDuration: 2 };
         this.animations = {};
+
+        // VRMA animation state
+        this._vrmaMap = {};           // name → VRMAnimation object
+        this._vrmaClipCache = {};     // name → AnimationClip (for current VRM)
+        this._mixer = null;           // THREE.AnimationMixer instance
+        this._currentVrmaAction = null;
+        this._vrmaTimeout = null;
+        this._vrmaFades = [];         // active fade transitions
+        this._AnimationMixer = null;  // THREE.AnimationMixer class ref
+        this._createClipFn = null;    // createVRMAnimationClip function ref
     }
 
     get vrm() { return this._vrm; }
-    set vrm(v) { this._vrm = v; }
+    set vrm(v) {
+        this._vrm = v;
+        this._stopVrma();
+        this._vrmaClipCache = {};
+        if (v && this._AnimationMixer) {
+            this._mixer = new this._AnimationMixer(v.scene);
+        } else {
+            this._mixer = null;
+        }
+    }
+
+    get isVrmaPlaying() { return this._currentVrmaAction !== null; }
+
+    /**
+     * Inject Three.js dependencies for VRMA animation support.
+     * @param {Function} AnimationMixer - THREE.AnimationMixer class
+     * @param {Function} createVRMAnimationClip - from @pixiv/three-vrm-animation
+     */
+    setAnimationFactory(AnimationMixer, createVRMAnimationClip) {
+        this._AnimationMixer = AnimationMixer;
+        this._createClipFn = createVRMAnimationClip;
+    }
+
+    /**
+     * Register a VRMAnimation by name (loaded from a .vrma file).
+     * @param {string} name - Animation name (used to trigger via playAnimation)
+     * @param {Object} vrmAnimation - VRMAnimation object from VRMAnimationLoaderPlugin
+     */
+    registerVRMA(name, vrmAnimation) {
+        name = name.toLowerCase();
+        this._vrmaMap[name] = vrmAnimation;
+        delete this._vrmaClipCache[name];
+    }
+
+    unregisterVRMA(name) {
+        name = name.toLowerCase();
+        if (this._currentVrmaAction) {
+            const clip = this._vrmaClipCache[name];
+            if (clip && this._currentVrmaAction.getClip() === clip) {
+                this._stopVrma();
+            }
+        }
+        delete this._vrmaMap[name];
+        delete this._vrmaClipCache[name];
+    }
+
+    renameVRMA(oldName, newName) {
+        oldName = oldName.toLowerCase();
+        newName = newName.toLowerCase();
+        if (oldName === newName) return false;
+        if (!this._vrmaMap[oldName] || this._vrmaMap[newName]) return false;
+        this._vrmaMap[newName] = this._vrmaMap[oldName];
+        delete this._vrmaMap[oldName];
+        if (this._vrmaClipCache[oldName]) {
+            this._vrmaClipCache[newName] = this._vrmaClipCache[oldName];
+            delete this._vrmaClipCache[oldName];
+        }
+        return true;
+    }
+
+    get vrmaNames() {
+        return Object.keys(this._vrmaMap);
+    }
 
     // ================================================================
     // Main update (call once per frame with raw delta from clock)
@@ -151,10 +224,14 @@ class VRMIdle {
         delta = Math.min(delta, 0.1);
         this._elapsedTime += delta;
         if (!this._vrm) return;
-        this._updateSwayAutoPause(delta);
-        this._applyBasePose();
-        this._updateBreathing(this._elapsedTime);
-        this._updateSway(delta, this._elapsedTime);
+        if (!this.isVrmaPlaying) {
+            this._updateSwayAutoPause(delta);
+            this._applyBasePose();
+            this._updateBreathing(this._elapsedTime);
+            this._updateSway(delta, this._elapsedTime);
+        }
+        this._updateVrmaFades(delta);
+        if (this._mixer) this._mixer.update(delta);
         this._updateVisemes(delta);
         this._updateBlink(delta);
         this._vrm.update(delta);
@@ -316,7 +393,116 @@ class VRMIdle {
     playAnimation(name, duration) {
         name = (name || '').toLowerCase();
         const anim = this.animations[name];
-        if (anim) anim.fn(duration || anim.defaultDuration);
+        if (anim) {
+            anim.fn(duration || anim.defaultDuration);
+            return;
+        }
+        this._playVrma(name, duration);
+    }
+
+    // ================================================================
+    // VRMA Playback
+    // ================================================================
+
+    /** Smoothstep S-curve: slow start → fast middle → smooth stop */
+    static _easeInOut(t) {
+        return t * t * (3 - 2 * t);
+    }
+
+    _getOrCreateClip(name) {
+        if (!this._vrm || !this._createClipFn) return null;
+        const vrmAnim = this._vrmaMap[name];
+        if (!vrmAnim) return null;
+        if (!this._vrmaClipCache[name]) {
+            this._vrmaClipCache[name] = this._createClipFn(vrmAnim, this._vrm);
+        }
+        return this._vrmaClipCache[name];
+    }
+
+    _startFade(action, targetWeight, duration) {
+        // Remove any existing fade for this action
+        this._vrmaFades = this._vrmaFades.filter(f => f.action !== action);
+        const startWeight = action.weight;
+        if (Math.abs(startWeight - targetWeight) < 0.001) {
+            action.weight = targetWeight;
+            if (targetWeight === 0) action.stop();
+            return;
+        }
+        this._vrmaFades.push({
+            action, elapsed: 0, duration,
+            startWeight, targetWeight,
+        });
+    }
+
+    _updateVrmaFades(delta) {
+        for (let i = this._vrmaFades.length - 1; i >= 0; i--) {
+            const fade = this._vrmaFades[i];
+            fade.elapsed += delta;
+            const t = Math.min(fade.elapsed / fade.duration, 1);
+            const eased = VRMIdle._easeInOut(t);
+            fade.action.weight = fade.startWeight + (fade.targetWeight - fade.startWeight) * eased;
+            if (t >= 1) {
+                this._vrmaFades.splice(i, 1);
+                if (fade.targetWeight === 0) {
+                    fade.action.stop();
+                }
+            }
+        }
+    }
+
+    _playVrma(name, duration) {
+        if (!this._mixer) return;
+        const clip = this._getOrCreateClip(name);
+        if (!clip) return;
+
+        const fadeTime = VRMIdle.VRMA_FADE_TIME;
+        const newAction = this._mixer.clipAction(clip);
+
+        // Fade out current VRMA if switching
+        if (this._currentVrmaAction && this._currentVrmaAction !== newAction) {
+            this._startFade(this._currentVrmaAction, 0, fadeTime);
+        }
+
+        if (this._vrmaTimeout) {
+            clearTimeout(this._vrmaTimeout);
+            this._vrmaTimeout = null;
+        }
+
+        newAction.reset();
+        newAction.clampWhenFinished = true;
+        newAction.loop = 2200; // LoopOnce
+        newAction.weight = 0;
+        newAction.play();
+        this._startFade(newAction, 1, fadeTime);
+        this._currentVrmaAction = newAction;
+
+        // Stop when clip finishes
+        const onFinished = (e) => {
+            if (e.action === newAction) {
+                this._mixer.removeEventListener('finished', onFinished);
+                this._stopVrma();
+            }
+        };
+        this._mixer.addEventListener('finished', onFinished);
+
+        // Also stop at duration if specified
+        if (duration > 0) {
+            this._vrmaTimeout = setTimeout(() => {
+                this._mixer.removeEventListener('finished', onFinished);
+                this._stopVrma();
+            }, duration * 1000);
+        }
+    }
+
+    _stopVrma() {
+        if (this._vrmaTimeout) {
+            clearTimeout(this._vrmaTimeout);
+            this._vrmaTimeout = null;
+        }
+        if (this._currentVrmaAction) {
+            this._startFade(this._currentVrmaAction, 0, VRMIdle.VRMA_FADE_TIME);
+            this._currentVrmaAction = null; // idle resumes immediately
+        }
     }
 
     // ================================================================
