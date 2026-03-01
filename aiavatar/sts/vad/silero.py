@@ -352,6 +352,38 @@ class SileroSpeechDetector(SpeechDetector):
         if session := self.recording_sessions.get(session_id):
             session.reset()
 
+    def reset_session_audio_state(self, session_id: str, clear_preroll: bool = True):
+        """Reset recording-related audio state while keeping session metadata.
+
+        Unlike reset(), this also clears preroll_buffer and vad_buffer which
+        reset() intentionally preserves for continuous recording operation.
+        Use this at turn boundaries to prevent residual audio from leaking
+        into the next turn.
+        """
+        if session := self.recording_sessions.get(session_id):
+            dropped_buffer_bytes = len(session.buffer)
+            dropped_preroll_bytes = sum(len(f) for f in session.preroll_buffer)
+            dropped_vad_bytes = len(session.vad_buffer)
+            was_recording = session.is_recording
+            recorded_duration = session.record_duration
+            silence_duration = session.silence_duration
+            session.reset()
+            session.vad_buffer.clear()
+            if clear_preroll:
+                session.preroll_buffer.clear()
+            if self.debug:
+                logger.info(
+                    "Silero VAD audio state reset: session=%s, clear_preroll=%s, was_recording=%s, dropped_buffer_bytes=%s, dropped_preroll_bytes=%s, dropped_vad_bytes=%s, recorded_duration=%.3f, silence_duration=%.3f",
+                    session_id,
+                    clear_preroll,
+                    was_recording,
+                    dropped_buffer_bytes,
+                    dropped_preroll_bytes,
+                    dropped_vad_bytes,
+                    recorded_duration,
+                    silence_duration
+                )
+
     def delete_session(self, session_id: str):
         if session_id in self.recording_sessions:
             self.recording_sessions[session_id].reset()

@@ -159,6 +159,19 @@ class AIAvatarWebSocketServer(Adapter):
         self.debug = debug
         self.last_response = None
 
+        @self.sts.on_accepted
+        async def on_accepted(request: STSRequest):
+            barge_in_enabled = self.sts.vad.get_session_data(request.session_id, "barge_in_enabled")
+            if barge_in_enabled is not False:
+                return
+            if hasattr(self.sts.vad, "reset_session_audio_state"):
+                self.sts.vad.reset_session_audio_state(request.session_id, clear_preroll=True)
+                if self.debug:
+                    logger.info(
+                        "VAD session audio state reset on accepted (barge_in_enabled=False): %s",
+                        request.session_id
+                    )
+
     def get_config(self) -> dict:
         return {
             "response_audio_chunk_size": self.response_audio_chunk_size,
@@ -208,6 +221,8 @@ class AIAvatarWebSocketServer(Adapter):
                 self.sts.vad.set_session_data(request.session_id, "user_id", request.user_id, True)
             if request.context_id:
                 self.sts.vad.set_session_data(request.session_id, "context_id", request.context_id, True)
+            if request.metadata:
+                self._apply_session_config(request.session_id, request.metadata, create_session=True)
             session_data.data["metadata"] = request.metadata
             self.sessions[session_data.id] = session_data
 
@@ -226,6 +241,14 @@ class AIAvatarWebSocketServer(Adapter):
                 context_id = request.context_id
             else:
                 context_id = self.sts.vad.get_session_data(request.session_id, "context_id")
+
+            if request.metadata and "barge_in_enabled" in request.metadata:
+                self.sts.vad.set_session_data(
+                    request.session_id,
+                    "barge_in_enabled",
+                    bool(request.metadata.get("barge_in_enabled")),
+                    True
+                )
 
             async for r in self.sts.invoke(STSRequest(
                 type=request.type,
@@ -246,14 +269,24 @@ class AIAvatarWebSocketServer(Adapter):
             await self.sts.vad.process_samples(audio_data, request.session_id)
 
         elif request.type == "config":
+            metadata = request.metadata or {}
+            if metadata:
+                self._apply_session_config(request.session_id, metadata, create_session=True)
             if hasattr(self.sts.vad, "volume_db_threshold"):
-                volume_db_threshold = request.metadata.get("volume_db_threshold")
+                volume_db_threshold = metadata.get("volume_db_threshold")
                 if volume_db_threshold:
                     self.sts.vad.set_volume_db_threshold(request.session_id, volume_db_threshold)
 
         elif request.type == "stop":
             logger.info(f"WebSocket disconnect for session: {request.session_id}")
             await websocket.close()
+
+    def _apply_session_config(self, session_id: str, metadata: dict, create_session: bool = False):
+        if "barge_in_enabled" in metadata:
+            value = bool(metadata.get("barge_in_enabled"))
+            self.sts.vad.set_session_data(session_id, "barge_in_enabled", value, create_session=create_session)
+            if self.debug:
+                logger.info("Set session config: session=%s, barge_in_enabled=%s", session_id, value)
 
     # Response
     def parse_avatar_control_request(self, text: str) -> AvatarControlRequest:

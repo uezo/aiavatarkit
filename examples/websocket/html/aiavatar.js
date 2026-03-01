@@ -24,6 +24,7 @@ class AIAvatarClient {
         this.analyser = null;
         this.onPlaybackAnalyze = null;
         this.isMicrophoneMuted = () => this.isAudioPlaying;
+        this.getStartMetadata = () => null;
         this._userMuted = false;
         this.volume = 1.0;
         this.gainNode = null;
@@ -36,11 +37,13 @@ class AIAvatarClient {
         this.ws = new WebSocket(this.webSocketUrl, protocols);
         this.ws.onopen = () => {
             console.log(`Connected to server: ${this.webSocketUrl}`);
+            const metadata = this.getStartMetadata?.() || null;
             const startMessage = {
                 type: "start",
                 session_id: sessionId,
                 user_id: userId,
-                context_id: null
+                context_id: null,
+                metadata
             };
             this.ws.send(JSON.stringify(startMessage));
         };
@@ -262,6 +265,16 @@ class AIAvatarClient {
         if (this.gainNode) {
             this.gainNode.gain.value = this.volume;
         }
+    }
+
+    sendConfig(sessionId, metadata) {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+        this.ws.send(JSON.stringify({
+            type: "config",
+            session_id: sessionId,
+            metadata
+        }));
+        return true;
     }
 
     stopAudio() {
