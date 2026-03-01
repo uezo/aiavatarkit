@@ -126,6 +126,7 @@ You can also access the Admin Panel at http://127.0.0.1:8000/admin.
     - [Silero VAD Speech Detector](#silero-speech-detector)
     - [Silero Stream Speech Detector](#silero-stream-speech-detector)
     - [Azure Stream Speech Detector](#azure-stream-speech-detector)
+    - [AWS Stream Speech Detector](#aws-stream-speech-detector)
     - [Customization](#customization)
     - [Standard Speech Detector (Legacy)](#standard-speech-detector-legacy)
 
@@ -855,6 +856,59 @@ async def on_speech_detecting(text, session):
     #     metadata={"partial_request_text": text}
     # )
     # await ws_app.handle_response(resp)
+```
+
+### AWS Stream Speech Detector
+
+`AmazonTranscribeStreamSpeechDetector` uses Amazon Transcribe's streaming speech recognition service for both speech detection and transcription. Audio is continuously streamed to Amazon Transcribe, and speech boundaries are determined by the recognition results combined with a configurable silence duration threshold.
+
+```sh
+pip install amazon-transcribe
+```
+
+```python
+from aiavatar.sts.vad.amazon_transcribe_stream import AmazonTranscribeStreamSpeechDetector
+
+vad = AmazonTranscribeStreamSpeechDetector(
+    aws_region="ap-northeast-1",
+    aws_access_key_id=AWS_ACCESS_KEY_ID,         # Optional: uses default credential chain if omitted
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,  # Optional: uses default credential chain if omitted
+    aws_language="ja-JP",
+    silence_duration_threshold=0.5,  # Seconds of silence after last recognition to finalize
+    max_duration=20.0,               # Maximum recording duration in seconds
+)
+```
+
+When `silence_duration_threshold > 0`, multiple recognition results from Amazon Transcribe are accumulated into a single speech detection event. A silence timer starts after each final result, and if new speech arrives before the timer expires, the timer is cancelled and transcription continues. This allows natural pauses within a sentence without splitting the utterance.
+
+> **Note:** The `silence_duration_threshold` timer starts from when Amazon Transcribe returns a final recognition result, not from when the user actually stops speaking. Since Amazon Transcribe takes some time to process audio and return a final result, the actual delay from the user's perspective is: **Transcribe processing delay + `silence_duration_threshold`**. For example, if Transcribe takes ~0.5s to return a final result and `silence_duration_threshold=0.5`, the total delay from the end of speech to firing `on_speech_detected` will be approximately 1.0s.
+
+When `max_duration` is reached during recording, if there are accumulated recognition results, speech detection is triggered immediately with the combined text.
+
+This detector also supports the `on_speech_detecting` callback for partial transcription results. When texts have been accumulated from previous final results, they are prepended to the current partial text:
+
+```python
+@vad.on_speech_detecting
+async def on_speech_detecting(text, session):
+    print(f"Partial text: {text}")
+
+    # For WebSocket apps, send partial text to client via info message
+    # resp = STSResponse(
+    #     type="info",
+    #     session_id=session.session_id,
+    #     metadata={"partial_request_text": text}
+    # )
+    # await ws_app.handle_response(resp)
+```
+
+Use `validate_recognized_text` to filter out invalid recognition results:
+
+```python
+@vad.validate_recognized_text
+def validate(text):
+    if len(text) < 2:
+        return "Text too short"  # Return error message to reject
+    return None  # Return None to accept
 ```
 
 
