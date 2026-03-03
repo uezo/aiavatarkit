@@ -11,6 +11,9 @@ class CharacterRepositoryBase(ABC):
         *,
         name: str,
         prompt: str,
+        episode: Optional[str] = None,
+        attribute: Optional[str] = None,
+        conversation_example: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Character:
         pass
@@ -26,6 +29,9 @@ class CharacterRepositoryBase(ABC):
         character_id: str,
         name: Optional[str] = None,
         prompt: Optional[str] = None,
+        episode: Optional[str] = None,
+        attribute: Optional[str] = None,
+        conversation_example: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Optional[Character]:
         pass

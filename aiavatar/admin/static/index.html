@@ -590,6 +590,18 @@
               <textarea v-model="charInfoEdit.prompt" rows="8" class="col-span-2 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"></textarea>
             </div>
             <div class="grid grid-cols-3 gap-4 items-start">
+              <label class="text-sm text-gray-600 pt-2 font-mono">episode</label>
+              <textarea v-model="charInfoEdit.episode" rows="4" class="col-span-2 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono" placeholder="キャラクターの過去の経験やエピソード"></textarea>
+            </div>
+            <div class="grid grid-cols-3 gap-4 items-start">
+              <label class="text-sm text-gray-600 pt-2 font-mono">attribute</label>
+              <textarea v-model="charInfoEdit.attribute" rows="4" class="col-span-2 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono" placeholder="好き嫌い・趣味・習慣・秘密など属性情報"></textarea>
+            </div>
+            <div class="grid grid-cols-3 gap-4 items-start">
+              <label class="text-sm text-gray-600 pt-2 font-mono">conversation_example</label>
+              <textarea v-model="charInfoEdit.conversation_example" rows="4" class="col-span-2 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono" placeholder="口調やトーンの参考となる会話例"></textarea>
+            </div>
+            <div class="grid grid-cols-3 gap-4 items-start">
               <label class="text-sm text-gray-600 pt-2 font-mono">metadata</label>
               <textarea v-model="charInfoMetadataJson" rows="4" class="col-span-2 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono" placeholder="{}"></textarea>
             </div>
@@ -1887,8 +1899,8 @@ createApp({
     ];
 
     // --- Character Info ---
-    const charInfo = reactive({ id: '', name: '', prompt: '', metadata: null });
-    const charInfoEdit = reactive({ name: '', prompt: '' });
+    const charInfo = reactive({ id: '', name: '', prompt: '', episode: null, attribute: null, conversation_example: null, metadata: null });
+    const charInfoEdit = reactive({ name: '', prompt: '', episode: '', attribute: '', conversation_example: '' });
     const charInfoMetadataJson = ref('{}');
     const charInfoLoading = ref(false);
     const charInfoSaving = ref(false);
@@ -1896,6 +1908,9 @@ createApp({
     const charInfoChanged = computed(() => {
       if (charInfoEdit.name !== charInfo.name) return true;
       if (charInfoEdit.prompt !== charInfo.prompt) return true;
+      if (charInfoEdit.episode !== (charInfo.episode || '')) return true;
+      if (charInfoEdit.attribute !== (charInfo.attribute || '')) return true;
+      if (charInfoEdit.conversation_example !== (charInfo.conversation_example || '')) return true;
       try {
         const edited = JSON.parse(charInfoMetadataJson.value);
         if (JSON.stringify(edited) !== JSON.stringify(charInfo.metadata || {})) return true;
@@ -1907,9 +1922,12 @@ createApp({
       charInfoLoading.value = true;
       try {
         const data = await apiFetch('/character/info');
-        Object.assign(charInfo, { id: data.id, name: data.name, prompt: data.prompt, metadata: data.metadata });
+        Object.assign(charInfo, { id: data.id, name: data.name, prompt: data.prompt, episode: data.episode, attribute: data.attribute, conversation_example: data.conversation_example, metadata: data.metadata });
         charInfoEdit.name = data.name;
         charInfoEdit.prompt = data.prompt;
+        charInfoEdit.episode = data.episode || '';
+        charInfoEdit.attribute = data.attribute || '';
+        charInfoEdit.conversation_example = data.conversation_example || '';
         charInfoMetadataJson.value = JSON.stringify(data.metadata || {}, null, 2);
       } catch (e) {
         showToast('Failed to load character info: ' + e.message, 'error');
@@ -1920,6 +1938,9 @@ createApp({
     const charInfoReset = () => {
       charInfoEdit.name = charInfo.name;
       charInfoEdit.prompt = charInfo.prompt;
+      charInfoEdit.episode = charInfo.episode || '';
+      charInfoEdit.attribute = charInfo.attribute || '';
+      charInfoEdit.conversation_example = charInfo.conversation_example || '';
       charInfoMetadataJson.value = JSON.stringify(charInfo.metadata || {}, null, 2);
     };
 
@@ -1931,6 +1952,9 @@ createApp({
         const payload = {};
         if (charInfoEdit.name !== charInfo.name) payload.name = charInfoEdit.name;
         if (charInfoEdit.prompt !== charInfo.prompt) payload.prompt = charInfoEdit.prompt;
+        if (charInfoEdit.episode !== (charInfo.episode || '')) payload.episode = charInfoEdit.episode || null;
+        if (charInfoEdit.attribute !== (charInfo.attribute || '')) payload.attribute = charInfoEdit.attribute || null;
+        if (charInfoEdit.conversation_example !== (charInfo.conversation_example || '')) payload.conversation_example = charInfoEdit.conversation_example || null;
         if (JSON.stringify(meta) !== JSON.stringify(charInfo.metadata || {})) payload.metadata = meta;
         if (Object.keys(payload).length === 0) { charInfoSaving.value = false; return; }
         await apiFetch('/character/info', { method: 'POST', body: JSON.stringify(payload) });

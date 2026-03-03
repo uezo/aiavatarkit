@@ -87,56 +87,21 @@ class PostgreSQLCharacterRepository(CharacterRepositoryBase):
                     updated_at TIMESTAMPTZ NOT NULL,
                     name TEXT NOT NULL,
                     prompt TEXT NOT NULL,
+                    episode TEXT,
+                    attribute TEXT,
+                    conversation_example TEXT,
                     metadata JSONB NOT NULL DEFAULT '{{}}'
                 )
                 """
             )
+            # Migration: add columns if not present
+            for col in ("episode", "attribute", "conversation_example"):
+                try:
+                    await conn.execute(f"ALTER TABLE {self.TABLE_NAME} ADD COLUMN {col} TEXT")
+                except asyncpg.exceptions.DuplicateColumnError:
+                    pass
 
-    async def create(
-        self,
-        *,
-        name: str,
-        prompt: str,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> Character:
-        now = datetime.now(timezone.utc)
-        character_id = str(uuid4())
-        metadata_json = json.dumps(metadata or {})
-
-        pool = await self.get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                f"""
-                INSERT INTO {self.TABLE_NAME} (id, created_at, updated_at, name, prompt, metadata)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                """,
-                character_id, now, now, name, prompt, metadata_json
-            )
-
-        return Character(
-            id=character_id,
-            created_at=now,
-            updated_at=now,
-            name=name,
-            prompt=prompt,
-            metadata=metadata
-        )
-
-    async def get(self, *, character_id: str) -> Optional[Character]:
-        pool = await self.get_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                f"""
-                SELECT id, created_at, updated_at, name, prompt, metadata
-                FROM {self.TABLE_NAME}
-                WHERE id = $1
-                """,
-                character_id
-            )
-
-        if row is None:
-            return None
-
+    def _row_to_character(self, row) -> Character:
         metadata = row["metadata"]
         if isinstance(metadata, str):
             metadata = json.loads(metadata)
@@ -147,8 +112,64 @@ class PostgreSQLCharacterRepository(CharacterRepositoryBase):
             updated_at=row["updated_at"],
             name=row["name"],
             prompt=row["prompt"],
+            episode=row["episode"],
+            attribute=row["attribute"],
+            conversation_example=row["conversation_example"],
             metadata=metadata
         )
+
+    async def create(
+        self,
+        *,
+        name: str,
+        prompt: str,
+        episode: Optional[str] = None,
+        attribute: Optional[str] = None,
+        conversation_example: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Character:
+        now = datetime.now(timezone.utc)
+        character_id = str(uuid4())
+        metadata_json = json.dumps(metadata or {})
+
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                f"""
+                INSERT INTO {self.TABLE_NAME} (id, created_at, updated_at, name, prompt, episode, attribute, conversation_example, metadata)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """,
+                character_id, now, now, name, prompt, episode, attribute, conversation_example, metadata_json
+            )
+
+        return Character(
+            id=character_id,
+            created_at=now,
+            updated_at=now,
+            name=name,
+            prompt=prompt,
+            episode=episode,
+            attribute=attribute,
+            conversation_example=conversation_example,
+            metadata=metadata
+        )
+
+    async def get(self, *, character_id: str) -> Optional[Character]:
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                SELECT id, created_at, updated_at, name, prompt, episode, attribute, conversation_example, metadata
+                FROM {self.TABLE_NAME}
+                WHERE id = $1
+                """,
+                character_id
+            )
+
+        if row is None:
+            return None
+
+        return self._row_to_character(row)
 
     async def update(
         self,
@@ -156,6 +177,9 @@ class PostgreSQLCharacterRepository(CharacterRepositoryBase):
         character_id: str,
         name: Optional[str] = None,
         prompt: Optional[str] = None,
+        episode: Optional[str] = None,
+        attribute: Optional[str] = None,
+        conversation_example: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Optional[Character]:
         now = datetime.now(timezone.utc)
@@ -174,6 +198,21 @@ class PostgreSQLCharacterRepository(CharacterRepositoryBase):
             params.append(prompt)
             param_idx += 1
 
+        if episode is not None:
+            updates.append(f"episode = ${param_idx}")
+            params.append(episode)
+            param_idx += 1
+
+        if attribute is not None:
+            updates.append(f"attribute = ${param_idx}")
+            params.append(attribute)
+            param_idx += 1
+
+        if conversation_example is not None:
+            updates.append(f"conversation_example = ${param_idx}")
+            params.append(conversation_example)
+            param_idx += 1
+
         if metadata is not None:
             updates.append(f"metadata = ${param_idx}")
             params.append(json.dumps(metadata))
@@ -185,7 +224,7 @@ class PostgreSQLCharacterRepository(CharacterRepositoryBase):
             UPDATE {self.TABLE_NAME}
             SET {", ".join(updates)}
             WHERE id = ${param_idx}
-            RETURNING id, created_at, updated_at, name, prompt, metadata
+            RETURNING id, created_at, updated_at, name, prompt, episode, attribute, conversation_example, metadata
         """
 
         pool = await self.get_pool()
@@ -195,18 +234,7 @@ class PostgreSQLCharacterRepository(CharacterRepositoryBase):
         if row is None:
             return None
 
-        row_metadata = row["metadata"]
-        if isinstance(row_metadata, str):
-            row_metadata = json.loads(row_metadata)
-
-        return Character(
-            id=row["id"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-            name=row["name"],
-            prompt=row["prompt"],
-            metadata=row_metadata
-        )
+        return self._row_to_character(row)
 
     async def delete(self, *, character_id: str) -> bool:
         pool = await self.get_pool()
@@ -995,3 +1023,5 @@ class PostgreSQLUserRepository(UserRepository):
             )
 
         return result == "DELETE 1"
+
+

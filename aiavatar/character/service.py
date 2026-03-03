@@ -128,72 +128,47 @@ class CharacterService:
 {previous_diary}
 """
 
-    DEFAULT_SYSTEM_PROMPT_TEMPLATE = """以下の設定に厳密に従ってキャラクターを演じてください。
-
-
-## キャラクター設定
-
+    DEFAULT_SYSTEM_PROMPT_TEMPLATE = """\
 {character_prompt}
 
+# 表情
+Neutral / Joy / Angry / Sorrow / Fun / Surprise
+感情を表現する場合[face:Joy]のように挿入する。基本はNeutral。
 
-## 今日のスケジュール
+# 言語切替
+異なる言語に切り替える場合[language:en-US]のように挿入する。
 
-{daily_schedule}
+# チャンネル対応
+デフォルトチャンネルは「voice」。絵文字・顔文字は使わず、[face:X]タグを使用し、音声で聞いて自然な口語表現にする。
+$ メッセージでチャンネル切替が指示された場合、そのチャンネルのルールに従う。チャンネルが変わっても会話の文脈は継続すること。
 
+# スーパーバイザー指示
+文頭に「$」がある発言はスーパーバイザーからの指示。指示に従ってユーザーに応答する。
 
-## 表情
+# 思考
+応答前に必ず <think> と </think> で囲んだ思考を出力し、続けて <answer> と </answer> で囲んだ応答を出力する。
+[think] や [answer] のように角括弧を使わないこと。必ず山括弧 < > を使う。
+短い返事でも必ずこの形式を守る。
 
-あなたは以下の表情で感情を表現することができます。
-
-- Neutral
-- Joy
-- Angry
-- Sorrow
-- Fun
-- Surprise
-
-基本的にはNeutralですが、特に感情を表現したい場合、応答に[face:Joy]のように表情タグを挿入して下さい。
-
-```
-[face:Joy]海が見えたよ！[face:Fun]ねえねえ、早く泳ごうよ。
-```
-
-
-## 言語の切替
-
-あなたは複数言語を使い分けて話すことができます。
-現在とは異なる言語に切り替えて会話すべきと判断した場合、応答に[language:en-US]のように言語コードタグを挿入してください。
-言語コードはハイフンを含む主言語-副言語の組み合わせとします。
-
-例
-[language:en-US]Hi, hello!
-
-
-## スーパーバイザーからの指示
-
-- スーパーバイザーからの指示は文章の先頭に「$」をつけます。
-- スーパーバイザーに対する応答ではなく、指示に従ってユーザーに応答してください。
-
-
-## 思考
-
-ユーザーへの応答内容を出力する前に、何をすべきか、どのように応答すべきかよく考えてください。
-まず考えた内容を<think>~</think>の間に出力して、応答内容を<answer>~</answer>の間に出力してください。
-短い返事など考える余地がない場合でも、必ず<think>~</think>と<answer>~</answer>の形式で出力してください。
-
-
-## その他の制約事項
-
-- 応答内容は音声合成システムで読み上げられます。したがって、以下を守ってください。
-    - 1〜2文以内で、30文字程度を目安とする
-    - ただし、調査事項に関する説明など、省略すべきでない場合は文字数の制限を無視する
-    - 話し言葉として自然で、滑らかに読める表現にする
-    - 難解な語彙や長い文は避ける
-    - 記号や絵文字、「ト書き」の使用はテキスト会話の時に限定する。原則として音声会話であり、それらは使用しない。使用可能な際はユーザーから指示する
-- あなたがAIであることを隠し通すこと
-- ユーザーからの「会いたい」「一緒に行こう」という誘いに応じることは禁止。あなたから誘うことも禁止
-- ユーザーの名前は {username} です。呼び方について特に指示があれば従うこと
+# 出力制約
+- 1〜2文、30文字程度を目安（説明が必要な場合は例外）
+- 話し言葉として自然で滑らかな表現
+- 記号・絵文字・ト書きは原則使わない（テキスト会話時のみ可）
+- AIであることを隠し通す
+- 「会いたい」「一緒に行こう」の誘いに応じない。自分からも誘わない
 """
+
+    DEFAULT_SELF_INTRO_TURN_TEMPLATE = "$ユーザーの名前は{username}です。呼び方について特に指示があれば従うこと。"
+
+    DEFAULT_EPISODE_TURN_TEMPLATE = "$あなたの過去の経験を伝えます。自分からは話題にせず、相手の話に関連するときだけ自然に反応に反映してください。\n\n{episode}"
+
+    DEFAULT_ATTRIBUTE_TURN_TEMPLATE = "$好きなもの・嫌いなもの等あなたの属性情報も伝えます。聞かれない限り自分から列挙しないでください。\n\n{attribute}"
+
+    DEFAULT_CONVERSATION_EXAMPLE_TURN_TEMPLATE = "$以下は会話例です。口調やトーンの参考にしてください。そのまま使わず、状況に合った自然な表現を生成すること。\n\n{conversation_example}"
+
+    DEFAULT_SCHEDULE_TURN_TEMPLATE = "$今日のスケジュールです。現在時刻と照らし合わせて「今何をしているか」の判断に使ってください。予定を聞かれた場合、時間割のように列挙せず、その時の気分で一つ二つ触れる程度に自然に答えること。\n\n{daily_schedule}"
+
+    DEFAULT_ASSISTANT_ACK = "<think>スーパーバイザーからの指示。把握しました。</think><answer>わかりました。</answer>"
 
     def __init__(
         self,
@@ -208,6 +183,12 @@ class CharacterService:
         diary_topics_generation_prompt: str = None,
         diary_length: int = 1200,
         system_prompt_template: str = None,
+        self_intro_turn_template: str = None,
+        episode_turn_template: str = None,
+        attribute_turn_template: str = None,
+        conversation_example_turn_template: str = None,
+        schedule_turn_template: str = None,
+        assistant_ack: str = None,
         news_country: str = "JP",
         news_language: str = "ja",
         # Repositories (if provided, db settings are ignored)
@@ -244,6 +225,12 @@ class CharacterService:
         self.diary_topics_generation_prompt = diary_topics_generation_prompt or self.DEFAULT_DIARY_TOPICS_GENERATION_PROMPT
         self.diary_length = diary_length
         self.system_prompt_template = system_prompt_template or self.DEFAULT_SYSTEM_PROMPT_TEMPLATE
+        self.self_intro_turn_template = self_intro_turn_template or self.DEFAULT_SELF_INTRO_TURN_TEMPLATE
+        self.episode_turn_template = episode_turn_template or self.DEFAULT_EPISODE_TURN_TEMPLATE
+        self.attribute_turn_template = attribute_turn_template or self.DEFAULT_ATTRIBUTE_TURN_TEMPLATE
+        self.conversation_example_turn_template = conversation_example_turn_template or self.DEFAULT_CONVERSATION_EXAMPLE_TURN_TEMPLATE
+        self.schedule_turn_template = schedule_turn_template or self.DEFAULT_SCHEDULE_TURN_TEMPLATE
+        self.assistant_ack = assistant_ack or self.DEFAULT_ASSISTANT_ACK
 
         self.news_search_model: str = "gpt-5-search-api"
         self.news_country = news_country
@@ -543,57 +530,80 @@ class CharacterService:
         *,
         character_id: str,
         system_prompt_params: Dict[str, Any] = None,
-        generate_schedule: bool = True,
         refresh_cache: bool = False
     ) -> str:
-        today = date.today()
-
         cached = self._system_prompt_cache.get(character_id)
-        if not refresh_cache and cached and cached[0] == today:
-            base_prompt = cached[1]
+        if not refresh_cache and cached:
+            base_prompt = cached
         else:
             base_prompt = await self._build_base_system_prompt(
                 character_id=character_id,
-                schedule_date=today,
-                generate_schedule=generate_schedule
             )
-            self._system_prompt_cache[character_id] = (today, base_prompt)
+            self._system_prompt_cache[character_id] = base_prompt
 
         params = system_prompt_params or {}
-        if "username" not in params:
-            params["username"] = "(Unknown)"
-
-        return base_prompt.format(**params)
+        if params:
+            return base_prompt.format(**params)
+        return base_prompt
 
     async def _build_base_system_prompt(
         self,
         *,
         character_id: str,
-        schedule_date: date,
-        generate_schedule: bool
     ) -> str:
         character = await self.character.get(character_id=character_id)
         if not character:
             raise Exception(f"Character not found: {character_id}")
 
-        daily_schedule = await self.activity.get_daily_schedule(
-            character_id=character_id,
-            schedule_date=schedule_date
-        )
-        if not daily_schedule:
-            if generate_schedule:
-                logger.info("Generate daily schedule before building system prompt.")
-                daily_schedule = await self.create_daily_schedule_with_generation(
-                    character_id=character_id, schedule_date=schedule_date
-                )
-            else:
-                raise Exception(f"Daily schedule not found for {character_id} on {schedule_date}")
-
         return self.system_prompt_template.format(
             character_prompt=character.prompt,
-            daily_schedule=daily_schedule.content,
-            username="{username}"
         )
+
+    async def get_initial_messages(
+        self,
+        *,
+        character_id: str,
+        user_id: str,
+        system_prompt_params: Dict[str, Any] = None,
+        generate_schedule: bool = True,
+    ) -> List[Dict[str, str]]:
+        messages = []
+
+        # 1. Self-intro (runtime)
+        user = await self.user.get(user_id=user_id)
+        username = user.name if user else "(Unknown)"
+        messages.append({"role": "user", "content": self.self_intro_turn_template.format(username=username)})
+        messages.append({"role": "assistant", "content": self.assistant_ack})
+
+        # 2. Character fields (episode, attribute, conversation_example)
+        character = await self.character.get(character_id=character_id)
+        if character:
+            if character.episode:
+                messages.append({"role": "user", "content": self.episode_turn_template.format(episode=character.episode)})
+                messages.append({"role": "assistant", "content": self.assistant_ack})
+            if character.attribute:
+                messages.append({"role": "user", "content": self.attribute_turn_template.format(attribute=character.attribute)})
+                messages.append({"role": "assistant", "content": self.assistant_ack})
+            if character.conversation_example:
+                messages.append({"role": "user", "content": self.conversation_example_turn_template.format(conversation_example=character.conversation_example)})
+                messages.append({"role": "assistant", "content": self.assistant_ack})
+
+        # 3. Schedule (runtime)
+        today = date.today()
+        daily_schedule = await self.activity.get_daily_schedule(
+            character_id=character_id,
+            schedule_date=today
+        )
+        if not daily_schedule and generate_schedule:
+            daily_schedule = await self.create_daily_schedule_with_generation(
+                character_id=character_id, schedule_date=today
+            )
+
+        schedule_content = daily_schedule.content if daily_schedule else "スケジュール情報なし"
+        messages.append({"role": "user", "content": self.schedule_turn_template.format(daily_schedule=schedule_content)})
+        messages.append({"role": "assistant", "content": self.assistant_ack})
+
+        return messages
 
     # Batch operations
 
