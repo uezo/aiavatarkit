@@ -265,10 +265,14 @@ class AvatarUI {
 
         // Message display
         if (response.type === "info" && response.metadata && response.metadata.partial_request_text) {
-            this.updateMessage("user", response.metadata.partial_request_text, true);
+            if (!response.metadata.partial_request_text.startsWith("$")) {
+                this.updateMessage("user", response.metadata.partial_request_text, true);
+            }
         }
         if (response.type === "start" && response.metadata && response.metadata.recognized_text) {
-            this.updateMessage("user", response.metadata.recognized_text, false);
+            if (!response.metadata.recognized_text.startsWith("$")) {
+                this.updateMessage("user", response.metadata.recognized_text, false);
+            }
         }
         if (response.type === "chunk" && response.voice_text) {
             this.updateMessage("ai", response.voice_text, true);
