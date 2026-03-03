@@ -17,6 +17,7 @@ class STSRequest:
     allow_merge: bool = True
     wait_in_queue: bool = False
     block_barge_in: bool = False
+    channel: str = None
 
 
 @dataclass

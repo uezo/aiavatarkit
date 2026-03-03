@@ -181,7 +181,8 @@ class AIAvatarLocalServer(Adapter):
             files=request.files,
             system_prompt_params=request.system_prompt_params,
             allow_merge=request.allow_merge,
-            wait_in_queue=request.wait_in_queue
+            wait_in_queue=request.wait_in_queue,
+            channel=request.channel
         )):
             await self.handle_response(r)
 
