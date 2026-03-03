@@ -147,6 +147,7 @@ class LLMService(ABC):
         self.model = model
         self.temperature = temperature
         self.initial_messages = initial_messages
+        self._get_initial_messages = self.get_initial_messages_default
         self.split_chars = split_chars or ["。", "？", "！", ". ", "?", "!", "\n"]
         self.option_split_chars = option_split_chars or ["、", ", "]
         self.option_split_threshold = option_split_threshold
@@ -314,6 +315,13 @@ The list of tools is as follows:
             return self.system_prompt
         else:
             return self.system_prompt.format(**system_prompt_params)
+
+    def get_initial_messages(self, func):
+        self._get_initial_messages = func
+        return func
+
+    async def get_initial_messages_default(self, context_id: str, user_id: str, system_prompt_params: Dict[str, any]) -> List[dict]:
+        return self.initial_messages or []
 
     @property
     @abstractmethod
@@ -608,9 +616,10 @@ class LLMServiceDummy(LLMService):
         if system_prompt := await self._get_system_prompt(context_id, user_id, system_prompt_params):
             messages.append({"role": "system", "content": system_prompt})
 
-        # Add initial messages (e.g. few-shot)
-        if self.initial_messages:
-            messages.extend(self.initial_messages)
+        # Add initial messages (e.g. few-shot, preset turns)
+        initial_msgs = await self._get_initial_messages(context_id, user_id, system_prompt_params)
+        if initial_msgs:
+            messages.extend(initial_msgs)
 
         # Extract the history starting from the first message where the role is 'user'
         histories = await self.context_manager.get_histories(
