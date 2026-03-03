@@ -93,9 +93,10 @@ class LiteLLMService(LLMService):
             else:
                 messages.append({"role": "system", "content": await self._get_system_prompt(context_id, user_id, system_prompt_params)})
 
-        # Add initial messages (e.g. few-shot)
-        if self.initial_messages:
-            messages.extend(self.initial_messages)
+        # Add initial messages (e.g. few-shot, preset turns)
+        initial_msgs = await self._get_initial_messages(context_id, user_id, system_prompt_params)
+        if initial_msgs:
+            messages.extend(initial_msgs)
 
         # Extract the history starting from the first message where the role is 'user'
         histories = await self.context_manager.get_histories(
