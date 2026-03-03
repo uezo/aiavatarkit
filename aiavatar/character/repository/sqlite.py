@@ -26,18 +26,47 @@ class SQLiteCharacterRepository(CharacterRepositoryBase):
                         updated_at TIMESTAMP NOT NULL,
                         name TEXT NOT NULL,
                         prompt TEXT NOT NULL,
+                        episode TEXT,
+                        attribute TEXT,
+                        conversation_example TEXT,
                         metadata JSON NOT NULL DEFAULT '{{}}'
                     )
                     """
                 )
+                # Migration: add columns if not present
+                cursor = conn.execute(f"PRAGMA table_info({self.TABLE_NAME})")
+                columns = {row[1] for row in cursor.fetchall()}
+                for col in ("episode", "attribute", "conversation_example"):
+                    if col not in columns:
+                        conn.execute(f"ALTER TABLE {self.TABLE_NAME} ADD COLUMN {col} TEXT")
         finally:
             conn.close()
+
+    def _row_to_character(self, row) -> Character:
+        metadata = row["metadata"]
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+
+        return Character(
+            id=row["id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            name=row["name"],
+            prompt=row["prompt"],
+            episode=row["episode"],
+            attribute=row["attribute"],
+            conversation_example=row["conversation_example"],
+            metadata=metadata
+        )
 
     async def create(
         self,
         *,
         name: str,
         prompt: str,
+        episode: Optional[str] = None,
+        attribute: Optional[str] = None,
+        conversation_example: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Character:
         now = datetime.now(timezone.utc)
@@ -49,10 +78,10 @@ class SQLiteCharacterRepository(CharacterRepositoryBase):
             with conn:
                 conn.execute(
                     f"""
-                    INSERT INTO {self.TABLE_NAME} (id, created_at, updated_at, name, prompt, metadata)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO {self.TABLE_NAME} (id, created_at, updated_at, name, prompt, episode, attribute, conversation_example, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (character_id, now.isoformat(), now.isoformat(), name, prompt, metadata_json)
+                    (character_id, now.isoformat(), now.isoformat(), name, prompt, episode, attribute, conversation_example, metadata_json)
                 )
         finally:
             conn.close()
@@ -63,6 +92,9 @@ class SQLiteCharacterRepository(CharacterRepositoryBase):
             updated_at=now,
             name=name,
             prompt=prompt,
+            episode=episode,
+            attribute=attribute,
+            conversation_example=conversation_example,
             metadata=metadata
         )
 
@@ -73,7 +105,7 @@ class SQLiteCharacterRepository(CharacterRepositoryBase):
             cursor = conn.cursor()
             cursor.execute(
                 f"""
-                SELECT id, created_at, updated_at, name, prompt, metadata
+                SELECT id, created_at, updated_at, name, prompt, episode, attribute, conversation_example, metadata
                 FROM {self.TABLE_NAME}
                 WHERE id = ?
                 """,
@@ -86,18 +118,7 @@ class SQLiteCharacterRepository(CharacterRepositoryBase):
         if row is None:
             return None
 
-        metadata = row["metadata"]
-        if isinstance(metadata, str):
-            metadata = json.loads(metadata)
-
-        return Character(
-            id=row["id"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
-            name=row["name"],
-            prompt=row["prompt"],
-            metadata=metadata
-        )
+        return self._row_to_character(row)
 
     async def update(
         self,
@@ -105,6 +126,9 @@ class SQLiteCharacterRepository(CharacterRepositoryBase):
         character_id: str,
         name: Optional[str] = None,
         prompt: Optional[str] = None,
+        episode: Optional[str] = None,
+        attribute: Optional[str] = None,
+        conversation_example: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Optional[Character]:
         now = datetime.now(timezone.utc)
@@ -119,6 +143,18 @@ class SQLiteCharacterRepository(CharacterRepositoryBase):
         if prompt is not None:
             updates.append("prompt = ?")
             params.append(prompt)
+
+        if episode is not None:
+            updates.append("episode = ?")
+            params.append(episode)
+
+        if attribute is not None:
+            updates.append("attribute = ?")
+            params.append(attribute)
+
+        if conversation_example is not None:
+            updates.append("conversation_example = ?")
+            params.append(conversation_example)
 
         if metadata is not None:
             updates.append("metadata = ?")
@@ -141,7 +177,7 @@ class SQLiteCharacterRepository(CharacterRepositoryBase):
                 cursor = conn.cursor()
                 cursor.execute(
                     f"""
-                    SELECT id, created_at, updated_at, name, prompt, metadata
+                    SELECT id, created_at, updated_at, name, prompt, episode, attribute, conversation_example, metadata
                     FROM {self.TABLE_NAME}
                     WHERE id = ?
                     """,
@@ -154,18 +190,7 @@ class SQLiteCharacterRepository(CharacterRepositoryBase):
         if row is None:
             return None
 
-        row_metadata = row["metadata"]
-        if isinstance(row_metadata, str):
-            row_metadata = json.loads(row_metadata)
-
-        return Character(
-            id=row["id"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
-            name=row["name"],
-            prompt=row["prompt"],
-            metadata=row_metadata
-        )
+        return self._row_to_character(row)
 
     async def delete(self, *, character_id: str) -> bool:
         conn = sqlite3.connect(self.db_path)
@@ -943,3 +968,5 @@ class SQLiteUserRepository(UserRepository):
                 return cursor.rowcount == 1
         finally:
             conn.close()
+
+

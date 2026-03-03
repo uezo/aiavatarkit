@@ -9,6 +9,9 @@ class Character(BaseModel):
     updated_at: datetime
     name: str
     prompt: str
+    episode: Optional[str] = None
+    attribute: Optional[str] = None
+    conversation_example: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 
 

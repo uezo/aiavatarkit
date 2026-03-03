@@ -33,14 +33,16 @@ def bind_character(
 
     @adapter.sts.llm.get_system_prompt
     async def get_system_prompt(context_id: str, user_id: str, system_prompt_params: dict):
-        if not system_prompt_params:
-            system_prompt_params = {}
-        user = await character_service.user.get(user_id=user_id)
-        if not user:
-            raise Exception(f"User not found: {user_id}")
-        system_prompt_params["username"] = user.name
         return await character_service.get_system_prompt(
             character_id=character_id,
+            system_prompt_params=system_prompt_params
+        )
+
+    @adapter.sts.llm.get_initial_messages
+    async def get_initial_messages(context_id: str, user_id: str, system_prompt_params: dict):
+        return await character_service.get_initial_messages(
+            character_id=character_id,
+            user_id=user_id,
             system_prompt_params=system_prompt_params
         )
 

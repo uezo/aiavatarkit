@@ -16,12 +16,18 @@ class CharacterResponse(BaseModel):
     id: str
     name: str
     prompt: str
+    episode: Optional[str] = None
+    attribute: Optional[str] = None
+    conversation_example: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 
 
 class CharacterUpdateRequest(BaseModel):
     name: Optional[str] = None
     prompt: Optional[str] = None
+    episode: Optional[str] = None
+    attribute: Optional[str] = None
+    conversation_example: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 
 
@@ -404,6 +410,9 @@ class CharacterAPI:
                     id=char.id,
                     name=char.name,
                     prompt=char.prompt,
+                    episode=char.episode,
+                    attribute=char.attribute,
+                    conversation_example=char.conversation_example,
                     metadata=char.metadata,
                 )
             except HTTPException:
@@ -424,6 +433,9 @@ class CharacterAPI:
                     character_id=self.character_id,
                     name=request.name,
                     prompt=request.prompt,
+                    episode=request.episode,
+                    attribute=request.attribute,
+                    conversation_example=request.conversation_example,
                     metadata=request.metadata,
                 )
                 if not updated:
@@ -432,6 +444,9 @@ class CharacterAPI:
                     id=updated.id,
                     name=updated.name,
                     prompt=updated.prompt,
+                    episode=updated.episode,
+                    attribute=updated.attribute,
+                    conversation_example=updated.conversation_example,
                     metadata=updated.metadata,
                 )
             except HTTPException:
