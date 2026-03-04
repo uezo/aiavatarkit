@@ -335,7 +335,7 @@ class GeminiService(LLMService):
                         tool_names = [t["functionDeclarations"][0]["name"] for t in filtered_tools]
                         logger.info(f"Execute tool: {tc.name} / tools: {tool_names}")
 
-                    async for tr in self.execute_tool(tc.name, tc.arguments, {"user_id": user_id}):
+                    async for tr in self.execute_tool(tc.name, tc.arguments, {"context_id": context_id, "user_id": user_id}):
                         tc.result = tr
                         if tr.text:
                             yield LLMResponse(context_id=context_id, text=tr.text)

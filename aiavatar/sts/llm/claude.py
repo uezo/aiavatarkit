@@ -265,7 +265,7 @@ class ClaudeService(LLMService):
                     if not filtered_tools:
                         tool_result = {"message": "No tools found"}
                 else:
-                    async for tr in self.execute_tool(tc.name, arguments_json, {"user_id": user_id}):
+                    async for tr in self.execute_tool(tc.name, arguments_json, {"context_id": context_id, "user_id": user_id}):
                         tc.result = tr
                         if tr.text:
                             yield LLMResponse(context_id=context_id, text=tr.text)

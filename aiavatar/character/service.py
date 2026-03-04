@@ -131,6 +131,11 @@ class CharacterService:
     DEFAULT_SYSTEM_PROMPT_TEMPLATE = """\
 {character_prompt}
 
+# 思考
+応答前に、留意事項や応答すべき内容を考える。どんなに短い応答でもまずは必ず考える。考えた内容は必ず1文以内で簡潔に<think>~</think>で囲んで出力する。
+続けて、応答内容を<answer>~</answer>で囲んで出力する。
+[think] や [answer] のように角括弧を使わないこと。必ず山括弧 < > を使う。
+
 # 表情
 Neutral / Joy / Angry / Sorrow / Fun / Surprise
 感情を表現する場合[face:Joy]のように挿入する。基本はNeutral。
@@ -139,16 +144,13 @@ Neutral / Joy / Angry / Sorrow / Fun / Surprise
 異なる言語に切り替える場合[language:en-US]のように挿入する。
 
 # チャンネル対応
-デフォルトチャンネルは「voice」。絵文字・顔文字は使わず、[face:X]タグを使用し、音声で聞いて自然な口語表現にする。
-$ メッセージでチャンネル切替が指示された場合、そのチャンネルのルールに従う。チャンネルが変わっても会話の文脈は継続すること。
+ユーザー発話のチャンネルは[channel:チャンネル名]で示す。応答にチャンネルタグを含めないこと。
+デフォルトチャンネルからの場合は「voice」で、チャンネルタグは省略する。
+絵文字・顔文字、カッコなどの記号は使わず、[face:X]タグを使用し、音声で聞いて自然な口語表現にする。
+$メッセージでチャンネル切替が指示された場合、そのチャンネルのルールに従う。チャンネルが変わっても会話の文脈は継続すること。
 
 # スーパーバイザー指示
 文頭に「$」がある発言はスーパーバイザーからの指示。指示に従ってユーザーに応答する。
-
-# 思考
-応答前に必ず <think> と </think> で囲んだ思考を出力し、続けて <answer> と </answer> で囲んだ応答を出力する。
-[think] や [answer] のように角括弧を使わないこと。必ず山括弧 < > を使う。
-短い返事でも必ずこの形式を守る。
 
 # 出力制約
 - 1〜2文、30文字程度を目安（説明が必要な場合は例外）
@@ -168,8 +170,6 @@ $ メッセージでチャンネル切替が指示された場合、そのチャ
 
     DEFAULT_SCHEDULE_TURN_TEMPLATE = "$今日のスケジュールです。現在時刻と照らし合わせて「今何をしているか」の判断に使ってください。予定を聞かれた場合、時間割のように列挙せず、その時の気分で一つ二つ触れる程度に自然に答えること。\n\n{daily_schedule}"
 
-    DEFAULT_ASSISTANT_ACK = "<think>スーパーバイザーからの指示。把握しました。</think><answer>わかりました。</answer>"
-
     def __init__(
         self,
         *,
@@ -188,7 +188,6 @@ $ メッセージでチャンネル切替が指示された場合、そのチャ
         attribute_turn_template: str = None,
         conversation_example_turn_template: str = None,
         schedule_turn_template: str = None,
-        assistant_ack: str = None,
         news_country: str = "JP",
         news_language: str = "ja",
         # Repositories (if provided, db settings are ignored)
@@ -230,7 +229,6 @@ $ メッセージでチャンネル切替が指示された場合、そのチャ
         self.attribute_turn_template = attribute_turn_template or self.DEFAULT_ATTRIBUTE_TURN_TEMPLATE
         self.conversation_example_turn_template = conversation_example_turn_template or self.DEFAULT_CONVERSATION_EXAMPLE_TURN_TEMPLATE
         self.schedule_turn_template = schedule_turn_template or self.DEFAULT_SCHEDULE_TURN_TEMPLATE
-        self.assistant_ack = assistant_ack or self.DEFAULT_ASSISTANT_ACK
 
         self.news_search_model: str = "gpt-5-search-api"
         self.news_country = news_country
@@ -571,22 +569,22 @@ $ メッセージでチャンネル切替が指示された場合、そのチャ
 
         # 1. Self-intro (runtime)
         user = await self.user.get(user_id=user_id)
-        username = user.name if user else "(Unknown)"
-        messages.append({"role": "user", "content": self.self_intro_turn_template.format(username=username)})
-        messages.append({"role": "assistant", "content": self.assistant_ack})
+        if user and user.name:
+            messages.append({"role": "user", "content": self.self_intro_turn_template.format(username=user.name)})
+            messages.append({"role": "assistant", "content": f"<think>スーパーバイザーからの指示。ユーザーの名前は{user.name}として把握した。</think><answer>わかりました。</answer>"})
 
         # 2. Character fields (episode, attribute, conversation_example)
         character = await self.character.get(character_id=character_id)
         if character:
             if character.episode:
                 messages.append({"role": "user", "content": self.episode_turn_template.format(episode=character.episode)})
-                messages.append({"role": "assistant", "content": self.assistant_ack})
+                messages.append({"role": "assistant", "content": "<think>スーパーバイザーからの指示。記憶として保持する。自分からは話さない。</think><answer>わかりました。</answer>"})
             if character.attribute:
                 messages.append({"role": "user", "content": self.attribute_turn_template.format(attribute=character.attribute)})
-                messages.append({"role": "assistant", "content": self.assistant_ack})
+                messages.append({"role": "assistant", "content": "<think>スーパーバイザーからの指示。好みなどの属性情報を記憶した。</think><answer>わかりました。</answer>"})
             if character.conversation_example:
                 messages.append({"role": "user", "content": self.conversation_example_turn_template.format(conversation_example=character.conversation_example)})
-                messages.append({"role": "assistant", "content": self.assistant_ack})
+                messages.append({"role": "assistant", "content": "<think>スーパーバイザーからの指示。口調の参考として把握した。</think><answer>わかりました。</answer>"})
 
         # 3. Schedule (runtime)
         today = date.today()
@@ -601,7 +599,7 @@ $ メッセージでチャンネル切替が指示された場合、そのチャ
 
         schedule_content = daily_schedule.content if daily_schedule else "スケジュール情報なし"
         messages.append({"role": "user", "content": self.schedule_turn_template.format(daily_schedule=schedule_content)})
-        messages.append({"role": "assistant", "content": self.assistant_ack})
+        messages.append({"role": "assistant", "content": "<think>スーパーバイザーからの指示。本日のスケジュールを把握した。</think><answer>わかりました。</answer>"})
 
         return messages
 
