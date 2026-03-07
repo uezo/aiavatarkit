@@ -14,7 +14,7 @@
     - VAD: Built-in standard VAD (silence-based end-of-turn detection), SileroVAD
     - STT: Google, Azure, OpenAI, AmiVoice
     - LLM: ChatGPT, Gemini, Claude, and any model supported by LiteLLM or Dify
-    - TTS: VOICEVOX / AivisSpeech, OpenAI, SpeechGateway (including Style-Bert-VITS2 and NijiVoice)
+    - TTS: VOICEVOX / AivisSpeech, OpenAI, SpeechGateway (including Style-Bert-VITS2 and Aivis Cloud API)
 - **⚡️ AI Agent native**: Designed to support agentic systems. In addition to standard tool calls, it offers Dynamic Tool Calls for extensibility and supports progress feedback for high-latency operations.
 
 
@@ -179,6 +179,7 @@ You can also access the Admin Panel at http://127.0.0.1:8000/admin.
     - [📥 Invoke Queue](#-invoke-queue)
     - [🧺 Shared Context](#-shared-context)
     - [🔈 Audio Device](#-audio-device)
+    - [🐆 Quick Response](#-quick-response)
     - [🎭 Custom Behavior](#-custom-behavior)
     - [✅ Request Validation](#-request-validation)
     - [🎚️ Noise Filter](#%EF%B8%8F-noise-filter)
@@ -360,7 +361,7 @@ aiavatar_app = AIAvatar(
 )
 ```
 
-You can also set speech controller that uses alternative Text-to-Speech services. We support Azure, Google, OpenAI and any other TTS services supported by [SpeechGateway](https://github.com/uezo/speech-gateway) such as Style-Bert-VITS2 and NijiVoice.
+You can also set speech controller that uses alternative Text-to-Speech services. We support Azure, Google, OpenAI and any other TTS services supported by [SpeechGateway](https://github.com/uezo/speech-gateway) such as Style-Bert-VITS2 and Aivis Cloud API.
 
 ```python
 from aiavatar.sts.tts.azure import AzureSpeechSynthesizer
@@ -2856,6 +2857,28 @@ aiavatar_app = AIAvatar(
     openai_api_key=OPENAI_API_KEY
 )
 ```
+
+
+### 🐆 Quick Response
+
+To reduce the first response latency, `QuickResponder` generates a short acknowledgment phrase (e.g. "Sure!" or "なるほど。") and sends it to the user immediately, before the main LLM response is ready. This keeps the conversation feeling responsive while the full answer is being generated.
+
+```python
+from aiavatar.sts import QuickResponder, DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX_JA, DEFAULT_REQUEST_PREFIX_JA
+from aiavatar.sts.models import STSRequest
+
+quick_responder = QuickResponder(
+    pipeline=aiavatar_app.sts,
+    quick_response_prompt_prefix=DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX_JA,
+    request_prefix=DEFAULT_REQUEST_PREFIX_JA
+)
+
+@aiavatar_app.sts.on_before_llm
+async def on_before_llm(request: STSRequest):
+    await quick_responder.respond(request)
+```
+
+`QuickResponder` uses the pipeline's LLM to generate a brief phrase, synthesizes it with the pipeline's TTS (with caching), and sends it via `handle_response`. It then rewrites `request.text` so the main LLM response continues naturally without repeating the quick response.
 
 
 ### 🎭 Custom Behavior
