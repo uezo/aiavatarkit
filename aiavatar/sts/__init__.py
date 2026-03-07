@@ -1,1 +1,8 @@
 from .pipeline import STSPipeline
+from .quick_responder import (
+    QuickResponder,
+    DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX,
+    DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX_JA,
+    DEFAULT_REQUEST_PREFIX,
+    DEFAULT_REQUEST_PREFIX_JA
+)
