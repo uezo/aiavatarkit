@@ -6,12 +6,13 @@
  *   // Then wire up page-specific logic (onResponseReceived, lipsync, etc.)
  */
 class AvatarUI {
-    constructor({ aiavatar, userId, camera, onStop }) {
+    constructor({ aiavatar, userId, camera, onStop, toolLabels }) {
         this.aiavatar = aiavatar;
         this.sessionId = crypto.randomUUID();
         this.userId = userId || localStorage.getItem("userId") || "user01";
         this.camera = camera;
         this.onStop = onStop || (() => {});
+        this.toolLabels = toolLabels || {};
 
         // State
         this.isChatActive = false;
@@ -288,7 +289,8 @@ class AvatarUI {
         if (response.type == "tool_call") {
             console.log(`Tool Call: ${JSON.stringify(response.metadata.tool_call, null, 2)}`);
             if (!response.metadata.tool_call.result) {
-                this.toolStatus.textContent = `Tool Call: ${response.metadata.tool_call.name}`;
+                const name = response.metadata.tool_call.name;
+                this.toolStatus.textContent = this.toolLabels[name] || `Tool Call: ${name}`;
             }
         } else if (response.type == "final" || response.type == "error") {
             this.toolStatus.textContent = "";
