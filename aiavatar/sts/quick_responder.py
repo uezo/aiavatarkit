@@ -1,3 +1,6 @@
+import logging
+from time import time
+from typing import Dict
 from .pipeline import STSPipeline
 from .models import STSRequest, STSResponse
 
@@ -6,36 +9,60 @@ DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX_JA = "$以下はユーザーの発話内容
 DEFAULT_REQUEST_PREFIX = "$For the following input, you have already output \"{quick_response_text}\"—do NOT repeat it or any similar expression. Output only the continuation. Follow the <think></think><answer></answer> format for this response:"
 DEFAULT_REQUEST_PREFIX_JA = "$以下の入力に対して、既にあなたが出力済みの「{quick_response_text}」や類似の表現は再出力せず、その続きだけを出力せよ。今回は<think></think><answer></answer>などフォーマットに従うこと:"
 
+logger = logging.getLogger(__name__)
+
 
 class QuickResponder:
-    def __init__(self, pipeline: STSPipeline, *, quick_response_prompt_prefix: str = None, request_prefix: str = None):
+    def __init__(
+        self,
+        pipeline: STSPipeline,
+        *,
+        inline_llm_params: Dict[str, any] = None,
+        quick_response_prompt_prefix: str = None,
+        request_prefix: str = None,
+        debug: bool = False
+    ):
         self.pipeline = pipeline
+        self.inline_llm_params = inline_llm_params or {"reasoning_effort": "none", "tools": [], "tool_choice": "none"}
         self.quick_response_prompt_prefix = quick_response_prompt_prefix or DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX
         self.request_prefix = request_prefix or DEFAULT_REQUEST_PREFIX
+        self.debug = debug
         self.voice_cache = {}
 
     async def _generate(self, request: STSRequest):
+        start_time = time()
+
         qr_text = ""
         qr_voice_text = ""
         async for chunk in self.pipeline.llm.chat_stream(
             context_id=request.context_id,
             user_id=request.user_id,
             text=f"{self.quick_response_prompt_prefix}\n\n{request.text}",
+            inline_llm_params=self.inline_llm_params
         ):
             if t := chunk.text:
                 qr_text += t
             if vt := chunk.voice_text:
                 qr_voice_text += vt
 
+        llm_time = time() - start_time
+
         if not qr_voice_text:
             qr_voice_text = qr_text
 
         if qr_voice := self.voice_cache.get(qr_text):
-            return qr_text, qr_voice_text, qr_voice
+            tts_time = 0.0
         else:
+            tts_start = time()
             qr_voice = await self.pipeline.tts.synthesize(qr_text)
             self.voice_cache[qr_text] = qr_voice
-            return qr_text, qr_voice_text, qr_voice
+            tts_time = time() - tts_start
+
+        total_time = time() - start_time
+        if self.debug:
+            logger.info(f"Quick response: {qr_text} ({total_time:.3f}s = LLM {llm_time:.3f}s + TTS {tts_time:.3f}s)")
+
+        return qr_text, qr_voice_text, qr_voice
 
     async def respond(self, request: STSRequest):
         # Respond quick response
