@@ -261,7 +261,8 @@ class AIAvatarWebSocketServer(Adapter):
                 system_prompt_params=request.system_prompt_params,
                 allow_merge=request.allow_merge,
                 wait_in_queue=request.wait_in_queue,
-                channel=request.channel
+                channel=request.channel,
+                metadata=request.metadata
             )):
                 await self.sts.handle_response(r)
 
