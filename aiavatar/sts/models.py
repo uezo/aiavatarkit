@@ -18,6 +18,7 @@ class STSRequest:
     wait_in_queue: bool = False
     block_barge_in: bool = False
     channel: str = None
+    metadata: Dict[str, Any] = None
 
 
 @dataclass

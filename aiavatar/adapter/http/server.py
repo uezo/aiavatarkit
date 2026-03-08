@@ -306,7 +306,8 @@ class AIAvatarHttpServer(Adapter):
                     files=request.files,
                     system_prompt_params=request.system_prompt_params,
                     wait_in_queue=request.wait_in_queue,
-                    channel=request.channel
+                    channel=request.channel,
+                    metadata=request.metadata
                 )):
                     aiavatar_response = AIAvatarResponse(
                         type=response.type,
