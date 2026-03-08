@@ -189,7 +189,7 @@ class LiteLLMService(LLMService):
 
         return tools
 
-    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None) -> AsyncGenerator[LLMResponse, None]:
+    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
         # Select tools to use
         tool_instruction = ""
         if tools:
@@ -227,15 +227,22 @@ class LiteLLMService(LLMService):
         else:
             system_message_for_tool = messages[0]
 
-        stream_resp = await acompletion(
-            api_key=self.api_key,
-            base_url=self.base_url,
-            model=self.model,
-            messages=[system_message_for_tool] + messages[1:],
-            temperature=self.temperature,
-            tools=filtered_tools,
-            stream=True
-        )
+        acompletion_params = {
+            "api_key": self.api_key,
+            "base_url": self.base_url,
+            "model": self.model,
+            "messages": [system_message_for_tool] + messages[1:],
+            "temperature": self.temperature,
+            "tools": filtered_tools,
+            "stream": True
+        }
+
+        # Inline params
+        if inline_llm_params:
+            for k, v in inline_llm_params.items():
+                acompletion_params[k] = v
+
+        stream_resp = await acompletion(**acompletion_params)
 
         tool_calls: List[ToolCall] = []
         try_dynamic_tools = False

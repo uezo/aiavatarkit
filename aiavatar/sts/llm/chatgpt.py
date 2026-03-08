@@ -226,7 +226,7 @@ class ChatGPTService(LLMService):
 
         return tools
 
-    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[Dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None) -> AsyncGenerator[LLMResponse, None]:
+    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[Dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
         # Prepare all tools list (always include all tools)
         all_tools = [t.spec for _, t in self.tools.items()]
         if self.use_dynamic_tools:
@@ -262,11 +262,11 @@ class ChatGPTService(LLMService):
         # Temperature and Reasoning Effort
         if self.reasoning_effort:
             chat_completion_params["reasoning_effort"] = self.reasoning_effort
-        elif self.model.startswith("gpt-5.1"):
+        elif self.model.startswith("gpt-5.1") or self.model.startswith("gpt-5.2"):
             chat_completion_params["reasoning_effort"] = "none"
-        elif self.model.startswith("gpt-5"):
+        elif self.model.startswith("gpt-5") and not self.model.startswith("gpt-5."):
             chat_completion_params["reasoning_effort"] = "minimal"
-        else:
+        elif self.temperature:
             chat_completion_params["temperature"] = self.temperature
 
         if self.extra_body:
@@ -283,6 +283,11 @@ class ChatGPTService(LLMService):
                     chat_completion_params["tool_choice"] = {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": allowed_tools}}
                 else:
                     chat_completion_params["tool_choice"] = "none"
+
+        # Inline params
+        if inline_llm_params:
+            for k, v in inline_llm_params.items():
+                chat_completion_params[k] = v
 
         # Edit chat_completion_params
         if self._edit_chat_completion_params:
