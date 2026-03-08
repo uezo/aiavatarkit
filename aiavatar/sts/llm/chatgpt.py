@@ -349,7 +349,7 @@ class ChatGPTService(LLMService):
             for tc in tool_calls:
                 if self.debug:
                     logger.info(f"ToolCall: {tc.name}")
-                yield LLMResponse(context_id=context_id, tool_call=tc)
+                yield LLMResponse(context_id=context_id, tool_call=ToolCall(id=tc.id, name=tc.name, arguments=tc.arguments, result=None))
 
                 tool_result = None
                 if tc.name == self.dynamic_tool_name:

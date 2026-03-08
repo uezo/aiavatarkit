@@ -22,15 +22,17 @@ class ToolCall:
         self.id = id
         self.name = name
         self.arguments = arguments
-        self.result = result or ToolCallResult()
+        self.result = result
 
     def to_dict(self):
-        return {
+        d = {
             "id": self.id,
             "name": self.name,
             "arguments": self.arguments,
-            "result": {"data": self.result.data, "is_final": self.result.is_final}
         }
+        if self.result:
+            d["result"] = {"data": self.result.data, "is_final": self.result.is_final}
+        return d
 
 
 class GuardrailRespose:

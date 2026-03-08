@@ -284,10 +284,12 @@ class AvatarUI {
             this.updateMessage("ai", response.voice_text, false);
         }
 
-        // Show tool status
+        // Show tool status (only for the initial call, not the result)
         if (response.type == "tool_call") {
             console.log(`Tool Call: ${JSON.stringify(response.metadata.tool_call, null, 2)}`);
-            this.toolStatus.textContent = `Tool Call: ${response.metadata.tool_call.name}`;
+            if (!response.metadata.tool_call.result) {
+                this.toolStatus.textContent = `Tool Call: ${response.metadata.tool_call.name}`;
+            }
         } else if (response.type == "final" || response.type == "error") {
             this.toolStatus.textContent = "";
         }
