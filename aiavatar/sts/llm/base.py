@@ -340,7 +340,7 @@ The list of tools is as follows:
         return []
 
     @abstractmethod
-    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
+    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
         pass
 
     def remove_control_tags(self, text: str) -> str:
@@ -409,7 +409,7 @@ The list of tools is as follows:
         
         return None
 
-    async def chat_stream(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
+    async def chat_stream(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None, inline_llm_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
         if self._print_chat:
             self._print_chat("user", context_id, user_id, text, files)
         else:
@@ -482,7 +482,7 @@ The list of tools is as follows:
 
             return None
 
-        async for chunk in self.get_llm_stream_response(context_id, user_id, messages, system_prompt_params):
+        async for chunk in self.get_llm_stream_response(context_id, user_id, messages, system_prompt_params, inline_llm_params=inline_llm_params):
             if chunk.error_info:
                 if self._on_error:
                     await self._on_error(chunk)
@@ -652,7 +652,7 @@ class LLMServiceDummy(LLMService):
         messages.append({"role": "assistant", "content": response_text})
         await self.context_manager.add_histories(context_id, messages, "dummy")
 
-    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[Dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None) -> AsyncGenerator[LLMResponse, None]:
+    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[Dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
         await asyncio.sleep(self.wait_sec)
         yield LLMResponse(
             context_id=context_id,

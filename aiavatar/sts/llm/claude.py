@@ -175,7 +175,7 @@ class ClaudeService(LLMService):
 
         return tools
 
-    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None) -> AsyncGenerator[LLMResponse, None]:
+    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
         # Select tools to use
         tool_instruction = ""
         if tools:
@@ -204,14 +204,21 @@ class ClaudeService(LLMService):
         else:
             filtered_tools = [t.spec for _, t in self.tools.items() if not t.is_dynamic] or []
 
-        async with self.anthropic_client.messages.stream(
-            messages=messages,
-            system=await self._get_system_prompt(context_id, user_id, system_prompt_params) + tool_instruction,
-            model=self.model,
-            temperature=self.temperature,
-            tools=filtered_tools,
-            max_tokens=self.max_tokens
-        ) as stream_resp:
+        stream_params = {
+            "messages": messages,
+            "system": await self._get_system_prompt(context_id, user_id, system_prompt_params) + tool_instruction,
+            "model": self.model,
+            "temperature": self.temperature,
+            "tools": filtered_tools,
+            "max_tokens": self.max_tokens
+        }
+
+        # Inline params
+        if inline_llm_params:
+            for k, v in inline_llm_params.items():
+                stream_params[k] = v
+
+        async with self.anthropic_client.messages.stream(**stream_params) as stream_resp:
             tool_calls: List[ToolCall] = []
             try_dynamic_tools = False
             response_text = ""

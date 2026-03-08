@@ -19,6 +19,7 @@ class GeminiService(LLMService):
         system_prompt: str = None,
         model: str = "gemini-2.5-flash",
         temperature: float = 0.5,
+        thinking_level: str = None,
         thinking_budget: int = -1,
         initial_messages: List[dict] = None,
         split_chars: List[str] = None,
@@ -51,6 +52,7 @@ class GeminiService(LLMService):
         self.gemini_client = genai.Client(
             api_key=gemini_api_key
         )
+        self.thinking_level = thinking_level
         self.thinking_budget = thinking_budget
 
         self.dynamic_tool_spec = {
@@ -226,8 +228,12 @@ class GeminiService(LLMService):
 
         return tools
 
-    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None) -> AsyncGenerator[LLMResponse, None]:
-        if self.thinking_budget >= 0:
+    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
+        if self.thinking_level:
+            thinking_config = types.ThinkingConfig(
+                thinking_level=self.thinking_level
+            )
+        elif self.thinking_budget >= 0:
             thinking_config = types.ThinkingConfig(
                 thinking_budget=self.thinking_budget
             )
@@ -270,17 +276,24 @@ class GeminiService(LLMService):
         if tool_instruction:
             system_instruction = system_instruction + tool_instruction if system_instruction else tool_instruction
 
-        stream_resp = await self.gemini_client.aio.models.generate_content_stream(
-            model=self.model,
-            config = types.GenerateContentConfig(
+        generate_content_params = {
+            "model": self.model,
+            "config": types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 temperature=self.temperature,
                 tools=filtered_tools,
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
                 thinking_config=thinking_config
             ),
-            contents=messages
-        )
+            "contents": messages
+        }
+
+        # Inline params
+        if inline_llm_params:
+            for k, v in inline_llm_params.items():
+                generate_content_params[k] = v
+
+        stream_resp = await self.gemini_client.aio.models.generate_content_stream(**generate_content_params)
 
         tool_calls: List[ToolCall] = []
         model_response_parts: List = []  # Keep original parts to preserve thought_signature (Gemini 3+)
