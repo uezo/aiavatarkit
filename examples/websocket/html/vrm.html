@@ -168,17 +168,45 @@
             50% { opacity: 0; }
         }
 
-        /* ── Tool status (above message box) ── */
-        .tool-status {
+        /* ── Tool toast container (top-right) ── */
+        .tool-toast-container {
             position: fixed;
-            bottom: 160px;
-            left: 50%;
-            transform: translateX(-50%);
-            color: rgba(180, 200, 255, 0.6);
-            font-size: 12px;
-            text-align: center;
-            z-index: 100;
+            top: 24px;
+            right: 24px;
+            z-index: 200;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
             pointer-events: none;
+        }
+
+        .tool-toast {
+            background: var(--vn-msg-bg, linear-gradient(180deg, rgba(10, 10, 30, 0.82) 0%, rgba(5, 5, 20, 0.92) 100%));
+            color: var(--vn-text-color, rgba(255, 255, 255, 0.95));
+            font-size: var(--vn-speaker-font-size, 13px);
+            font-family: var(--vn-text-font-family, inherit);
+            padding: 8px 16px;
+            border-radius: var(--vn-msg-border-radius, 6px);
+            border: 1px solid var(--vn-msg-border-color, rgba(180, 200, 255, 0.18));
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            box-shadow: var(--vn-msg-shadow, 0 0 30px rgba(0, 0, 0, 0.5));
+            animation: toast-in 0.3s ease forwards;
+            white-space: nowrap;
+        }
+
+        .tool-toast.fade-out {
+            animation: toast-out 0.4s ease forwards;
+        }
+
+        @keyframes toast-in {
+            from { opacity: 0; transform: translateX(40px); }
+            to   { opacity: 1; transform: translateX(0); }
+        }
+
+        @keyframes toast-out {
+            from { opacity: 1; transform: translateX(0); }
+            to   { opacity: 0; transform: translateX(40px); }
         }
 
         /* ── VN-style menu buttons (message box top-right) ── */
@@ -460,7 +488,8 @@
         </div>
     </div>
 
-    <div id="toolStatus" class="tool-status"></div>
+    <div id="toolStatus" style="display:none;"></div>
+    <div id="toolToastContainer" class="tool-toast-container"></div>
 
     <!-- Hidden elements -->
     <div class="input-level">
@@ -477,6 +506,33 @@
     <script src="lipsync.js"></script>
     <script src="ui.js"></script>
     <script src="vrm-idle.js"></script>
+
+    <!-- Tool-call toast: watch hidden #toolStatus and spawn toasts -->
+    <script>
+    (function() {
+        const TOAST_DURATION = 4000;
+        const toolStatus = document.getElementById("toolStatus");
+        const container  = document.getElementById("toolToastContainer");
+
+        function showToast(text) {
+            const el = document.createElement("div");
+            el.className = "tool-toast";
+            el.textContent = text;
+            container.appendChild(el);
+            setTimeout(() => {
+                el.classList.add("fade-out");
+                el.addEventListener("animationend", () => el.remove());
+            }, TOAST_DURATION);
+        }
+
+        // MutationObserver to detect ui.js setting toolStatus.textContent
+        const observer = new MutationObserver(() => {
+            const text = toolStatus.textContent.trim();
+            if (text) showToast(text);
+        });
+        observer.observe(toolStatus, { childList: true, characterData: true, subtree: true });
+    })();
+    </script>
 
     <script type="importmap">
     {
@@ -1550,7 +1606,13 @@
         });
 
         // Shared UI
-        const ui = new AvatarUI({ aiavatar, camera: cam });
+        const ui = new AvatarUI({
+            aiavatar,
+            camera: cam,
+            toolLabels: {
+                "send_query_to_openclaw": "Asking OpenClaw🦞",
+            }
+        });
         if (savedCharName) ui.speakerLabelAI = savedCharName;
         if (savedUserName) ui.speakerLabelUser = savedUserName;
 
