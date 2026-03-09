@@ -17,12 +17,14 @@ class PerformanceRecord:
     voice_length: float = 0
     stt_time: float = 0
     stop_response_time: float = 0
+    before_llm_time: float = 0
     llm_first_chunk_time: float = 0
     llm_first_voice_chunk_time: float = 0
     llm_time: float = 0
     tts_first_chunk_time: float = 0
     tts_time: float = 0
     total_time: float = 0
+    quick_response_text: str = None
     error_info: str = None
     tool_calls: str = None
 

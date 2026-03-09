@@ -94,6 +94,7 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
                         voice_length REAL,
                         stt_time REAL,
                         stop_response_time REAL,
+                        before_llm_time REAL,
                         llm_first_chunk_time REAL,
                         llm_first_voice_chunk_time REAL,
                         llm_time REAL,
@@ -106,7 +107,10 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
                         request_text TEXT,
                         request_files TEXT,
                         response_text TEXT,
-                        response_voice_text TEXT
+                        response_voice_text TEXT,
+                        quick_response_text TEXT,
+                        error_info TEXT,
+                        tool_calls TEXT
                     )
                     """
                 )
@@ -119,6 +123,19 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
 
                 # Add transaction_id column if not exist (migration v0.3.3 -> 0.3.4)
                 await self.add_column_if_not_exist(conn, "transaction_id")
+
+                # Add before_llm_time column if not exist
+                row = await conn.fetchrow(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_name='performance_records' AND column_name='before_llm_time'
+                    """
+                )
+                if not row:
+                    await conn.execute("ALTER TABLE performance_records ADD COLUMN before_llm_time REAL")
+
+                # Add quick_response_text column if not exist
+                await self.add_column_if_not_exist(conn, "quick_response_text")
 
                 # Add error_info column if not exist
                 await self.add_column_if_not_exist(conn, "error_info")

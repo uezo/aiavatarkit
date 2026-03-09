@@ -21,6 +21,8 @@ class ConversationLogResponse(BaseModel):
     user_id: Optional[str] = None
     context_id: Optional[str] = None
     tts_first_chunk_time: Optional[float] = None
+    before_llm_time: Optional[float] = None
+    quick_response_text: Optional[str] = None
     request_text: Optional[str] = None
     request_files: Optional[str] = None
     response_text: Optional[str] = None
@@ -109,6 +111,12 @@ class LogsAPI:
             try:
                 if voice_type == "request":
                     data = await self.voice_recorder.get_request_voice(transaction_id)
+                    if data is None:
+                        raise HTTPException(status_code=404, detail="Voice file not found")
+                    return Response(content=data, media_type="audio/wav")
+
+                elif voice_type == "quick_response":
+                    data = await self.voice_recorder.get_voice(f"{transaction_id}_qr_response_0")
                     if data is None:
                         raise HTTPException(status_code=404, detail="Voice file not found")
                     return Response(content=data, media_type="audio/wav")

@@ -452,6 +452,8 @@ class STSPipeline:
 
             # LLM
             await self._on_before_llm(request)
+            performance.before_llm_time = time() - start_time
+            performance.quick_response_text = request.quick_response_text
             llm_stream = self.llm.chat_stream(request.context_id, request.user_id, request.text, request.files, request.system_prompt_params)
 
             # TTS
@@ -574,6 +576,10 @@ class STSPipeline:
             )
 
             if self.voice_recorder_enabled:
+                if request.quick_response_audio:
+                    await self.voice_recorder.record(ResponseVoices(
+                        transaction_id + "_qr", [request.quick_response_audio], self.voice_recorder_response_audio_format
+                    ))
                 await self.voice_recorder.record(ResponseVoices(
                     transaction_id, response_audios, self.voice_recorder_response_audio_format
                 ))
