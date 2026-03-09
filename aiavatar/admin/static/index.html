@@ -392,7 +392,7 @@
 
         <!-- Response Time Chart -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
-          <h3 class="text-sm font-medium text-gray-700 mb-3">Response Time (tts_first_chunk_time)</h3>
+          <h3 class="text-sm font-medium text-gray-700 mb-3">Response Time (first response)</h3>
           <div style="height: 250px; position: relative;">
             <canvas ref="responseTimeChartCanvas"></canvas>
           </div>
@@ -895,6 +895,7 @@
               <div class="flex items-center justify-between mb-2">
                 <div class="flex items-center space-x-3">
                   <span class="text-xs text-gray-400">{{ formatLogTime(log.created_at) }}</span>
+                  <span v-if="log.quick_response_text && log.before_llm_time != null" class="text-xs px-1.5 py-0.5 rounded font-medium" style="background-color: #fed7aa; color: #9a3412;">{{ (log.before_llm_time * 1000).toFixed(0) }} ms (Quick)</span>
                   <span v-if="log.tts_first_chunk_time != null" class="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">{{ (log.tts_first_chunk_time * 1000).toFixed(0) }} ms</span>
                   <span v-if="log.transaction_id" class="text-xs text-gray-300 font-mono">{{ log.transaction_id }}</span>
                 </div>
@@ -912,6 +913,16 @@
               <div v-if="log.request_files" class="mb-2">
                 <div class="text-xs text-gray-500 mb-0.5">Files</div>
                 <div class="text-xs text-gray-600 bg-gray-50 rounded px-3 py-1 font-mono">{{ log.request_files }}</div>
+              </div>
+              <!-- Quick Response -->
+              <div v-if="log.quick_response_text" class="mb-2">
+                <div class="flex items-center space-x-1.5 mb-0.5">
+                  <span class="text-xs text-orange-500">Quick Response</span>
+                  <button v-if="voiceRecorderEnabled && log.transaction_id" @click="playVoice(log.transaction_id, 'quick_response', $event)" class="text-gray-400 hover:text-orange-600 transition-colors" title="Play quick response voice">
+                    <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+                  </button>
+                </div>
+                <div class="text-sm text-orange-700 bg-orange-50 rounded px-3 py-2 whitespace-pre-wrap">{{ log.quick_response_text }}</div>
               </div>
               <!-- Response -->
               <div v-if="log.response_text" class="mb-2">
@@ -1726,6 +1737,11 @@ createApp({
                 label: 'STT',
                 data: buckets.map(b => b.avg_stt_phase != null ? (b.avg_stt_phase * 1000) : 0),
                 backgroundColor: 'rgba(16, 185, 129, 0.7)',
+              },
+              {
+                label: 'Before LLM',
+                data: buckets.map(b => b.avg_before_llm_phase != null ? (b.avg_before_llm_phase * 1000) : 0),
+                backgroundColor: 'rgba(234, 88, 12, 0.7)',
               },
               {
                 label: 'LLM',

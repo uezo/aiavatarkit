@@ -19,6 +19,7 @@ class TimelineBucketResponse(BaseModel):
     p50_tts_first_chunk_time: Optional[float] = None
     p95_tts_first_chunk_time: Optional[float] = None
     avg_stt_phase: Optional[float] = None
+    avg_before_llm_phase: Optional[float] = None
     avg_llm_phase: Optional[float] = None
     avg_processing_phase: Optional[float] = None
     avg_tts_phase: Optional[float] = None
@@ -40,6 +41,7 @@ class SummaryResponse(BaseModel):
     p95_tts_first_chunk_time: Optional[float] = None
     p99_tts_first_chunk_time: Optional[float] = None
     avg_stt_phase: Optional[float] = None
+    avg_before_llm_phase: Optional[float] = None
     avg_llm_phase: Optional[float] = None
     avg_processing_phase: Optional[float] = None
     avg_tts_phase: Optional[float] = None

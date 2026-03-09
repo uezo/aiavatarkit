@@ -1,6 +1,8 @@
+import asyncio
 import logging
+import random
 from time import time
-from typing import Dict
+from typing import Dict, List
 from .pipeline import STSPipeline
 from .models import STSRequest, STSResponse
 
@@ -8,6 +10,8 @@ DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX = "$The following is the user's utterance. 
 DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX_JA = "$以下はユーザーの発話内容である。ユーザー発話を受け止めて、第一声として相応しい、10文字以内のごく短いフレーズを出力せよ。応答の末尾は「。」や「、」句読点や感嘆符とする。この出力に限っては<think>や<answer>のタグフォーマットは不要で、フレーズのみを出力すること。"
 DEFAULT_REQUEST_PREFIX = "$For the following input, you have already output \"{quick_response_text}\"—do NOT repeat it or any similar expression. Output only the continuation. Follow the <think></think><answer></answer> format for this response:"
 DEFAULT_REQUEST_PREFIX_JA = "$以下の入力に対して、既にあなたが出力済みの「{quick_response_text}」や類似の表現は再出力せず、その続きだけを出力せよ。今回は<think></think><answer></answer>などフォーマットに従うこと:"
+DEFAULT_FALLBACK_PHRASES = ["I see.", "Right.", "Sure.", "Got it."]
+DEFAULT_FALLBACK_PHRASES_JA = ["はい。"]
 
 logger = logging.getLogger(__name__)
 
@@ -20,16 +24,20 @@ class QuickResponder:
         inline_llm_params: Dict[str, any] = None,
         quick_response_prompt_prefix: str = None,
         request_prefix: str = None,
+        timeout: float = 1.5,
+        fallback_phrases: List[str] = None,
         debug: bool = False
     ):
         self.pipeline = pipeline
         self.inline_llm_params = inline_llm_params or {"reasoning_effort": "none", "tools": [], "tool_choice": "none"}
         self.quick_response_prompt_prefix = quick_response_prompt_prefix or DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX
         self.request_prefix = request_prefix or DEFAULT_REQUEST_PREFIX
+        self.timeout = timeout
+        self.fallback_phrases = fallback_phrases or DEFAULT_FALLBACK_PHRASES
         self.debug = debug
         self.voice_cache = {}
 
-    async def _generate(self, request: STSRequest):
+    async def _generate_from_llm(self, request: STSRequest):
         start_time = time()
 
         qr_text = ""
@@ -64,6 +72,36 @@ class QuickResponder:
 
         return qr_text, qr_voice_text, qr_voice
 
+    async def _generate_fallback(self):
+        qr_text = random.choice(self.fallback_phrases)
+
+        if qr_voice := self.voice_cache.get(qr_text):
+            tts_time = 0.0
+        else:
+            tts_start = time()
+            qr_voice = await self.pipeline.tts.synthesize(qr_text)
+            self.voice_cache[qr_text] = qr_voice
+            tts_time = time() - tts_start
+
+        if self.debug:
+            logger.info(f"Quick response (fallback): {qr_text} (TTS {tts_time:.3f}s)")
+
+        return qr_text, qr_text, qr_voice
+
+    async def _generate(self, request: STSRequest):
+        if self.timeout and self.timeout > 0:
+            try:
+                return await asyncio.wait_for(
+                    self._generate_from_llm(request),
+                    timeout=self.timeout
+                )
+            except asyncio.TimeoutError:
+                if self.debug:
+                    logger.warning(f"Quick response timed out ({self.timeout}s), using fallback")
+                return await self._generate_fallback()
+        else:
+            return await self._generate_from_llm(request)
+
     async def respond(self, request: STSRequest):
         # Respond quick response
         qr_text, qr_voice_text, qr_voice = await self._generate(request)
@@ -79,6 +117,10 @@ class QuickResponder:
                 metadata={}
             )
         )
+
+        # Record quick response for performance tracking
+        request.quick_response_text = qr_text
+        request.quick_response_audio = qr_voice
 
         # Overwrite request to avoid duplication
         prefix = self.request_prefix.format(quick_response_text=qr_text)

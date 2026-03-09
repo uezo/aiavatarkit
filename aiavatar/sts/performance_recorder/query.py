@@ -64,6 +64,7 @@ class TimelineBucket:
     p50_tts_first_chunk_time: Optional[float] = None
     p95_tts_first_chunk_time: Optional[float] = None
     avg_stt_phase: Optional[float] = None
+    avg_before_llm_phase: Optional[float] = None
     avg_llm_phase: Optional[float] = None
     avg_processing_phase: Optional[float] = None
     avg_tts_phase: Optional[float] = None
@@ -79,48 +80,59 @@ class MetricsSummary:
     p95_tts_first_chunk_time: Optional[float] = None
     p99_tts_first_chunk_time: Optional[float] = None
     avg_stt_phase: Optional[float] = None
+    avg_before_llm_phase: Optional[float] = None
     avg_llm_phase: Optional[float] = None
     avg_processing_phase: Optional[float] = None
     avg_tts_phase: Optional[float] = None
 
 
 def _compute_phases(rows):
-    """Extract phase values from rows. Each row: (created_at, stt_time, llm_first_chunk_time, llm_first_voice_chunk_time, tts_first_chunk_time, error_info)
+    """Extract phase values from rows. Each row: (created_at, stt_time, before_llm_time, llm_first_chunk_time, llm_first_voice_chunk_time, tts_first_chunk_time, quick_response_text, error_info)
     Only processes rows without errors for performance metrics."""
     stt_phases = []
+    before_llm_phases = []
     llm_phases = []
     processing_phases = []
     tts_phases = []
-    tts_first_chunks = []
+    first_response_times = []
 
-    for created_at, stt_time, llm_fc_time, llm_fvc_time, tts_fc_time, error_info in rows:
+    for created_at, stt_time, before_llm_time, llm_fc_time, llm_fvc_time, tts_fc_time, qr_text, error_info in rows:
         # Skip error records for performance metrics
         if error_info:
             continue
         if stt_time and stt_time > 0:
             stt_phases.append(stt_time)
-        # LLM phase: stt_time -> llm_first_chunk_time
-        if llm_fc_time and stt_time and llm_fc_time > stt_time:
+        # Before LLM phase: stt_time -> before_llm_time (on_before_llm including QuickResponder)
+        if before_llm_time and stt_time and before_llm_time > stt_time:
+            before_llm_phases.append(before_llm_time - stt_time)
+        # LLM phase: before_llm_time -> llm_first_chunk_time
+        if llm_fc_time and before_llm_time and llm_fc_time > before_llm_time:
+            llm_phases.append(llm_fc_time - before_llm_time)
+        elif llm_fc_time and stt_time and llm_fc_time > stt_time and not before_llm_time:
+            # Fallback for old records without before_llm_time
             llm_phases.append(llm_fc_time - stt_time)
         # Processing phase: llm_first_chunk_time -> llm_first_voice_chunk_time
         if llm_fvc_time and llm_fc_time and llm_fvc_time > llm_fc_time:
             processing_phases.append(llm_fvc_time - llm_fc_time)
         if tts_fc_time and llm_fvc_time and tts_fc_time > llm_fvc_time:
             tts_phases.append(tts_fc_time - llm_fvc_time)
-        if tts_fc_time and tts_fc_time > 0:
-            tts_first_chunks.append(tts_fc_time)
+        # First response time: before_llm_time if quick response, else tts_first_chunk_time
+        if qr_text and before_llm_time and before_llm_time > 0:
+            first_response_times.append(before_llm_time)
+        elif tts_fc_time and tts_fc_time > 0:
+            first_response_times.append(tts_fc_time)
 
-    return stt_phases, llm_phases, processing_phases, tts_phases, tts_first_chunks
+    return stt_phases, before_llm_phases, llm_phases, processing_phases, tts_phases, first_response_times
 
 
 def _build_timeline(rows, interval_seconds: int, start_time: datetime) -> List[TimelineBucket]:
     # Group rows by bucket key
     data_buckets = {}
-    for created_at, stt_time, llm_fc_time, llm_fvc_time, tts_fc_time, error_info in rows:
-        key = _bucket_key(created_at, interval_seconds)
+    for row in rows:
+        key = _bucket_key(row[0], interval_seconds)  # row[0] = created_at
         if key not in data_buckets:
             data_buckets[key] = []
-        data_buckets[key].append((created_at, stt_time, llm_fc_time, llm_fvc_time, tts_fc_time, error_info))
+        data_buckets[key].append(row)
 
     # Generate all bucket keys for the full range (start_time -> now)
     now = datetime.now(timezone.utc)
@@ -134,20 +146,21 @@ def _build_timeline(rows, interval_seconds: int, start_time: datetime) -> List[T
         bucket_rows = data_buckets.get(key, [])
         if bucket_rows:
             # Count success and error
-            error_count = sum(1 for r in bucket_rows if r[5])  # error_info is at index 5
+            error_count = sum(1 for r in bucket_rows if r[7])  # error_info is at index 7
             success_count = len(bucket_rows) - error_count
             # Compute phases (only from success records)
-            stt_phases, llm_phases, processing_phases, tts_phases, tts_first_chunks = _compute_phases(bucket_rows)
-            sorted_tts = sorted(tts_first_chunks)
+            stt_phases, before_llm_phases, llm_phases, processing_phases, tts_phases, first_response_times = _compute_phases(bucket_rows)
+            sorted_frt = sorted(first_response_times)
             result.append(TimelineBucket(
                 timestamp=key,
                 request_count=len(bucket_rows),
                 success_count=success_count,
                 error_count=error_count,
-                avg_tts_first_chunk_time=_safe_avg(tts_first_chunks),
-                p50_tts_first_chunk_time=percentile(sorted_tts, 50),
-                p95_tts_first_chunk_time=percentile(sorted_tts, 95),
+                avg_tts_first_chunk_time=_safe_avg(first_response_times),
+                p50_tts_first_chunk_time=percentile(sorted_frt, 50),
+                p95_tts_first_chunk_time=percentile(sorted_frt, 95),
                 avg_stt_phase=_safe_avg(stt_phases),
+                avg_before_llm_phase=_safe_avg(before_llm_phases),
                 avg_llm_phase=_safe_avg(llm_phases),
                 avg_processing_phase=_safe_avg(processing_phases),
                 avg_tts_phase=_safe_avg(tts_phases),
@@ -163,21 +176,22 @@ def _build_summary(rows) -> MetricsSummary:
         return MetricsSummary(total_requests=0, success_count=0, error_count=0)
 
     # Count success and error
-    error_count = sum(1 for r in rows if r[5])  # error_info is at index 5
+    error_count = sum(1 for r in rows if r[7])  # error_info is at index 7
     success_count = len(rows) - error_count
 
     # Compute phases (only from success records)
-    stt_phases, llm_phases, processing_phases, tts_phases, tts_first_chunks = _compute_phases(rows)
-    sorted_tts = sorted(tts_first_chunks)
+    stt_phases, before_llm_phases, llm_phases, processing_phases, tts_phases, first_response_times = _compute_phases(rows)
+    sorted_frt = sorted(first_response_times)
     return MetricsSummary(
         total_requests=len(rows),
         success_count=success_count,
         error_count=error_count,
-        avg_tts_first_chunk_time=_safe_avg(tts_first_chunks),
-        p50_tts_first_chunk_time=percentile(sorted_tts, 50),
-        p95_tts_first_chunk_time=percentile(sorted_tts, 95),
-        p99_tts_first_chunk_time=percentile(sorted_tts, 99),
+        avg_tts_first_chunk_time=_safe_avg(first_response_times),
+        p50_tts_first_chunk_time=percentile(sorted_frt, 50),
+        p95_tts_first_chunk_time=percentile(sorted_frt, 95),
+        p99_tts_first_chunk_time=percentile(sorted_frt, 99),
         avg_stt_phase=_safe_avg(stt_phases),
+        avg_before_llm_phase=_safe_avg(before_llm_phases),
         avg_llm_phase=_safe_avg(llm_phases),
         avg_processing_phase=_safe_avg(processing_phases),
         avg_tts_phase=_safe_avg(tts_phases),
@@ -191,6 +205,8 @@ class ConversationLog:
     user_id: Optional[str] = None
     context_id: Optional[str] = None
     tts_first_chunk_time: Optional[float] = None
+    before_llm_time: Optional[float] = None
+    quick_response_text: Optional[str] = None
     request_text: Optional[str] = None
     request_files: Optional[str] = None
     response_text: Optional[str] = None
@@ -207,14 +223,14 @@ class ConversationGroup:
 
 
 _QUERY_SQL = """
-SELECT created_at, stt_time, llm_first_chunk_time, llm_first_voice_chunk_time, tts_first_chunk_time, error_info
+SELECT created_at, stt_time, before_llm_time, llm_first_chunk_time, llm_first_voice_chunk_time, tts_first_chunk_time, quick_response_text, error_info
 FROM performance_records
 WHERE created_at >= ?
 ORDER BY created_at
 """
 
 _LOGS_SQL = """
-SELECT created_at, transaction_id, user_id, context_id, tts_first_chunk_time,
+SELECT created_at, transaction_id, user_id, context_id, tts_first_chunk_time, before_llm_time, quick_response_text,
        request_text, request_files, response_text, response_voice_text, error_info, tool_calls
 FROM performance_records
 ORDER BY created_at DESC
@@ -250,12 +266,14 @@ def _group_logs(rows) -> List[ConversationGroup]:
             user_id=row[2],
             context_id=row[3],
             tts_first_chunk_time=row[4],
-            request_text=row[5],
-            request_files=row[6],
-            response_text=row[7],
-            response_voice_text=row[8],
-            error_info=row[9],
-            tool_calls=row[10],
+            before_llm_time=row[5],
+            quick_response_text=row[6],
+            request_text=row[7],
+            request_files=row[8],
+            response_text=row[9],
+            response_voice_text=row[10],
+            error_info=row[11],
+            tool_calls=row[12],
         ))
 
     # Group by context_id, preserving order of first appearance
@@ -299,7 +317,7 @@ class SQLiteMetricsQuery(MetricsQuery):
                     created_at = datetime.fromisoformat(created_at)
                 if created_at.tzinfo is None:
                     created_at = created_at.replace(tzinfo=timezone.utc)
-                result.append((created_at, row[1], row[2], row[3], row[4], row[5]))
+                result.append((created_at, row[1], row[2], row[3], row[4], row[5], row[6], row[7]))
             return result
         finally:
             conn.close()
@@ -363,19 +381,19 @@ class PostgreSQLMetricsQuery(MetricsQuery):
     async def _fetch_rows(self, start_time: datetime):
         pool = await self._get_pool()
         query = """
-        SELECT created_at, stt_time, llm_first_chunk_time, llm_first_voice_chunk_time, tts_first_chunk_time, error_info
+        SELECT created_at, stt_time, before_llm_time, llm_first_chunk_time, llm_first_voice_chunk_time, tts_first_chunk_time, quick_response_text, error_info
         FROM performance_records
         WHERE created_at >= $1
         ORDER BY created_at
         """
         async with pool.acquire() as conn:
             records = await conn.fetch(query, start_time)
-        return [(r["created_at"], r["stt_time"], r["llm_first_chunk_time"], r["llm_first_voice_chunk_time"], r["tts_first_chunk_time"], r["error_info"]) for r in records]
+        return [(r["created_at"], r["stt_time"], r["before_llm_time"], r["llm_first_chunk_time"], r["llm_first_voice_chunk_time"], r["tts_first_chunk_time"], r["quick_response_text"], r["error_info"]) for r in records]
 
     async def _fetch_logs(self, limit: int):
         pool = await self._get_pool()
         query = """
-        SELECT created_at, transaction_id, user_id, context_id, tts_first_chunk_time,
+        SELECT created_at, transaction_id, user_id, context_id, tts_first_chunk_time, before_llm_time, quick_response_text,
                request_text, request_files, response_text, response_voice_text, error_info, tool_calls
         FROM performance_records
         ORDER BY created_at DESC
@@ -384,7 +402,8 @@ class PostgreSQLMetricsQuery(MetricsQuery):
         async with pool.acquire() as conn:
             records = await conn.fetch(query, limit)
         return [(r["created_at"], r["transaction_id"], r["user_id"], r["context_id"],
-                 r["tts_first_chunk_time"], r["request_text"], r["request_files"],
+                 r["tts_first_chunk_time"], r["before_llm_time"], r["quick_response_text"],
+                 r["request_text"], r["request_files"],
                  r["response_text"], r["response_voice_text"], r["error_info"], r["tool_calls"]) for r in records]
 
     async def query_timeline(self, period: str, interval: str) -> List[TimelineBucket]:

@@ -32,6 +32,7 @@ class SQLitePerformanceRecorder(PerformanceRecorder):
                         voice_length REAL,
                         stt_time REAL,
                         stop_response_time REAL,
+                        before_llm_time REAL,
                         llm_first_chunk_time REAL,
                         llm_first_voice_chunk_time REAL,
                         llm_time REAL,
@@ -44,7 +45,10 @@ class SQLitePerformanceRecorder(PerformanceRecorder):
                         request_text TEXT,
                         request_files TEXT,
                         response_text TEXT,
-                        response_voice_text TEXT
+                        response_voice_text TEXT,
+                        quick_response_text TEXT,
+                        error_info TEXT,
+                        tool_calls TEXT
                     )
                     """
                 )
@@ -64,6 +68,14 @@ class SQLitePerformanceRecorder(PerformanceRecorder):
                 if "transaction_id" not in columns:
                     print("add column: transaction_id")
                     conn.execute("ALTER TABLE performance_records ADD COLUMN transaction_id TEXT")
+
+                # Add before_llm_time column if not exist
+                if "before_llm_time" not in columns:
+                    conn.execute("ALTER TABLE performance_records ADD COLUMN before_llm_time REAL")
+
+                # Add quick_response_text column if not exist
+                if "quick_response_text" not in columns:
+                    conn.execute("ALTER TABLE performance_records ADD COLUMN quick_response_text TEXT")
 
                 # Add error_info column if not exist
                 if "error_info" not in columns:
