@@ -23,6 +23,7 @@ class FixtureContext:
         self.service = service
         self.db_path = db_path
         self.created_character_ids: list[str] = []
+        self.created_user_ids: list[str] = []
 
     async def create_character(self, **kwargs) -> Character:
         if "name" not in kwargs:
@@ -32,6 +33,13 @@ class FixtureContext:
         character = await self.service.character.create(**kwargs)
         self.created_character_ids.append(character.id)
         return character
+
+    async def create_user(self, **kwargs):
+        if "name" not in kwargs:
+            kwargs["name"] = f"test_user_{uuid4()}"
+        user = await self.service.user.create(**kwargs)
+        self.created_user_ids.append(user.id)
+        return user
 
     async def cleanup(self):
         for character_id in self.created_character_ids:
@@ -47,6 +55,8 @@ class FixtureContext:
                     character_id=character_id, diary_date=target_date
                 )
             await self.service.character.delete(character_id=character_id)
+        for user_id in self.created_user_ids:
+            await self.service.user.delete(user_id=user_id)
 
 
 @pytest_asyncio.fixture
@@ -495,9 +505,7 @@ async def test_get_system_prompt(ctx):
     )
     system_prompt = await ctx.service.get_system_prompt(
         character_id=character.id,
-        system_prompt_params={"username": "テストユーザー"}
     )
-    assert "テストユーザー" in system_prompt
     assert "吹奏楽部" in system_prompt
 
 
@@ -514,18 +522,16 @@ async def test_get_system_prompt_cache(ctx):
     # First call - should build and cache
     prompt1 = await ctx.service.get_system_prompt(
         character_id=character.id,
-        system_prompt_params={"username": "User1"}
     )
 
     # Second call - should use cache
     prompt2 = await ctx.service.get_system_prompt(
         character_id=character.id,
-        system_prompt_params={"username": "User2"}
     )
 
-    # Usernames should differ, but base content should be same
-    assert "User1" in prompt1
-    assert "User2" in prompt2
+    # Both should return the same content from cache
+    assert "吹奏楽部" in prompt1
+    assert prompt1 == prompt2
 
     # Cache should exist
     assert character.id in ctx.service._system_prompt_cache
@@ -556,6 +562,70 @@ async def test_get_system_prompt_refresh_cache(ctx):
 
     assert prompt is not None
     assert character.id in ctx.service._system_prompt_cache
+
+
+# Initial messages tests
+
+@pytest.mark.asyncio
+async def test_get_initial_messages_with_all_fields(ctx):
+    character = await ctx.create_character(
+        prompt="高校2年生の女子。部活は吹奏楽部でフルートを担当。",
+        episode="去年の文化祭でソロ演奏をした。",
+        attribute="好きな食べ物: カレー\n嫌いな食べ物: セロリ",
+        conversation_example="ユーザー: 今日の調子は？\nキャラクター: まあまあかな！"
+    )
+    user = await ctx.create_user(name="テストユーザー")
+    await ctx.service.activity.create_daily_schedule(
+        character_id=character.id,
+        schedule_date=date.today(),
+        content="| 時間帯 | 活動 |\n|---|---|\n| 7:00-8:00 | 起床・朝食 |"
+    )
+
+    messages = await ctx.service.get_initial_messages(
+        character_id=character.id,
+        user_id=user.id,
+        generate_schedule=False,
+    )
+
+    all_content = " ".join(m["content"] for m in messages)
+
+    # Self-intro turn includes username
+    assert "テストユーザー" in all_content
+    # Episode turn
+    assert "文化祭" in all_content
+    # Attribute turn
+    assert "カレー" in all_content
+    # Conversation example turn
+    assert "今日の調子" in all_content
+    # Schedule turn
+    assert "起床・朝食" in all_content
+
+    # All turns should be user/assistant pairs
+    for i in range(0, len(messages), 2):
+        assert messages[i]["role"] == "user"
+        assert messages[i + 1]["role"] == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_get_initial_messages_minimal(ctx):
+    character = await ctx.create_character(
+        prompt="テスト用キャラクター"
+    )
+    # User without name match (nonexistent user)
+    messages = await ctx.service.get_initial_messages(
+        character_id=character.id,
+        user_id="nonexistent_user",
+        generate_schedule=False,
+    )
+
+    all_content = " ".join(m["content"] for m in messages)
+
+    # No self-intro turn (user not found)
+    assert "$ユーザーの名前は" not in all_content
+    # Schedule turn should still exist with fallback
+    assert "スケジュール情報なし" in all_content
+    # Should only have schedule turn (1 pair)
+    assert len(messages) == 2
 
 
 # Batch operation tests

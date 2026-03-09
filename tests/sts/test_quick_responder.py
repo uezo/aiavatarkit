@@ -1,4 +1,5 @@
 import os
+import re
 import pytest
 from uuid import uuid4
 from aiavatar.sts import STSPipeline
@@ -17,7 +18,7 @@ def make_pipeline():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4.1-mini",
+            model="gpt-5.2",
         ),
         tts=VoicevoxSpeechSynthesizer(
             base_url="http://127.0.0.1:50021",
@@ -73,8 +74,10 @@ async def test_respond():
     final = [r for r in main_responses if r.type == "final"]
     assert len(final) == 1
     assert "祇園" in final[0].text  # Main response should contain the answer
-    # Main response should not repeat the quick response
-    assert quick_response_text not in final[0].text
+    # Main response (answer portion) should not repeat the quick response
+    answer_match = re.search(r"<answer>(.*?)</answer>", final[0].text, re.DOTALL)
+    answer_text = answer_match.group(1) if answer_match else final[0].text
+    assert quick_response_text not in answer_text
 
     await pipeline.shutdown()
     await pipeline.tts.close()
@@ -108,6 +111,120 @@ async def test_voice_cache():
     # Clear cache
     qr.clear_voice_cache()
     assert len(qr.voice_cache) == 0
+
+    await pipeline.shutdown()
+    await pipeline.tts.close()
+
+
+@pytest.mark.asyncio
+async def test_fallback_on_timeout():
+    pipeline = make_pipeline()
+
+    handled_responses = []
+
+    async def mock_handle_response(response: STSResponse):
+        handled_responses.append(response)
+
+    pipeline.handle_response = mock_handle_response
+
+    fallback_phrases = ["フォールバック。", "タイムアウト。"]
+    qr = QuickResponder(
+        pipeline,
+        timeout=0.001,  # 1ms - LLM can't possibly respond in time
+        fallback_phrases=fallback_phrases,
+        debug=True
+    )
+
+    request = STSRequest(
+        session_id=f"test_qr_{str(uuid4())}",
+        user_id="test_user",
+        context_id=f"test_qr_ctx_{str(uuid4())}",
+        text="日本の三大祭りをそれぞれの特徴とともに教えてください",
+    )
+
+    await qr.respond(request)
+
+    assert len(handled_responses) == 1
+    resp = handled_responses[0]
+    assert resp.type == "chunk"
+    assert resp.text in fallback_phrases
+    assert resp.audio_data is not None and len(resp.audio_data) > 0
+
+    # Fallback voice should be cached
+    assert resp.text in qr.voice_cache
+
+    await pipeline.shutdown()
+    await pipeline.tts.close()
+
+
+@pytest.mark.asyncio
+async def test_fallback_voice_cache():
+    pipeline = make_pipeline()
+    async def noop_handle_response(r): pass
+    pipeline.handle_response = noop_handle_response
+
+    fallback_phrases = ["キャッシュテスト。"]
+    qr = QuickResponder(
+        pipeline,
+        timeout=0.001,
+        fallback_phrases=fallback_phrases,
+        debug=True
+    )
+
+    request = STSRequest(
+        session_id=f"test_qr_{str(uuid4())}",
+        user_id="test_user",
+        context_id=f"test_qr_ctx_{str(uuid4())}",
+        text="テスト",
+    )
+
+    # First call: TTS is invoked
+    text1, _, voice1 = await qr._generate(request)
+    assert text1 == "キャッシュテスト。"
+    assert voice1 is not None
+    assert "キャッシュテスト。" in qr.voice_cache
+
+    # Second call: voice from cache (same bytes)
+    text2, _, voice2 = await qr._generate(request)
+    assert text2 == "キャッシュテスト。"
+    assert voice2 == voice1
+
+    await pipeline.shutdown()
+    await pipeline.tts.close()
+
+
+@pytest.mark.asyncio
+async def test_no_timeout():
+    """timeout=0 disables the timeout, LLM response is used normally."""
+    pipeline = make_pipeline()
+
+    handled_responses = []
+
+    async def mock_handle_response(response: STSResponse):
+        handled_responses.append(response)
+
+    pipeline.handle_response = mock_handle_response
+
+    qr = QuickResponder(
+        pipeline,
+        timeout=0,
+        fallback_phrases=["これは出ないはず。"],
+        debug=True
+    )
+
+    request = STSRequest(
+        session_id=f"test_qr_{str(uuid4())}",
+        user_id="test_user",
+        context_id=f"test_qr_ctx_{str(uuid4())}",
+        text="こんにちは",
+    )
+
+    await qr.respond(request)
+
+    assert len(handled_responses) == 1
+    resp = handled_responses[0]
+    assert resp.text != "これは出ないはず。"  # LLM response, not fallback
+    assert resp.audio_data is not None
 
     await pipeline.shutdown()
     await pipeline.tts.close()
