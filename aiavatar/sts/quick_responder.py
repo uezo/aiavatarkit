@@ -4,7 +4,9 @@ import random
 from time import time
 from typing import Dict, List
 from .pipeline import STSPipeline
-from .models import STSRequest, STSResponse
+from .models import STSRequest
+from .llm import LLMService
+from .tts import SpeechSynthesizer
 
 DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX = "$The following is the user's utterance. Respond with a very short phrase of no more than 5 words that serves as an appropriate opening acknowledgment. The phrase must end with punctuation such as a period, comma, or exclamation mark. For this output only, do not use tag formats like <think> or <answer>—output only the phrase."
 DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX_JA = "$以下はユーザーの発話内容である。ユーザー発話を受け止めて、第一声として相応しい、10文字以内のごく短いフレーズを出力せよ。応答の末尾は「。」や「、」句読点や感嘆符とする。この出力に限っては<think>や<answer>のタグフォーマットは不要で、フレーズのみを出力すること。"
@@ -19,7 +21,8 @@ logger = logging.getLogger(__name__)
 class QuickResponder:
     def __init__(
         self,
-        pipeline: STSPipeline,
+        llm: LLMService,
+        tts: SpeechSynthesizer,
         *,
         inline_llm_params: Dict[str, any] = None,
         quick_response_prompt_prefix: str = None,
@@ -28,7 +31,8 @@ class QuickResponder:
         fallback_phrases: List[str] = None,
         debug: bool = False
     ):
-        self.pipeline = pipeline
+        self.llm = llm
+        self.tts = tts
         self.inline_llm_params = inline_llm_params or {"reasoning_effort": "none", "tools": [], "tool_choice": "none"}
         self.quick_response_prompt_prefix = quick_response_prompt_prefix or DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX
         self.request_prefix = request_prefix or DEFAULT_REQUEST_PREFIX
@@ -42,7 +46,7 @@ class QuickResponder:
 
         qr_text = ""
         qr_voice_text = ""
-        async for chunk in self.pipeline.llm.chat_stream(
+        async for chunk in self.llm.chat_stream(
             context_id=request.context_id,
             user_id=request.user_id,
             text=f"{self.quick_response_prompt_prefix}\n\n{request.text}",
@@ -62,7 +66,7 @@ class QuickResponder:
             tts_time = 0.0
         else:
             tts_start = time()
-            qr_voice = await self.pipeline.tts.synthesize(qr_text)
+            qr_voice = await self.tts.synthesize(qr_text)
             self.voice_cache[qr_text] = qr_voice
             tts_time = time() - tts_start
 
@@ -79,7 +83,7 @@ class QuickResponder:
             tts_time = 0.0
         else:
             tts_start = time()
-            qr_voice = await self.pipeline.tts.synthesize(qr_text)
+            qr_voice = await self.tts.synthesize(qr_text)
             self.voice_cache[qr_text] = qr_voice
             tts_time = time() - tts_start
 
@@ -103,23 +107,12 @@ class QuickResponder:
             return await self._generate_from_llm(request)
 
     async def respond(self, request: STSRequest):
-        # Respond quick response
+        # Generate quick response
         qr_text, qr_voice_text, qr_voice = await self._generate(request)
-        await self.pipeline.handle_response(
-            STSResponse(
-                type="chunk",
-                session_id=request.session_id,
-                user_id=request.user_id,
-                context_id=request.context_id,
-                text=qr_text,
-                voice_text=qr_voice_text,
-                audio_data=qr_voice,
-                metadata={}
-            )
-        )
 
-        # Record quick response for performance tracking
+        # Store quick response in request for pipeline to yield
         request.quick_response_text = qr_text
+        request.quick_response_voice_text = qr_voice_text
         request.quick_response_audio = qr_voice
 
         # Overwrite request to avoid duplication

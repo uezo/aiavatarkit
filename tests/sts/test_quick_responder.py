@@ -4,7 +4,7 @@ import pytest
 from uuid import uuid4
 from aiavatar.sts import STSPipeline
 from aiavatar.sts.quick_responder import QuickResponder
-from aiavatar.sts.models import STSRequest, STSResponse
+from aiavatar.sts.models import STSRequest
 from aiavatar.sts.vad import SpeechDetectorDummy
 from aiavatar.sts.stt import SpeechRecognizerDummy
 from aiavatar.sts.llm.chatgpt import ChatGPTService
@@ -34,14 +34,7 @@ def make_pipeline():
 async def test_respond():
     pipeline = make_pipeline()
 
-    handled_responses = []
-
-    async def mock_handle_response(response: STSResponse):
-        handled_responses.append(response)
-
-    pipeline.handle_response = mock_handle_response
-
-    qr = QuickResponder(pipeline)
+    qr = QuickResponder(llm=pipeline.llm, tts=pipeline.tts)
     original_text = "日本の三大祭りをそれぞれの特徴とともに教えてください"
     request = STSRequest(
         session_id=f"test_qr_{str(uuid4())}",
@@ -52,21 +45,19 @@ async def test_respond():
 
     await qr.respond(request)
 
-    # Quick response should be a short acknowledgment, not the actual answer
-    assert len(handled_responses) == 1
-    resp = handled_responses[0]
-    assert resp.type == "chunk"
-    assert resp.text is not None and len(resp.text) > 0
-    assert resp.audio_data is not None and len(resp.audio_data) > 0
-    assert "祇園" not in resp.text  # Quick response should not contain the answer
+    # Quick response should be stored in request
+    assert request.quick_response_text is not None and len(request.quick_response_text) > 0
+    assert request.quick_response_voice_text is not None and len(request.quick_response_voice_text) > 0
+    assert request.quick_response_audio is not None and len(request.quick_response_audio) > 0
+    assert "祇園" not in request.quick_response_text  # Quick response should not contain the answer
 
     # request.text was overwritten with dedup prefix
     assert original_text in request.text
-    assert resp.text in request.text
+    assert request.quick_response_text in request.text
     assert request.text != original_text
 
     # Main LLM response should contain the actual answer
-    quick_response_text = resp.text
+    quick_response_text = request.quick_response_text
     main_responses = []
     async for response in pipeline.invoke(request):
         main_responses.append(response)
@@ -89,7 +80,7 @@ async def test_voice_cache():
     async def noop_handle_response(r): pass
     pipeline.handle_response = noop_handle_response
 
-    qr = QuickResponder(pipeline)
+    qr = QuickResponder(llm=pipeline.llm, tts=pipeline.tts)
 
     request = STSRequest(
         session_id=f"test_qr_{str(uuid4())}",
@@ -120,16 +111,10 @@ async def test_voice_cache():
 async def test_fallback_on_timeout():
     pipeline = make_pipeline()
 
-    handled_responses = []
-
-    async def mock_handle_response(response: STSResponse):
-        handled_responses.append(response)
-
-    pipeline.handle_response = mock_handle_response
-
     fallback_phrases = ["フォールバック。", "タイムアウト。"]
     qr = QuickResponder(
-        pipeline,
+        llm=pipeline.llm,
+        tts=pipeline.tts,
         timeout=0.001,  # 1ms - LLM can't possibly respond in time
         fallback_phrases=fallback_phrases,
         debug=True
@@ -144,14 +129,12 @@ async def test_fallback_on_timeout():
 
     await qr.respond(request)
 
-    assert len(handled_responses) == 1
-    resp = handled_responses[0]
-    assert resp.type == "chunk"
-    assert resp.text in fallback_phrases
-    assert resp.audio_data is not None and len(resp.audio_data) > 0
+    # Quick response should be stored in request
+    assert request.quick_response_text in fallback_phrases
+    assert request.quick_response_audio is not None and len(request.quick_response_audio) > 0
 
     # Fallback voice should be cached
-    assert resp.text in qr.voice_cache
+    assert request.quick_response_text in qr.voice_cache
 
     await pipeline.shutdown()
     await pipeline.tts.close()
@@ -165,7 +148,8 @@ async def test_fallback_voice_cache():
 
     fallback_phrases = ["キャッシュテスト。"]
     qr = QuickResponder(
-        pipeline,
+        llm=pipeline.llm,
+        tts=pipeline.tts,
         timeout=0.001,
         fallback_phrases=fallback_phrases,
         debug=True
@@ -198,15 +182,9 @@ async def test_no_timeout():
     """timeout=0 disables the timeout, LLM response is used normally."""
     pipeline = make_pipeline()
 
-    handled_responses = []
-
-    async def mock_handle_response(response: STSResponse):
-        handled_responses.append(response)
-
-    pipeline.handle_response = mock_handle_response
-
     qr = QuickResponder(
-        pipeline,
+        llm=pipeline.llm,
+        tts=pipeline.tts,
         timeout=0,
         fallback_phrases=["これは出ないはず。"],
         debug=True
@@ -221,10 +199,9 @@ async def test_no_timeout():
 
     await qr.respond(request)
 
-    assert len(handled_responses) == 1
-    resp = handled_responses[0]
-    assert resp.text != "これは出ないはず。"  # LLM response, not fallback
-    assert resp.audio_data is not None
+    # Quick response should be stored in request (LLM response, not fallback)
+    assert request.quick_response_text != "これは出ないはず。"
+    assert request.quick_response_audio is not None
 
     await pipeline.shutdown()
     await pipeline.tts.close()
@@ -240,7 +217,8 @@ async def test_custom_prompts():
     custom_request_prefix = "$You already said \"{quick_response_text}\". Continue:"
 
     qr = QuickResponder(
-        pipeline,
+        llm=pipeline.llm,
+        tts=pipeline.tts,
         quick_response_prompt_prefix=custom_prefix,
         request_prefix=custom_request_prefix,
     )

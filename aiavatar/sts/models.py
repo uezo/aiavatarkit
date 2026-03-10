@@ -19,6 +19,7 @@ class STSRequest:
     block_barge_in: bool = False
     channel: str = None
     quick_response_text: str = None
+    quick_response_voice_text: str = None
     quick_response_audio: bytes = None
     metadata: Dict[str, Any] = None
 
