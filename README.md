@@ -174,6 +174,7 @@ You can also access the Admin Panel at http://127.0.0.1:8000/admin.
     - [💾 Long-term Memory](#-long-term-memory)
     - [🐓 Wakeword](#-wakeword)
     - [📋 System Prompt Parameters](#-system-prompt-parameters)
+    - [🎛️ Inline LLM Parameters](#️-inline-llm-parameters)
     - [⏰ Timestamp Insertion](#-timestamp-insertion)
     - [🧵 Request merging](#-request-merging)
     - [📥 Invoke Queue](#-invoke-queue)
@@ -1249,6 +1250,111 @@ This single function call sets up:
   - `UpdateUsernameTool`: Allows the character to update the user's name during conversation
   - `GetDiaryTool`: Retrieves the character's diary and schedule
   - `MemorySearchTool`: Searches long-term memory (only if `memory_client` is configured)
+
+
+### CharacterLoader (Lightweight Alternative)
+
+`CharacterLoader` is a lightweight alternative to `CharacterService` that loads character settings from local files instead of a database. No database or external API is required — just plain markdown and JSON files.
+
+This is ideal when you want to quickly set up a character without infrastructure, or when you prefer to manage character definitions as files.
+
+#### Single file mode
+
+The simplest usage is to point to a single markdown file containing the system prompt:
+
+```python
+from aiavatar.character.loader import CharacterLoader
+
+loader = CharacterLoader("system_prompt.md")
+
+# Bind to LLM service
+loader.bind(adapter.sts.llm)
+```
+
+#### Directory mode
+
+For richer character definitions, use directory mode with `split_initial_messages=True`. Initial messages are prepended to the conversation history as pseudo user/assistant turns, allowing you to inject character knowledge (episodes, attributes, conversation examples) without overloading the system prompt. Point to a directory containing:
+
+```
+my_character/
+├── character.md                # Character settings (required with split_initial_messages)
+├── response_instructions.md    # Response rules (optional, appended to system prompt)
+├── message_templates.json      # Template definitions for initial messages
+├── episode.md                  # Character's past experiences (optional)
+├── attribute.md                # Likes, dislikes, personality traits (optional)
+└── conversation_example.md     # Example dialogues for tone reference (optional)
+```
+
+```python
+loader = CharacterLoader(
+    "my_character",
+    split_initial_messages=True,
+    lang="ja",
+    user_names={"user_001": "Alice"},
+    default_user_name="You"
+)
+
+loader.bind(adapter.sts.llm)
+```
+
+The `message_templates.json` defines how initial messages and self-introduction are structured:
+
+```json
+{
+    "initial_message_defs": {
+        "ja": {
+            "self_intro": "わかりました。{username}さんですね。",
+            "episode": "わかりました。",
+            "attribute": "わかりました。"
+        }
+    },
+    "prefixes": {
+        "ja": {
+            "episode": "以下はあなたの過去の経験です。\n\n",
+            "attribute": "以下はあなたの属性情報です。\n\n"
+        }
+    },
+    "self_intro_template": {
+        "ja": "$ユーザーの名前は{username}です。"
+    }
+}
+```
+
+#### Hot reload
+
+All files are cached with mtime-based invalidation. Edit any file while the application is running, and changes will be reflected on the next request — no restart needed.
+
+#### Custom user name resolution
+
+Use the `@loader.get_user_name` decorator to resolve user names dynamically (e.g., from a database or external service):
+
+```python
+@loader.get_user_name
+def get_user_name(user_id: str):
+    return db.get_username(user_id)
+```
+
+#### Custom message formatting
+
+Use the `@loader.format_messages` decorator to post-process initial messages before they are sent to the LLM:
+
+```python
+@loader.format_messages
+def format_messages(messages):
+    # Add timestamps, filter messages, etc.
+    return messages
+```
+
+#### Comparison with CharacterService
+
+| | CharacterLoader | CharacterService |
+|---|---|---|
+| Data source | Local files (`.md`, `.json`) | Database (SQLite / PostgreSQL) |
+| Dependencies | None (standard library only) | `openai`, database libraries |
+| Schedule / Diary generation | Not supported | Auto-generated via LLM |
+| Long-term memory | Not supported | Supported via MemoryClient |
+| Character tools | Not included | username update, diary, memory search |
+| Hot reload | Supported (mtime-based) | Not supported |
 
 
 ## 🧩 API
@@ -2663,6 +2769,33 @@ aiavatar_app.sts.invoke(STSRequest(
 Placeholders in the system prompt, such as `{name}`, will be replaced with the corresponding values at runtime.
 
 
+### 🎛️ Inline LLM Parameters
+
+When calling `LLMService.chat_stream` directly (outside the Speech-to-Speech pipeline), you can override model-specific parameters on a per-request basis using `inline_llm_params`.
+
+```python
+# Override model and temperature for a single call
+async for chunk in llm.chat_stream(
+    context_id="ctx_001",
+    user_id="user_001",
+    text="Hello!",
+    inline_llm_params={"model": "gpt-4.1-mini", "temperature": 0.0}
+):
+    print(chunk.text, end="", flush=True)
+```
+
+The key-value pairs in `inline_llm_params` are merged into the underlying API call parameters, so any parameter accepted by the provider's API can be specified. The exact keys depend on the LLM service:
+
+| Service | Example keys |
+|---|---|
+| ChatGPTService | `model`, `temperature`, `reasoning_effort`, ... |
+| ClaudeService | `model`, `temperature`, `max_tokens`, ... |
+| GeminiService | `model`, `config`, ... |
+| LiteLLMService | `model`, `temperature`, ... |
+
+For a practical example, see [Quick Response](#-quick-response) — `QuickResponder` uses `inline_llm_params` to disable tool calls and reasoning for fast first-response generation.
+
+
 ### ⏰ Timestamp Insertion
 
 You can insert timestamps into requests at regular intervals. This keeps AIAvatar responses anchored to real-world time.
@@ -2879,6 +3012,20 @@ async def on_before_llm(request: STSRequest):
 ```
 
 `QuickResponder` uses the pipeline's LLM to generate a brief phrase, synthesizes it with the pipeline's TTS (with caching), and sends it via `handle_response`. It then rewrites `request.text` so the main LLM response continues naturally without repeating the quick response.
+
+> **Note:** If the main LLM response occasionally includes the quick response content, adding few-shot examples to the initial messages can help stabilize the behavior. You can set them directly via `llm.initial_messages`, or use `CharacterLoader.format_messages` to extend the messages when using `CharacterLoader`.
+>
+> ```python
+> @character_loader.format_messages
+> def format_messages(messages):
+>     messages.append({"role": "user", "content": quick_responder.quick_response_prompt_prefix + "\n\nHello!"})
+>     messages.append({"role": "assistant", "content": "Hello!"})
+>     messages.append({"role": "user", "content": quick_responder.request_prefix + "\n\nHello!"})
+>     messages.append({"role": "assistant", "content": "<think>Respond warmly to the greeting.</think><answer>Hello! How can I help you today?</answer>"})
+>     messages.append({"role": "user", "content": "You repeated 'Hello!' which was already sent. Always continue from where the previous output left off."})
+>     messages.append({"role": "assistant", "content": "<think>Noted the mistake. Will not repeat already-sent text next time.</think><answer>Got it.</answer>"})
+>     return messages
+> ```
 
 
 ### 🎭 Custom Behavior
