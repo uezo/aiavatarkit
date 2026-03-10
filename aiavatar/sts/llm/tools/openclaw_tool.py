@@ -1,6 +1,8 @@
 import asyncio
 import logging
+from time import time
 from typing import Callable
+from uuid import uuid4
 import openai
 from .. import Tool
 
@@ -30,6 +32,7 @@ class OpenClawTool(Tool):
         )
         self.openclaw_session_key = openclaw_session_key
         self._on_openclaw_response = on_openclaw_response
+        self._on_openclaw_submitted = None
         self.immediate_message = immediate_message
         self.debug = debug
         # Hold references to background tasks to prevent GC from cancelling them mid-execution
@@ -55,6 +58,10 @@ class OpenClawTool(Tool):
             instruction,
             is_dynamic
         )
+
+    def on_openclaw_submitted(self, func: Callable):
+        self._on_openclaw_submitted = func
+        return func
 
     def on_openclaw_response(self, func: Callable):
         self._on_openclaw_response = func
@@ -85,10 +92,16 @@ class OpenClawTool(Tool):
 
     async def invoke_openclaw(self, query: str, metadata: dict = None):
         if self._on_openclaw_response:
-            task = asyncio.create_task(self._invoke_in_background(query, metadata or {}))
+            task_id = str(uuid4())
+            _metadata = metadata or {}
+            _metadata["task_id"] = task_id
+            _metadata["submitted_at"] = time()
+            if self._on_openclaw_submitted:
+                await self._on_openclaw_submitted(task_id, _metadata)
+            task = asyncio.create_task(self._invoke_in_background(query, _metadata))
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
-            return {"answer": self.immediate_message}
+            return {"answer": self.immediate_message, "task_id": task_id}
         else:
             try:
                 answer = await self._call_openclaw_api(query)
