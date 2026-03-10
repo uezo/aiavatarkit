@@ -3001,7 +3001,8 @@ from aiavatar.sts import QuickResponder, DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX_JA
 from aiavatar.sts.models import STSRequest
 
 quick_responder = QuickResponder(
-    pipeline=aiavatar_app.sts,
+    llm=llm,
+    tts=tts,
     quick_response_prompt_prefix=DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX_JA,
     request_prefix=DEFAULT_REQUEST_PREFIX_JA
 )
@@ -3011,7 +3012,7 @@ async def on_before_llm(request: STSRequest):
     await quick_responder.respond(request)
 ```
 
-`QuickResponder` uses the pipeline's LLM to generate a brief phrase, synthesizes it with the pipeline's TTS (with caching), and sends it via `handle_response`. It then rewrites `request.text` so the main LLM response continues naturally without repeating the quick response.
+`QuickResponder` uses the provided LLM to generate a brief phrase and synthesizes it with the provided TTS (with caching). The generated quick response is stored in the request and yielded by the pipeline as the first chunk. It then rewrites `request.text` so the main LLM response continues naturally without repeating the quick response.
 
 > **Note:** If the main LLM response occasionally includes the quick response content, adding few-shot examples to the initial messages can help stabilize the behavior. You can set them directly via `llm.initial_messages`, or use `CharacterLoader.format_messages` to extend the messages when using `CharacterLoader`.
 >
