@@ -154,6 +154,8 @@ You can also access the Admin Panel at http://127.0.0.1:8000/admin.
     - [⌛️ Tool Call with Streaming Progress](#%EF%B8%8F-tool-call-with-streaming-progress)
     - [🪄 Dynamic Tool Call](#-dynamic-tool-call)
     - [🔌 MCP](#-mcp)
+    - [🛠️ Built-in Tools](#️-built-in-tools)
+    - [🦞 OpenClaw](#-openclaw)
 
 - [🛡️ Guardrail](#%EF%B8%8F-guardrail)
 
@@ -2342,6 +2344,94 @@ from aiavatar.sts.llm.tools.nanobanana import NanoBananaSelfieTool
 selfie_tool = NanoBananaSelfieTool(gemini_api_key=GEMINI_API_KEY, reference_image=image_bytes_or_image_url_of_file_api)
 llm.add_tool(selfie_tool)
 ```
+
+
+### 🦞 OpenClaw
+
+`OpenClawTool` integrates [OpenClaw](https://openclaw.ai), a versatile AI agent, as a tool for your avatar. When the LLM determines that the user's request requires autonomous task execution (web search, data analysis, code execution, etc.), it delegates the task to OpenClaw.
+
+```python
+from aiavatar.sts.llm.tools.openclaw_tool import OpenClawTool
+openclaw_tool = OpenClawTool(
+    openclaw_api_key=OPENCLAW_API_KEY,
+    openclaw_base_url=OPENCLAW_BASE_URL,
+    openclaw_session_key="agent:main:main",
+    debug=True
+)
+llm.add_tool(openclaw_tool)
+```
+
+When `on_openclaw_response` is registered, OpenClaw runs asynchronously in the background — the avatar immediately acknowledges the request and notifies the user when the result is ready. The approach for delivering the result depends on your adapter.
+
+#### Push-based delivery (WebSocket / Local)
+
+For adapters that support server-initiated messages, use `on_openclaw_response` to push the result back through the pipeline:
+
+```python
+@openclaw_tool.on_openclaw_response
+async def on_openclaw_response(query: str, answer: str, metadata: dict):
+    user_id = metadata["user_id"]
+    context_id = metadata["context_id"]
+    session_id = aiavatar_app.get_session_by_user_id(user_id).id
+
+    async for resp in aiavatar_app.sts.invoke(
+        STSRequest(
+            session_id=session_id,
+            user_id=user_id,
+            context_id=context_id,
+            text=f"$OpenClaw has returned a response. Please relay the following to the user:\n\n{answer}",
+            wait_in_queue=True,
+            metadata={"skip_quick_response": True}
+        )
+    ):
+        await aiavatar_app.handle_response(resp)
+```
+
+#### Polling-based delivery (HTTP)
+
+For HTTP adapters where the SSE stream has already closed by the time the background task completes, store results in a buffer and let the client poll for them. `OpenClawTool` returns a `task_id` in its response for this purpose.
+
+Register callbacks to track task lifecycle:
+
+```python
+import time as time_module
+openclaw_task_results = {}
+OPENCLAW_TASK_TIMEOUT = 300  # 5 minutes
+
+@openclaw_tool.on_openclaw_submitted
+async def on_openclaw_submitted(task_id: str, metadata: dict):
+    openclaw_task_results[task_id] = {
+        "task_id": task_id,
+        "submitted_at": metadata.get("submitted_at", time_module.time()),
+        "answer": None,
+    }
+
+@openclaw_tool.on_openclaw_response
+async def on_openclaw_response(query: str, answer: str, metadata: dict):
+    task_id = metadata["task_id"]
+    openclaw_task_results[task_id]["answer"] = answer
+```
+
+Add a polling endpoint for the client to retrieve results:
+
+```python
+@app.get("/tasks/{task_id}")
+async def get_task_result(task_id: str):
+    result = openclaw_task_results.get(task_id)
+    if result is None:
+        return Response(status_code=204)
+    if result["answer"]:
+        openclaw_task_results.pop(task_id, None)
+        return {"task_id": task_id, "answer": result["answer"], "status": "completed"}
+    if time_module.time() - result["submitted_at"] > OPENCLAW_TASK_TIMEOUT:
+        openclaw_task_results.pop(task_id, None)
+        return {"task_id": task_id, "answer": None, "status": "timeout"}
+    return Response(status_code=204)
+```
+
+The client receives the `task_id` from the avatar's immediate response and polls `GET /tasks/{task_id}` until it gets a result (`status: "completed"`) or a timeout (`status: "timeout"`). A `204` response means the task is still in progress.
+
+Once the client retrieves the answer, it can send it back to the avatar as a new request, for example `f"$OpenClaw has returned a response. Please relay the following to the user:\n\n{answer}"`, to have the avatar speak the result aloud.
 
 
 ## 🧪 Evaluation
