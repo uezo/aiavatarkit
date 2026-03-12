@@ -85,6 +85,7 @@ class AIAvatarWebSocketServer(Adapter):
 
         # WebSocket processing
         response_audio_chunk_size: int = 0, # 0 = Send whole audio data at once
+        send_voiced: bool = False,
         # API server auth
         api_key: str = None,
         # Debug
@@ -171,6 +172,16 @@ class AIAvatarWebSocketServer(Adapter):
                         "VAD session audio state reset on accepted (barge_in_enabled=False): %s",
                         request.session_id
                     )
+
+        self.send_voiced = send_voiced
+
+        @self.sts.vad.on_voiced
+        async def on_voiced(session_id: str):
+            if self.send_voiced and session_id in self.websockets:
+                await self.send_response(AIAvatarResponse(
+                    type="voiced",
+                    session_id=session_id
+                ))
 
     def get_config(self) -> dict:
         return {
