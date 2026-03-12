@@ -1,11 +1,14 @@
 import asyncio
 import base64
 import logging
+from datetime import datetime
 from typing import Dict, Callable, Awaitable, Optional
 from fastapi import APIRouter, WebSocket, WebSocketException, status
 from ...sts.vad import SpeechDetector
 from ...sts.vad.stream import SileroStreamSpeechDetector
 from ...sts.stt import SpeechRecognizer
+from ...sts.voice_recorder import VoiceRecorder, RequestVoice
+from ...sts.voice_recorder.file import FileVoiceRecorder
 from .models import STTRequest, STTResponse
 
 logger = logging.getLogger(__name__)
@@ -36,12 +39,20 @@ class StreamSpeechRecognitionServer:
         vad: SpeechDetector,
         stt: SpeechRecognizer = None,
         api_key: str = None,
-        debug: bool = False
+        debug: bool = False,
+        voice_recorder: VoiceRecorder = None,
+        voice_recorder_enabled: bool = True,
+        voice_recorder_dir: str = "recorded_voices",
     ):
         self.vad = vad
         self.stt = stt
         self.api_key = api_key
         self.debug = debug
+        self.voice_recorder = voice_recorder or FileVoiceRecorder(
+            record_dir=voice_recorder_dir,
+            sample_rate=vad.sample_rate
+        )
+        self.voice_recorder_enabled = voice_recorder_enabled
 
         self.websockets: Dict[str, WebSocket] = {}
         self.sessions: Dict[str, SpeechRecognitionSessionData] = {}
@@ -84,6 +95,10 @@ class StreamSpeechRecognitionServer:
             # Stream VAD: send final result
             @self.vad.on_speech_detected
             async def on_speech_detected_stream(recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
+                if self.voice_recorder_enabled and recorded_data:
+                    transaction_id = f"{session_id}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+                    await self.voice_recorder.record(RequestVoice(transaction_id, recorded_data))
+
                 if session_id in self.websockets:
                     await self._send_response(STTResponse(
                         type="final",
@@ -107,6 +122,10 @@ class StreamSpeechRecognitionServer:
             # Non-stream VAD: batch recognition after speech ends
             @self.vad.on_speech_detected
             async def on_speech_detected_batch(recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
+                if self.voice_recorder_enabled and recorded_data:
+                    transaction_id = f"{session_id}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+                    await self.voice_recorder.record(RequestVoice(transaction_id, recorded_data))
+
                 if session_id not in self.websockets:
                     return
 
@@ -199,6 +218,10 @@ class StreamSpeechRecognitionServer:
             await self.vad.finalize_session(session_id)
         elif hasattr(self.vad, "delete_session"):
             self.vad.delete_session(session_id)
+
+    async def shutdown(self):
+        """Shutdown server and stop voice recorder."""
+        await self.voice_recorder.stop()
 
     def _authenticate_websocket(self, websocket: WebSocket) -> Optional[str]:
         """Authenticate WebSocket connection using Authorization header or Sec-WebSocket-Protocol.
