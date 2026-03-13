@@ -28,6 +28,7 @@ class ToolCallResult(BaseModel):
     data: Optional[dict] = None
     is_final: bool
     text: Optional[str] = None
+    task_id: Optional[str] = None
 
 
 class ToolCall(BaseModel):
