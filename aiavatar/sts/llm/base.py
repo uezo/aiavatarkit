@@ -4,17 +4,20 @@ import copy
 import inspect
 import logging
 import re
+from time import time
 from typing import AsyncGenerator, List, Dict, Any, Callable, Optional, Tuple, Literal
+from uuid import uuid4
 from .context_manager import ContextManager, SQLiteContextManager
 
 logger = logging.getLogger(__name__)
 
 
 class ToolCallResult:
-    def __init__(self, data: dict = None, is_final: bool = True, text: str = None):
+    def __init__(self, data: dict = None, is_final: bool = True, text: str = None, task_id: str = None):
         self.data = data or {}
         self.is_final = is_final
         self.text = text
+        self.task_id = task_id
 
 
 class ToolCall:
@@ -31,7 +34,10 @@ class ToolCall:
             "arguments": self.arguments,
         }
         if self.result:
-            d["result"] = {"data": self.result.data, "is_final": self.result.is_final}
+            result_dict = {"data": self.result.data, "is_final": self.result.is_final}
+            if self.result.task_id:
+                result_dict["task_id"] = self.result.task_id
+            d["result"] = result_dict
         return d
 
 
@@ -64,12 +70,26 @@ class LLMResponse:
 
 
 class Tool:
-    def __init__(self, name: str, spec: Dict[str, Any], func: Callable, instruction: str = None, is_dynamic: bool = False):
+    def __init__(self, name: str, spec: Dict[str, Any], func: Callable, instruction: str = None, is_dynamic: bool = False, immediate_message: str = "Accepted. You will be notified when the response is ready.", background_timeout: float = None):
         self.name = name
         self.spec = spec
         self.func = func
         self.instruction = instruction
         self.is_dynamic = is_dynamic
+        # Async (background) execution support
+        self._on_completed: Callable = None
+        self._on_submitted: Callable = None
+        self._background_tasks: set = set()
+        self.immediate_message = immediate_message
+        self.background_timeout = background_timeout
+
+    def on_completed(self, func: Callable):
+        self._on_completed = func
+        return func
+
+    def on_submitted(self, func: Callable):
+        self._on_submitted = func
+        return func
 
     def parse_spec(self, spec: Dict[str, Any]) -> Tuple[str, str, Dict[str, Any]]:
         if spec.get("type") == "function" and "function" in spec:
@@ -356,6 +376,53 @@ The list of tools is as follows:
         if "metadata" in inspect.signature(tool.func).parameters:
             arguments["metadata"] = metadata
 
+        # Background (async) execution path
+        if tool._on_completed:
+            task_id = str(uuid4())
+            _metadata = dict(metadata) if metadata else {}
+            _metadata["task_id"] = task_id
+            _metadata["submitted_at"] = time()
+            _metadata["arguments"] = {k: v for k, v in arguments.items() if k != "metadata"}
+
+            if tool._on_submitted:
+                await tool._on_submitted(task_id, _metadata)
+
+            tool_result = tool.func(**arguments)
+            if inspect.isawaitable(tool_result):
+                task = asyncio.ensure_future(tool_result)
+            else:
+                # Sync function: wrap result in a resolved future
+                f = asyncio.get_event_loop().create_future()
+                f.set_result(tool_result)
+                task = f
+
+            if tool.background_timeout and tool.background_timeout > 0:
+                # Try synchronous first, fallback to background on timeout
+                done, _ = await asyncio.wait({task}, timeout=tool.background_timeout)
+                if done:
+                    yield ToolCallResult(data=task.result())
+                    return
+
+            # Immediate background or timed-out: register callback and return
+            async def _wait_and_callback():
+                try:
+                    result = await task
+                    await tool._on_completed(result, _metadata)
+                except Exception:
+                    logger.exception(f"Error in background tool execution: {name}")
+                    await tool._on_completed(None, _metadata)
+
+            bg_task = asyncio.create_task(_wait_and_callback())
+            tool._background_tasks.add(bg_task)
+            bg_task.add_done_callback(tool._background_tasks.discard)
+
+            yield ToolCallResult(
+                data={"message": tool.immediate_message},
+                task_id=task_id
+            )
+            return
+
+        # Synchronous execution path
         tool_result = tool.func(**arguments)
         if inspect.isasyncgen(tool_result):
             async for r in tool_result:
@@ -370,7 +437,11 @@ The list of tools is as follows:
         elif isinstance(tool_result, ToolCallResult):
             yield tool_result
         else:
-            yield ToolCallResult(data=await tool_result)
+            result = await tool_result
+            if isinstance(result, ToolCallResult):
+                yield result
+            else:
+                yield ToolCallResult(data=result)
 
     async def apply_guardrails(self, applies_to: Literal["request", "response"], context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> GuardrailRespose:
         guardrails = [gr for gr in self.guardrails if gr.applies_to in (applies_to, "both")]

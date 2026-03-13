@@ -1,8 +1,4 @@
-import asyncio
 import logging
-from time import time
-from typing import Callable
-from uuid import uuid4
 import openai
 from .. import Tool
 
@@ -16,7 +12,6 @@ class OpenClawTool(Tool):
         openclaw_api_key: str,
         openclaw_base_url: str = None,
         openclaw_session_key: str = None,
-        on_openclaw_response: Callable = None,
         immediate_message: str = "Accepted. You will be notified when the response is ready.",
         timeout: int = 30000,
         name=None,
@@ -31,12 +26,7 @@ class OpenClawTool(Tool):
             timeout=timeout
         )
         self.openclaw_session_key = openclaw_session_key
-        self._on_openclaw_response = on_openclaw_response
-        self._on_openclaw_submitted = None
-        self.immediate_message = immediate_message
         self.debug = debug
-        # Hold references to background tasks to prevent GC from cancelling them mid-execution
-        self._background_tasks: set = set()
 
         super().__init__(
             name or "send_query_to_openclaw",
@@ -56,16 +46,9 @@ class OpenClawTool(Tool):
             },
             self.invoke_openclaw,
             instruction,
-            is_dynamic
+            is_dynamic,
+            immediate_message=immediate_message
         )
-
-    def on_openclaw_submitted(self, func: Callable):
-        self._on_openclaw_submitted = func
-        return func
-
-    def on_openclaw_response(self, func: Callable):
-        self._on_openclaw_response = func
-        return func
 
     async def _call_openclaw_api(self, query: str) -> str:
         if self.debug:
@@ -82,30 +65,10 @@ class OpenClawTool(Tool):
             logger.info(f"Response from OpenClaw: {answer}")
         return answer
 
-    async def _invoke_in_background(self, query: str, metadata: dict):
+    async def invoke_openclaw(self, query: str, metadata: dict = None):
         try:
             answer = await self._call_openclaw_api(query)
-            await self._on_openclaw_response(query, answer, metadata)
+            return {"answer": answer}
         except Exception:
-            logger.exception("Error at invoke_openclaw (background)")
-            await self._on_openclaw_response(query, "Error", metadata)
-
-    async def invoke_openclaw(self, query: str, metadata: dict = None):
-        if self._on_openclaw_response:
-            task_id = str(uuid4())
-            _metadata = metadata or {}
-            _metadata["task_id"] = task_id
-            _metadata["submitted_at"] = time()
-            if self._on_openclaw_submitted:
-                await self._on_openclaw_submitted(task_id, _metadata)
-            task = asyncio.create_task(self._invoke_in_background(query, _metadata))
-            self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
-            return {"answer": self.immediate_message, "task_id": task_id}
-        else:
-            try:
-                answer = await self._call_openclaw_api(query)
-                return {"answer": answer}
-            except Exception:
-                logger.exception("Error at invoke_openclaw")
-                return {"answer": "Error"}
+            logger.exception("Error at invoke_openclaw")
+            return {"answer": "Error"}

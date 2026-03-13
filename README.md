@@ -2109,6 +2109,106 @@ async def get_weather_stream(location: str):
 When you yield a string (str) value, the AI avatar will speak that text while continuing to process the request.
 
 
+### 🔄 Background Tool Execution
+
+For tools that take a long time to complete (e.g., AI agent calls, complex API orchestrations), AIAvatarKit supports **background execution**. Instead of blocking the conversation, the avatar immediately acknowledges the request and notifies the user when the result is ready via a callback.
+
+To enable background execution, register an `on_completed` callback on the tool. This is the only requirement — the base `Tool` class handles task management, `task_id` generation, and metadata tracking automatically.
+
+```python
+from aiavatar.sts.llm import Tool
+
+# Define tool as usual
+heavy_task_spec = {
+    "type": "function",
+    "function": {
+        "name": "run_heavy_task",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"}
+            },
+            "required": ["query"]
+        },
+    }
+}
+
+async def run_heavy_task(query: str, metadata: dict = None):
+    result = await some_slow_api(query)  # Takes a long time
+    return {"answer": result}
+
+tool = Tool("run_heavy_task", heavy_task_spec, run_heavy_task)
+
+# Enable background execution by registering on_completed callback
+@tool.on_completed
+async def on_completed(result, metadata):
+    # result: return value from the tool function (or None on error)
+    # metadata: dict containing task_id, user_id, context_id, submitted_at, arguments, etc.
+    answer = result["answer"]
+    user_id = metadata["user_id"]
+    context_id = metadata["context_id"]
+    session_id = aiavatar_app.get_session_by_user_id(user_id).id
+
+    async for resp in aiavatar_app.sts.invoke(
+        STSRequest(
+            session_id=session_id,
+            user_id=user_id,
+            context_id=context_id,
+            text=f"Here is the result of the task:\n\n{answer}",
+            wait_in_queue=True,
+            metadata={"skip_quick_response": True}
+        )
+    ):
+        await aiavatar_app.handle_response(resp)
+
+llm.add_tool(tool)
+```
+
+When background execution is enabled:
+
+1. The tool function is called and runs in the background as an `asyncio.Task`
+2. The avatar immediately responds with `immediate_message` (customizable) and a `task_id`
+3. When the function completes, `on_completed` is called with the result and metadata
+
+You can customize the immediate message:
+
+```python
+tool = Tool(
+    "run_heavy_task", heavy_task_spec, run_heavy_task,
+    immediate_message="Got it! I'll work on that and let you know when it's done."
+)
+```
+
+Optionally, register an `on_submitted` callback to be notified when the task is accepted:
+
+```python
+@tool.on_submitted
+async def on_submitted(task_id, metadata):
+    print(f"Task {task_id} submitted")
+```
+
+#### Background Timeout (Hybrid Mode)
+
+Sometimes a tool *might* complete quickly but *could* take a long time. With `background_timeout`, AIAvatarKit tries synchronous execution first and falls back to background execution only if the timeout is exceeded.
+
+```python
+tool = Tool(
+    "run_task", task_spec, run_task,
+    background_timeout=3.0  # Try sync for 3 seconds, then go background
+)
+
+@tool.on_completed
+async def on_completed(result, metadata):
+    # Called only when the task didn't complete within the timeout
+    print(f"Background result: {result}")
+```
+
+- If the tool completes within `background_timeout` seconds → result is returned directly (same as synchronous mode)
+- If the tool exceeds the timeout → switches to background mode, returns `immediate_message`, and calls `on_completed` when done
+
+**Note**: `on_completed` (background execution) and `AsyncGenerator` (streaming progress) are mutually exclusive. A tool should use one pattern or the other.
+
+
 ### 🪄 Dynamic Tool Call
 
 AIAvatarKit supports **dynamic Tool Calls**.
@@ -2361,15 +2461,16 @@ openclaw_tool = OpenClawTool(
 llm.add_tool(openclaw_tool)
 ```
 
-When `on_openclaw_response` is registered, OpenClaw runs asynchronously in the background — the avatar immediately acknowledges the request and notifies the user when the result is ready. The approach for delivering the result depends on your adapter.
+When `on_completed` is registered, OpenClaw runs asynchronously in the background — the avatar immediately acknowledges the request and notifies the user when the result is ready. The approach for delivering the result depends on your adapter.
 
 #### Push-based delivery (WebSocket / Local)
 
-For adapters that support server-initiated messages, use `on_openclaw_response` to push the result back through the pipeline:
+For adapters that support server-initiated messages, use `on_completed` to push the result back through the pipeline:
 
 ```python
-@openclaw_tool.on_openclaw_response
-async def on_openclaw_response(query: str, answer: str, metadata: dict):
+@openclaw_tool.on_completed
+async def on_completed(result, metadata):
+    answer = result["answer"]
     user_id = metadata["user_id"]
     context_id = metadata["context_id"]
     session_id = aiavatar_app.get_session_by_user_id(user_id).id
@@ -2389,27 +2490,27 @@ async def on_openclaw_response(query: str, answer: str, metadata: dict):
 
 #### Polling-based delivery (HTTP)
 
-For HTTP adapters where the SSE stream has already closed by the time the background task completes, store results in a buffer and let the client poll for them. `OpenClawTool` returns a `task_id` in its response for this purpose.
+For HTTP adapters where the SSE stream has already closed by the time the background task completes, store results in a buffer and let the client poll for them. The tool returns a `task_id` in its response for this purpose.
 
 Register callbacks to track task lifecycle:
 
 ```python
 import time as time_module
-openclaw_task_results = {}
-OPENCLAW_TASK_TIMEOUT = 300  # 5 minutes
+task_results = {}
+TASK_TIMEOUT = 300  # 5 minutes
 
-@openclaw_tool.on_openclaw_submitted
-async def on_openclaw_submitted(task_id: str, metadata: dict):
-    openclaw_task_results[task_id] = {
+@openclaw_tool.on_submitted
+async def on_submitted(task_id: str, metadata: dict):
+    task_results[task_id] = {
         "task_id": task_id,
         "submitted_at": metadata.get("submitted_at", time_module.time()),
         "answer": None,
     }
 
-@openclaw_tool.on_openclaw_response
-async def on_openclaw_response(query: str, answer: str, metadata: dict):
+@openclaw_tool.on_completed
+async def on_completed(result, metadata):
     task_id = metadata["task_id"]
-    openclaw_task_results[task_id]["answer"] = answer
+    task_results[task_id]["answer"] = result["answer"]
 ```
 
 Add a polling endpoint for the client to retrieve results:
@@ -2417,14 +2518,14 @@ Add a polling endpoint for the client to retrieve results:
 ```python
 @app.get("/tasks/{task_id}")
 async def get_task_result(task_id: str):
-    result = openclaw_task_results.get(task_id)
+    result = task_results.get(task_id)
     if result is None:
         return Response(status_code=204)
     if result["answer"]:
-        openclaw_task_results.pop(task_id, None)
+        task_results.pop(task_id, None)
         return {"task_id": task_id, "answer": result["answer"], "status": "completed"}
-    if time_module.time() - result["submitted_at"] > OPENCLAW_TASK_TIMEOUT:
-        openclaw_task_results.pop(task_id, None)
+    if time_module.time() - result["submitted_at"] > TASK_TIMEOUT:
+        task_results.pop(task_id, None)
         return {"task_id": task_id, "answer": None, "status": "timeout"}
     return Response(status_code=204)
 ```
