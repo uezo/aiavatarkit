@@ -107,6 +107,9 @@ class QuickResponder:
             return await self._generate_from_llm(request)
 
     async def respond(self, request: STSRequest):
+        if request.skip_quick_response:
+            return
+
         # Generate quick response
         qr_text, qr_voice_text, qr_voice = await self._generate(request)
 

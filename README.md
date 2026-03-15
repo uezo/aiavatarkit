@@ -2156,7 +2156,7 @@ async def on_completed(result, metadata):
             context_id=context_id,
             text=f"Here is the result of the task:\n\n{answer}",
             wait_in_queue=True,
-            metadata={"skip_quick_response": True}
+            skip_quick_response=True,
         )
     ):
         await aiavatar_app.handle_response(resp)
@@ -2482,7 +2482,7 @@ async def on_completed(result, metadata):
             context_id=context_id,
             text=f"$OpenClaw has returned a response. Please relay the following to the user:\n\n{answer}",
             wait_in_queue=True,
-            metadata={"skip_quick_response": True}
+            skip_quick_response=True,
         )
     ):
         await aiavatar_app.handle_response(resp)

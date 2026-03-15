@@ -95,6 +95,9 @@ class QuickResponderPro:
     # -- Public API --
 
     async def respond(self, request: STSRequest):
+        if request.skip_quick_response:
+            return
+
         qr_text, qr_voice_text, qr_voice = await self._generate(request)
 
         request.quick_response_text = qr_text
