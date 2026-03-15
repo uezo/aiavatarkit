@@ -1616,6 +1616,9 @@
         if (savedCharName) ui.speakerLabelAI = savedCharName;
         if (savedUserName) ui.speakerLabelUser = savedUserName;
 
+        // Console helper: chat("Hello.") or chat("What's this?", imageDataUrl)
+        window.chat = (text, imageDataUrl) => aiavatar.chat(ui.sessionId, ui.userId, text, imageDataUrl);
+
         // Typewriter effect for AI messages
         let twFullText = '';
         let twDisplayedLen = 0;

@@ -28,6 +28,7 @@ class AIAvatarClient {
         this._userMuted = false;
         this.volume = 1.0;
         this.gainNode = null;
+        this.chatContextId = null;
     }
 
     async startListening(sessionId, userId) {
@@ -42,6 +43,7 @@ class AIAvatarClient {
                 type: "start",
                 session_id: sessionId,
                 user_id: userId,
+                // Do not send context_id here; the server manages it via the session for voice conversations
                 context_id: null,
                 metadata
             };
@@ -53,6 +55,9 @@ class AIAvatarClient {
                 const msg = JSON.parse(event.data);
                 this.onResponseReceived(msg);
                 if (msg.type === "start" || msg.type === "chunk") {
+                    if (msg.type === "start" && msg.context_id) {
+                        this.chatContextId = msg.context_id;
+                    }
                     this.messageQueue.push(msg);
                     if (!this.processingQueue) this.processQueue();
                 } else if (msg.type === "connected") {
@@ -265,6 +270,22 @@ class AIAvatarClient {
         if (this.gainNode) {
             this.gainNode.gain.value = this.volume;
         }
+    }
+
+    chat(sessionId, userId, text, imageDataUrl) {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+        const msg = {
+            type: "invoke",
+            session_id: sessionId,
+            user_id: userId,
+            context_id: this.chatContextId,
+            text: text,
+        };
+        if (imageDataUrl) {
+            msg.files = [{ url: imageDataUrl }];
+        }
+        this.ws.send(JSON.stringify(msg));
+        return true;
     }
 
     sendConfig(sessionId, metadata) {
