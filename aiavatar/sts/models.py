@@ -21,6 +21,7 @@ class STSRequest:
     quick_response_text: str = None
     quick_response_voice_text: str = None
     quick_response_audio: bytes = None
+    skip_quick_response: bool = False
     metadata: Dict[str, Any] = None
 
 
