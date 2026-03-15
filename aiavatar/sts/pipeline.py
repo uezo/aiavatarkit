@@ -195,10 +195,10 @@ class STSPipeline:
         self.voice_recorder_response_audio_format = "wav"
 
         # User custom logic
-        self._on_before_llm = self.on_before_llm_default
-        self._on_before_tts = self.on_before_tts_default
-        self._on_accepted = self.on_accepted_default
-        self._on_finish = self.on_finish_default
+        self._on_before_llm_handlers = []
+        self._on_before_tts_handlers = []
+        self._on_accepted_handlers = []
+        self._on_finish_handlers = []
 
         # Queue management for invoke_queued
         self._request_queues: dict[str, asyncio.Queue] = {}
@@ -243,32 +243,20 @@ class STSPipeline:
         return func
 
     def on_before_llm(self, func):
-        self._on_before_llm = func
+        self._on_before_llm_handlers.append(func)
         return func
 
     def on_before_tts(self, func):
-        self._on_before_tts = func
+        self._on_before_tts_handlers.append(func)
         return func
 
     def on_accepted(self, func):
-        self._on_accepted = func
+        self._on_accepted_handlers.append(func)
         return func
-    
+
     def on_finish(self, func):
-        self._on_finish = func
+        self._on_finish_handlers.append(func)
         return func
-
-    async def on_before_llm_default(self, request: STSRequest):
-        pass
-
-    async def on_before_tts_default(self, request: STSRequest):
-        pass
-
-    async def on_accepted_default(self, request: STSRequest):
-        pass
-
-    async def on_finish_default(self, request: STSRequest, response: STSResponse):
-        pass
 
     async def process_audio_samples(self, samples: bytes, context_id: str):
         await self.vad.process_samples(samples, context_id)
@@ -328,7 +316,8 @@ class STSPipeline:
                 session_id=request.session_id,
                 metadata={"block_barge_in": request.block_barge_in}
             )))
-            await self._on_accepted(request)
+            for handler in self._on_accepted_handlers:
+                await handler(request)
 
             start_time = time()
             transaction_id = str(uuid4())
@@ -451,7 +440,8 @@ class STSPipeline:
             )
 
             # LLM
-            await self._on_before_llm(request)
+            for handler in self._on_before_llm_handlers:
+                await handler(request)
             performance.before_llm_time = time() - start_time
             performance.quick_response_text = request.quick_response_text
 
@@ -497,7 +487,8 @@ class STSPipeline:
                         performance.response_voice_text = voice_text
                         if performance.llm_first_voice_chunk_time == 0:
                             performance.llm_first_voice_chunk_time = time() - start_time
-                            await self._on_before_tts(request)
+                            for handler in self._on_before_tts_handlers:
+                                await handler(request)
                     performance.llm_time = time() - start_time
 
                     # Parse language
@@ -597,7 +588,8 @@ class STSPipeline:
                 await self.voice_recorder.record(ResponseVoices(
                     transaction_id, response_audios, self.voice_recorder_response_audio_format
                 ))
-            await self._on_finish(request, final_response)
+            for handler in self._on_finish_handlers:
+                await handler(request, final_response)
             yield final_response
         
         except Exception as iex:
