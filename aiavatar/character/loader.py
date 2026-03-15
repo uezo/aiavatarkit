@@ -142,16 +142,26 @@ class CharacterLoader:
 
         return self._initial_messages
 
-    # --- Sync wrappers (for use outside an event loop) ---
+    # --- Sync wrappers (safe to call with or without a running event loop) ---
+
+    def _run_sync(self, coro):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+        # Already in an event loop; run in a new thread to avoid conflict
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(1) as pool:
+            return pool.submit(asyncio.run, coro).result()
 
     def read_sync(self, filename: str) -> str:
-        return asyncio.run(self.read(filename))
+        return self._run_sync(self.read(filename))
 
     def get_system_prompt_sync(self) -> str:
-        return asyncio.run(self.get_system_prompt())
+        return self._run_sync(self.get_system_prompt())
 
     def get_initial_messages_sync(self) -> List[Dict[str, str]]:
-        return asyncio.run(self.get_initial_messages())
+        return self._run_sync(self.get_initial_messages())
 
     def _get_user_name_default(self, user_id: str) -> Optional[str]:
         return self.user_names.get(user_id) or self.default_user_name
