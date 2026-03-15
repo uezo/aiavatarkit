@@ -3219,6 +3219,87 @@ async def on_before_llm(request: STSRequest):
 >     return messages
 > ```
 
+#### QuickResponderPro
+
+`QuickResponderPro` is a performance-tuned variant that bypasses `LLMService` and calls the OpenAI-compatible API directly with `stream=False`. It manages its own context through a dedicated `ContextManager`, cleans conversation history for few-shot learning, and supports a custom system prompt — giving you full control over how quick responses are generated.
+
+```python
+from aiavatar.sts.quick_responder.pro import QuickResponderPro, DEFAULT_QRP_SYSTEM_PROMPT_JA
+from aiavatar.sts.llm.context_manager.postgres import PostgreSQLContextManager
+from aiavatar.sts.models import STSRequest
+
+quick_responder_pro = QuickResponderPro(
+    api_key="YOUR_OPENAI_API_KEY",
+    model="gpt-4.1-nano",
+    tts=tts,
+    context_manager=PostgreSQLContextManager(get_pool=pool_provider.get_pool),
+    language="ja",
+    system_prompt=DEFAULT_QRP_SYSTEM_PROMPT_JA + "\n\n# Character\nYour character description here.",
+    timeout=1.5,
+)
+
+@aiavatar_app.sts.on_before_llm
+async def on_before_llm(request: STSRequest):
+    await quick_responder_pro.respond(request)
+```
+
+**How it works:**
+
+1. Builds messages from system prompt + cleaned history + user utterance
+2. Calls the API with `stream=False` for minimum latency
+3. Synthesizes the response with TTS (with caching)
+4. Saves the exchange to history in `<think>...</think><answer>...</answer>` format
+5. Rewrites `request.text` with a deduplication prefix so the main LLM continues naturally
+
+**History cleaning:** When reading back conversation history, `QuickResponderPro` automatically cleans it for the QR context:
+- **Quick response turns** (prompt_prefix) — kept as-is, serving as few-shot examples
+- **Main LLM turns** (request_prefix) — replaced with a short continuation message to avoid confusing duplicate utterances
+- **Assistant content** — `<think>`/`<answer>` tags and `[control:tags]` are stripped to plain text
+
+**Azure OpenAI / Custom client:** You can pass a pre-configured client instead of `api_key`/`base_url`:
+
+```python
+from openai import AsyncAzureOpenAI
+
+quick_responder_pro = QuickResponderPro(
+    client=AsyncAzureOpenAI(
+        api_key="YOUR_AZURE_API_KEY",
+        api_version="2025-01-01-preview",
+        azure_endpoint="https://your-resource.openai.azure.com/openai/deployments/your-deployment/chat/completions?api-version=2025-01-01-preview"
+    ),
+    model="your-deployment-name",
+    tts=tts,
+    context_manager=context_manager,
+)
+```
+
+**extra_body:** For providers that require additional request parameters (e.g. disabling thinking for Claude):
+
+```python
+quick_responder_pro = QuickResponderPro(
+    api_key="YOUR_ANTHROPIC_API_KEY",
+    base_url="https://api.anthropic.com/v1/",
+    model="claude-haiku-4-5",
+    extra_body={"thinking": {"type": "disabled"}},
+    tts=tts,
+    context_manager=context_manager,
+)
+```
+
+> **Note:** As with `QuickResponder`, adding few-shot examples to the main LLM's initial messages helps prevent the main response from repeating the quick response. Use `CharacterLoader.format_messages` or set `llm.initial_messages` directly:
+>
+> ```python
+> @character_loader.format_messages
+> def format_messages(messages):
+>     messages.append({"role": "user", "content": quick_responder_pro.prompt_prefix + "\n\nHello!"})
+>     messages.append({"role": "assistant", "content": f"<think>{quick_responder_pro.think_tag_content}</think><answer>Hello!</answer>"})
+>     messages.append({"role": "user", "content": quick_responder_pro.request_prefix.format(quick_response_text="Hello!") + "\n\nHello!"})
+>     messages.append({"role": "assistant", "content": "<think>Respond warmly to the greeting.</think><answer>How can I help you today?</answer>"})
+>     messages.append({"role": "user", "content": "You repeated 'Hello!' which was already sent. Always continue from where the previous output left off."})
+>     messages.append({"role": "assistant", "content": "<think>Noted the mistake. Will not repeat already-sent text next time.</think><answer>Got it.</answer>"})
+>     return messages
+> ```
+
 
 ### 🎭 Custom Behavior
 
