@@ -181,6 +181,9 @@
             // Common handling
             ui.handleResponse(response);
         }
+
+        // Console helper: chat("Hello.") or chat("What's this?", imageDataUrl)
+        window.chat = (text, imageDataUrl) => aiavatar.chat(ui.sessionId, ui.userId, text, imageDataUrl);
     </script>
 </body>
 
