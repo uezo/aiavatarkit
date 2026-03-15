@@ -3,10 +3,10 @@ import logging
 import random
 from time import time
 from typing import Dict, List
-from .pipeline import STSPipeline
-from .models import STSRequest
-from .llm import LLMService
-from .tts import SpeechSynthesizer
+from ..pipeline import STSPipeline
+from ..models import STSRequest
+from ..llm import LLMService
+from ..tts import SpeechSynthesizer
 
 DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX = "$The following is the user's utterance. Respond with a very short phrase of no more than 5 words that serves as an appropriate opening acknowledgment. The phrase must end with punctuation such as a period, comma, or exclamation mark. For this output only, do not use tag formats like <think> or <answer>—output only the phrase."
 DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX_JA = "$以下はユーザーの発話内容である。ユーザー発話を受け止めて、第一声として相応しい、10文字以内のごく短いフレーズを出力せよ。応答の末尾は「。」や「、」句読点や感嘆符とする。この出力に限っては<think>や<answer>のタグフォーマットは不要で、フレーズのみを出力すること。"
