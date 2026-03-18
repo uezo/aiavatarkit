@@ -83,6 +83,7 @@ class QuickResponderPro:
         self.history_limit = history_limit
         self.debug = debug
         self.voice_cache = {}
+        self._pending_generation_tasks: Dict[str, asyncio.Task] = {}
 
         is_ja = language in ("ja", "ja-JP") if language else False
         self.system_prompt = system_prompt or (DEFAULT_QRP_SYSTEM_PROMPT_JA if is_ja else DEFAULT_QRP_SYSTEM_PROMPT)
@@ -98,25 +99,77 @@ class QuickResponderPro:
         if request.skip_quick_response:
             return
 
-        qr_text, qr_voice_text, qr_voice = await self._generate(request)
+        # Check for pending generation task result
+        pending_task = self._pending_generation_tasks.pop(request.session_id, None)
+
+        if pending_task and not pending_task.cancelled():
+            try:
+                qr_text, qr_voice_text, qr_voice = await pending_task
+            except (asyncio.CancelledError, Exception):
+                qr_text, qr_voice_text, qr_voice = await self._generate(request.text, request.context_id)
+        else:
+            qr_text, qr_voice_text, qr_voice = await self._generate(request.text, request.context_id)
 
         request.quick_response_text = qr_text
         request.quick_response_voice_text = qr_voice_text
         request.quick_response_audio = qr_voice
 
+        # Save history only after turn-end confirmation, using final request text
+        await self.save_history(request.context_id, request.text, qr_text)
+
         prefix = self.request_prefix.format(quick_response_text=qr_text)
         request.text = f"{prefix}\n\n{request.text}"
+
+    async def generate(self, text: str, context_id: str):
+        """Generate quick response without side effects (no history saving).
+
+        Can be used for speculative generation. Call save_history() separately
+        to persist the result after confirmation.
+        """
+        return await self._generate(text, context_id)
+
+    async def save_history(self, context_id: str, text: str, qr_text: str):
+        """Save quick response interaction to history."""
+        user_content = f"{self.prompt_prefix}\n\n{text}" if self.prompt_prefix else text
+        await self.context_manager.add_histories(
+            context_id,
+            [
+                {"role": "user", "content": user_content},
+                {"role": "assistant", "content": f"<think>{self.think_tag_content}</think><answer>{qr_text}</answer>"},
+            ],
+            "quick_responder"
+        )
+
+    async def create_generation_task(self, text: str, session_id: str, context_id: str):
+        """Create a background generation task for the session.
+
+        Cancels any existing pending task for the session before creating
+        a new one. The result is consumed by respond() if available.
+        """
+        self.cancel_generation_task(session_id)
+
+        if not context_id or not text:
+            return
+
+        task = asyncio.create_task(self.generate(text, context_id))
+        self._pending_generation_tasks[session_id] = task
+
+    def cancel_generation_task(self, session_id: str):
+        """Cancel pending generation task for a session."""
+        task = self._pending_generation_tasks.pop(session_id, None)
+        if task and not task.done():
+            task.cancel()
 
     def clear_voice_cache(self):
         self.voice_cache.clear()
 
     # -- Generation --
 
-    async def _generate(self, request: STSRequest):
+    async def _generate(self, text: str, context_id: str):
         if self.timeout and self.timeout > 0:
             try:
                 return await asyncio.wait_for(
-                    self._generate_from_llm(request),
+                    self._generate_from_llm(text, context_id),
                     timeout=self.timeout
                 )
             except asyncio.TimeoutError:
@@ -124,14 +177,14 @@ class QuickResponderPro:
                     logger.warning(f"Quick response timed out ({self.timeout}s), using fallback")
                 return await self._generate_fallback()
         else:
-            return await self._generate_from_llm(request)
+            return await self._generate_from_llm(text, context_id)
 
-    async def _generate_from_llm(self, request: STSRequest):
+    async def _generate_from_llm(self, text: str, context_id: str):
         start_time = time()
 
         messages = [{"role": "system", "content": self.system_prompt}]
-        messages.extend(await self._get_clean_histories(request.context_id))
-        user_content = f"{self.prompt_prefix}\n\n{request.text}" if self.prompt_prefix else request.text
+        messages.extend(await self._get_clean_histories(context_id))
+        user_content = f"{self.prompt_prefix}\n\n{text}" if self.prompt_prefix else text
         messages.append({"role": "user", "content": user_content})
 
         params = {
@@ -158,18 +211,6 @@ class QuickResponderPro:
         if self.debug:
             total_time = time() - start_time
             logger.info(f"Quick response: {qr_text} ({total_time:.3f}s = LLM {llm_time:.3f}s + TTS {tts_time:.3f}s)")
-
-        # Save to history:
-        #   user    -> "{prompt_prefix}\n\n{text}"  (kept as-is when read back for few-shot)
-        #   assistant -> "<think>...</think><answer>{qr_text}</answer>"  (tags stripped when read back)
-        await self.context_manager.add_histories(
-            request.context_id,
-            [
-                {"role": "user", "content": user_content},
-                {"role": "assistant", "content": f"<think>{self.think_tag_content}</think><answer>{qr_text}</answer>"},
-            ],
-            "quick_responder"
-        )
 
         return qr_text, qr_text, qr_voice
 

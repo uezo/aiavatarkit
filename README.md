@@ -3248,8 +3248,21 @@ async def on_before_llm(request: STSRequest):
 1. Builds messages from system prompt + cleaned history + user utterance
 2. Calls the API with `stream=False` for minimum latency
 3. Synthesizes the response with TTS (with caching)
-4. Saves the exchange to history in `<think>...</think><answer>...</answer>` format
-5. Rewrites `request.text` with a deduplication prefix so the main LLM continues naturally
+4. Rewrites `request.text` with a deduplication prefix so the main LLM continues naturally
+
+**Pre-generation during silence:** When using `SileroStreamSpeechDetector`, you can start generating the quick response during the segment silence period — before turn-end is confirmed. This overlaps LLM + TTS work with the remaining silence wait, noticeably reducing perceived latency.
+
+```python
+@vad.on_speech_detecting
+async def on_speech_detecting(text, vad_session):
+    await quick_responder_pro.create_generation_task(
+        text,
+        vad_session.session_id,
+        vad_session.data.get("context_id")
+    )
+```
+
+If the user resumes speaking, the pending task is automatically cancelled and a new one starts. If the user stays silent and turn-end is confirmed, `respond()` picks up the pre-generated result instead of generating from scratch.
 
 **History cleaning:** When reading back conversation history, `QuickResponderPro` automatically cleans it for the QR context:
 - **Quick response turns** (prompt_prefix) — kept as-is, serving as few-shot examples

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import tempfile
@@ -280,10 +281,10 @@ async def test_voice_cache():
     qrp = make_qrp()
     request = make_request()
 
-    text1, _, voice1 = await qrp._generate(request)
+    text1, _, voice1 = await qrp._generate(request.text, request.context_id)
     assert text1 in qrp.voice_cache
 
-    text2, _, voice2 = await qrp._generate(request)
+    text2, _, voice2 = await qrp._generate(request.text, request.context_id)
     if text1 == text2:
         assert voice1 == voice2
 
@@ -314,10 +315,10 @@ async def test_fallback_voice_cache():
     qrp = make_qrp(timeout=0.001, fallback_phrases=fallback)
     request = make_request()
 
-    _, _, voice1 = await qrp._generate(request)
+    _, _, voice1 = await qrp._generate(request.text, request.context_id)
     assert "キャッシュテスト。" in qrp.voice_cache
 
-    _, _, voice2 = await qrp._generate(request)
+    _, _, voice2 = await qrp._generate(request.text, request.context_id)
     assert voice1 == voice2
 
     await qrp.tts.close()
@@ -388,3 +389,128 @@ async def test_pipeline_integration():
 
     await pipeline.shutdown()
     await pipeline.tts.close()
+
+
+# -- generate (no side effects) --
+
+@pytest.mark.asyncio
+async def test_generate_no_history():
+    """generate() should not save history."""
+    qrp = make_qrp()
+    context_id = f"test_gen_ctx_{uuid4()}"
+
+    qr_text, qr_voice_text, qr_voice = await qrp.generate("こんにちは", context_id)
+
+    assert qr_text
+    assert qr_voice_text
+    assert qr_voice and len(qr_voice) > 0
+
+    # No history should be saved
+    histories = await qrp.context_manager.get_histories(context_id)
+    assert len(histories) == 0
+
+    await qrp.tts.close()
+
+
+# -- save_history --
+
+@pytest.mark.asyncio
+async def test_save_history():
+    """save_history() should persist to context_manager."""
+    qrp = make_qrp()
+    context_id = f"test_hist_ctx_{uuid4()}"
+
+    await qrp.save_history(context_id, "ユーザーの発話", "はい。")
+
+    histories = await qrp.context_manager.get_histories(context_id)
+    assert len(histories) == 2
+    assert histories[0]["role"] == "user"
+    assert qrp.prompt_prefix in histories[0]["content"]
+    assert "ユーザーの発話" in histories[0]["content"]
+    assert "<think>" in histories[1]["content"]
+    assert "<answer>はい。</answer>" in histories[1]["content"]
+
+
+# -- cancel_generation_task --
+
+@pytest.mark.asyncio
+async def test_cancel_generation_task_cancels_running_task():
+    """cancel_generation_task() should cancel a running task."""
+    qrp = make_qrp()
+
+    async def slow_task():
+        await asyncio.sleep(10)
+        return "should not reach", "should not reach", b""
+
+    task = asyncio.create_task(slow_task())
+    qrp._pending_generation_tasks["session_1"] = task
+
+    qrp.cancel_generation_task("session_1")
+
+    # Allow event loop to process the cancellation
+    await asyncio.sleep(0)
+    assert task.cancelled()
+    assert "session_1" not in qrp._pending_generation_tasks
+
+
+def test_cancel_generation_task_no_task():
+    """cancel_generation_task() should be safe when no task exists."""
+    qrp = make_qrp()
+    qrp.cancel_generation_task("nonexistent")  # Should not raise
+
+
+# -- respond with pending generation task --
+
+@pytest.mark.asyncio
+async def test_respond_uses_pending_generation_task():
+    """respond() should use a completed pending generation task result."""
+    qrp = make_qrp()
+    request = make_request("日本の三大祭りを教えてください")
+
+    # Pre-generate result via background task
+    task = asyncio.create_task(
+        qrp.generate(request.text, request.context_id)
+    )
+    qrp._pending_generation_tasks[request.session_id] = task
+
+    # Wait for generation task to complete
+    await task
+
+    # respond should pick up the pre-generated result
+    await qrp.respond(request)
+
+    assert request.quick_response_text
+    assert request.quick_response_audio and len(request.quick_response_audio) > 0
+    assert request.text.startswith("$")
+
+    # History should be saved (by respond, not by generate)
+    histories = await qrp.context_manager.get_histories(request.context_id)
+    assert len(histories) == 2
+
+    # Pending task should be consumed
+    assert request.session_id not in qrp._pending_generation_tasks
+
+    await qrp.tts.close()
+
+
+@pytest.mark.asyncio
+async def test_respond_fallback_on_cancelled_task():
+    """respond() should fall back to normal generation when pending task is cancelled."""
+    qrp = make_qrp()
+    request = make_request("こんにちは")
+
+    async def slow_task():
+        await asyncio.sleep(10)
+        return "unreachable", "unreachable", b""
+
+    task = asyncio.create_task(slow_task())
+    qrp._pending_generation_tasks[request.session_id] = task
+    task.cancel()
+
+    # respond should fall back to normal generation
+    await qrp.respond(request)
+
+    assert request.quick_response_text
+    assert request.quick_response_audio and len(request.quick_response_audio) > 0
+
+    await qrp.tts.close()
