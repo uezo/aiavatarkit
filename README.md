@@ -334,6 +334,25 @@ You can use other LLMs by using `LiteLLMService` or implementing `LLMService` in
 See the details of LiteLLM here: https://github.com/BerriAI/litellm
 
 
+### Voice Text Tag (Think Before Answering)
+
+By setting `voice_text_tag`, you can have the LLM "think before answering" (Chain-of-Thought) while vocalizing only the answer portion. You can specify a single tag or a list of tags.
+
+```python
+# Single tag: vocalize only <answer> content
+llm = ChatGPTService(
+    system_prompt="Think within <think> tags. Write your answer within <answer> tags.",
+    voice_text_tag="answer"
+)
+
+# Multiple tags: vocalize both <ack> and <answer>, skip <think>
+llm = ChatGPTService(
+    system_prompt="Output <ack>first reaction</ack><think>reasoning</think><answer>full response</answer>",
+    voice_text_tag=["ack", "answer"]
+)
+```
+
+
 ## 🗣️　Voice
 
 You can set speaker id and the base url for VOICEVOX server when instantiate `AIAvatar`.

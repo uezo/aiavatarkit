@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from ...sts.llm import LLMService
@@ -41,9 +41,9 @@ class LlmConfig(BaseModel):
         default=None,
         description="Flag indicating whether to split text on control tags like [face:xxx] or [animation:xxx]."
     )
-    voice_text_tag: Optional[str] = Field(
+    voice_text_tag: Optional[Union[str, List[str]]] = Field(
         default=None,
-        description="A tag used for voice text extraction, e.g., 'voice'."
+        description="A tag or list of tags used for voice text extraction, e.g., 'voice' or ['answer', 'speech']."
     )
     initial_messages: Optional[List[dict]] = Field(
         default=None,

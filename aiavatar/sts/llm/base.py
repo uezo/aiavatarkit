@@ -5,7 +5,7 @@ import inspect
 import logging
 import re
 from time import time
-from typing import AsyncGenerator, List, Dict, Any, Callable, Optional, Tuple, Literal
+from typing import AsyncGenerator, List, Dict, Any, Callable, Optional, Tuple, Literal, Union
 from uuid import uuid4
 from .context_manager import ContextManager, SQLiteContextManager
 
@@ -156,7 +156,7 @@ class LLMService(ABC):
         option_split_chars: List[str] = None,
         option_split_threshold: int = 50,
         split_on_control_tags: bool = True,
-        voice_text_tag: str = None,
+        voice_text_tag: Union[str, List[str]] = None,
         use_dynamic_tools: bool = False,
         context_manager: ContextManager = None,
         shared_context_ids: List[str] = None,
@@ -529,38 +529,46 @@ The list of tools is as follows:
 
         stream_buffer = ""
         response_text = ""
-        
-        in_voice_tag = False
-        target_start = f"<{self.voice_text_tag}>"
-        target_end = f"</{self.voice_text_tag}>"
+
+        # Normalize voice_text_tag to a list for multi-tag support
+        if isinstance(self.voice_text_tag, str):
+            voice_text_tags = [self.voice_text_tag]
+        else:
+            voice_text_tags = self.voice_text_tag or []
+        current_voice_tag = None
+        targets = {tag: (f"<{tag}>", f"</{tag}>") for tag in voice_text_tags}
 
         def to_voice_text(segment: str) -> Optional[str]:
-            if not self.voice_text_tag:
+            if not voice_text_tags:
                 return self.remove_control_tags(segment)
 
-            nonlocal in_voice_tag
-            if target_start in segment and target_end in segment:
-                in_voice_tag = False
-                start_index = segment.find(target_start)
-                end_index = segment.find(target_end)
-                voice_segment = segment[start_index + len(target_start): end_index]
-                return self.remove_control_tags(voice_segment)
+            nonlocal current_voice_tag
 
-            elif target_start in segment:
-                in_voice_tag = True
-                start_index = segment.find(target_start)
-                voice_segment = segment[start_index + len(target_start):]
-                return self.remove_control_tags(voice_segment)
-
-            elif target_end in segment:
-                if in_voice_tag:
-                    in_voice_tag = False
-                    end_index = segment.find(target_end)
-                    voice_segment = segment[:end_index]
+            # Check each tag for open/close in this segment
+            for tag, (t_start, t_end) in targets.items():
+                if t_start in segment and t_end in segment:
+                    current_voice_tag = None
+                    start_index = segment.find(t_start)
+                    end_index = segment.find(t_end)
+                    voice_segment = segment[start_index + len(t_start): end_index]
                     return self.remove_control_tags(voice_segment)
 
-            elif in_voice_tag:
-                return self.remove_control_tags(segment)
+                elif t_start in segment:
+                    current_voice_tag = tag
+                    start_index = segment.find(t_start)
+                    voice_segment = segment[start_index + len(t_start):]
+                    return self.remove_control_tags(voice_segment)
+
+            # Check for end of current voice tag
+            if current_voice_tag:
+                _, t_end = targets[current_voice_tag]
+                if t_end in segment:
+                    current_voice_tag = None
+                    end_index = segment.find(t_end)
+                    voice_segment = segment[:end_index]
+                    return self.remove_control_tags(voice_segment)
+                else:
+                    return self.remove_control_tags(segment)
 
             return None
 
@@ -616,7 +624,7 @@ The list of tools is as follows:
             yield LLMResponse(context_id, stream_buffer, voice_text)
             response_text += stream_buffer
 
-        if self.voice_text_tag and self.voice_text_tag not in response_text:
+        if voice_text_tags and not any(tag in response_text for tag in voice_text_tags):
             # Fallback for the case when no voice text tags
             if voice_text := self.remove_control_tags(response_text):
                 yield LLMResponse(context_id, "", voice_text)
@@ -662,7 +670,7 @@ class LLMServiceDummy(LLMService):
         option_split_chars: List[str] = None,
         option_split_threshold: int = 50,
         split_on_control_tags: bool = True,
-        voice_text_tag: str = None,
+        voice_text_tag: Union[str, List[str]] = None,
         use_dynamic_tools: bool = False,
         context_manager: ContextManager = None,
         shared_context_ids: List[str] = None,
