@@ -455,7 +455,7 @@ class STSPipeline:
                     text=request.quick_response_text,
                     voice_text=request.quick_response_voice_text,
                     audio_data=request.quick_response_audio,
-                    metadata={"is_quick_response": True}
+                    metadata={"is_quick_response": True, "is_first_chunk": True}
                 )
 
             llm_stream = self.llm.chat_stream(request.context_id, request.user_id, request.text, request.files, request.system_prompt_params)
@@ -518,7 +518,7 @@ class STSPipeline:
 
             response_text = ""
             response_audios = []
-            is_first_chunk = True
+            is_first_chunk = not request.quick_response_text
             tool_call_records = {}  # {tool_call_id: {name, arguments, result}}
             async for audio_chunk, llm_stream_chunk, language, guradrail_name in synthesize_stream():
                 is_txn_active, active_txn = await self.is_transaction_active(request.session_id, transaction_id)
@@ -576,8 +576,8 @@ class STSPipeline:
                 session_id=request.session_id,
                 user_id=request.user_id,
                 context_id=request.context_id,
-                text=response_text,
-                voice_text=performance.response_voice_text or ""
+                text=(request.quick_response_text or "") + response_text,
+                voice_text=(request.quick_response_voice_text or "") + (performance.response_voice_text or "")
             )
 
             if self.voice_recorder_enabled:
