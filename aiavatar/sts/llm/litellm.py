@@ -1,6 +1,6 @@
 import json
 from logging import getLogger
-from typing import AsyncGenerator, Dict, List
+from typing import AsyncGenerator, Dict, List, Union
 from litellm import acompletion
 from . import LLMService, LLMResponse, ToolCall, Tool
 from .context_manager import ContextManager
@@ -23,7 +23,7 @@ class LiteLLMService(LLMService):
         option_split_chars: List[str] = None,
         option_split_threshold: int = 50,
         split_on_control_tags: bool = True,
-        voice_text_tag: str = None,
+        voice_text_tag: Union[str, List[str]] = None,
         use_dynamic_tools: bool = False,
         context_manager: ContextManager = None,
         shared_context_ids: List[str] = None,

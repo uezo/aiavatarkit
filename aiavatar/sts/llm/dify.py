@@ -1,6 +1,6 @@
 from logging import getLogger
 import json
-from typing import AsyncGenerator, Dict, List
+from typing import AsyncGenerator, Dict, List, Union
 import httpx
 from . import LLMService, LLMResponse
 
@@ -20,7 +20,7 @@ class DifyService(LLMService):
         option_split_chars: List[str] = None,
         option_split_threshold: int = 50,
         split_on_control_tags: bool = True,
-        voice_text_tag: str = None,
+        voice_text_tag: Union[str, List[str]] = None,
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
         timeout: float = 10.0

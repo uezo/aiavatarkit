@@ -199,7 +199,7 @@ A feature that splits LLM response streams at punctuation and **executes TTS pro
 | **Optional split** | `option_split_chars`: Additional splitting at commas, etc. Splits long sentences midway for earlier vocalization |
 | **Split threshold** | `option_split_threshold`: Minimum character count for optional splitting. Prevents too-short splits |
 | **Control tag split** | `split_on_control_tags`: Split before [tag:value]. Controls timing of facial expression changes, etc. |
-| **Voice text tag** | `voice_text_tag`: Extract TTS text via XML tags. Vocalize only the answer portion without reading thinking process |
+| **Voice text tag** | `voice_text_tag`: Extract TTS text via XML tags. Supports a single tag or a list of tags. Vocalize only the tagged portions without reading thinking process |
 
 ```
 [Processing Flow Example]
@@ -216,7 +216,7 @@ A feature that enables Chain-of-Thought (CoT) where AI "thinks before answering"
 | Feature | Description |
 |---------|-------------|
 | **think/answer tags** | Have LLM output in `<think>thinking</think><answer>response</answer>` format |
-| **voice_text_tag** | Setting `voice_text_tag="answer"` vocalizes only text within `<answer>` tags |
+| **voice_text_tag** | Setting `voice_text_tag="answer"` vocalizes only text within `<answer>` tags. Supports a list of tags (e.g., `["ack", "answer"]`) to vocalize multiple tagged sections |
 | **Non-vocalization of thinking** | Thinking process (within `<think>`) is not vocalized but contributes to response quality |
 
 ```python
@@ -227,9 +227,16 @@ Write your answer within <answer> tags.
 Example: <think>This question is...</think><answer>Yes, that's right.</answer>
 """
 
+# Single tag
 llm = ChatGPTService(
     system_prompt=system_prompt,
     voice_text_tag="answer"  # Vocalize only answer tag content
+)
+
+# Multiple tags: vocalize both <ack> and <answer>, skip <think>
+llm = ChatGPTService(
+    system_prompt=system_prompt,
+    voice_text_tag=["ack", "answer"]
 )
 ```
 
