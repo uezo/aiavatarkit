@@ -1,6 +1,5 @@
 import json
 from logging import getLogger
-import re
 from typing import AsyncGenerator, Dict, List
 from anthropic import AsyncAnthropic
 from . import LLMService, LLMResponse, ToolCall, Tool
@@ -163,10 +162,7 @@ class ClaudeService(LLMService):
         )
 
         # Parse tools from response
-        if match := re.search(r"\[tools:(.*?)\]", tool_choice_resp.content[0].text):
-            tool_names = match.group(1)
-        else:
-            tool_names = "NOT_FOUND"
+        tool_names = self.parse_tool_names(tool_choice_resp.content[0].text)
 
         tools = []
         for t in tool_names.split(","):

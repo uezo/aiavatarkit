@@ -77,6 +77,7 @@ class ControlAPI:
     def remove_control_tags(self, text: str) -> str:
         clean_text = text
         clean_text = re.sub(r"\[(\w+):([^\]]+)\]", "", clean_text)
+        clean_text = re.sub(r"<\w+\s[^>]*>", "", clean_text)
         clean_text = clean_text.strip()
         return clean_text
 

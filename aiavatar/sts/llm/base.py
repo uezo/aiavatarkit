@@ -365,9 +365,18 @@ The list of tools is as follows:
     async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
         pass
 
+    def parse_tool_names(self, text: str) -> str:
+        if not text:
+            return "NOT_FOUND"
+        match = re.search(r'\[tools:(.*?)\]|<tools\s[^>]*names=["\']([^"\']+)["\']', text)
+        if match:
+            return match.group(1) or match.group(2)
+        return "NOT_FOUND"
+
     def remove_control_tags(self, text: str) -> str:
         clean_text = text
         clean_text = re.sub(r"\[(\w+):([^\]]+)\]", "", clean_text)
+        clean_text = re.sub(r"<\w+\s[^>]*>", "", clean_text)
         clean_text = clean_text.strip()
         return clean_text
 
@@ -583,9 +592,10 @@ The list of tools is as follows:
             # Replace consecutive punctuation with the same punctuation followed by delimiter
             stream_buffer = re.sub(f"(({self.split_chars_pattern})+)", r"\1|", stream_buffer)
 
-            # Split before control tags [xxx:yyy] if enabled
+            # Split before control tags [xxx:yyy] or <xxx ...> if enabled
             if self.split_on_control_tags:
                 stream_buffer = re.sub(r"(?=\[\w+:[^\]]+\])", "|", stream_buffer)
+                stream_buffer = re.sub(r"(?=<\w+\s[^>]*>)", "|", stream_buffer)
 
             if len(self.remove_control_tags(stream_buffer)) > self.option_split_threshold:
                 stream_buffer = self.replace_last_option_split_char(stream_buffer)

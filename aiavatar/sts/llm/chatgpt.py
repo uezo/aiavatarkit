@@ -1,6 +1,5 @@
 import json
 from logging import getLogger
-import re
 from typing import AsyncGenerator, Dict, List, Protocol, Type
 from urllib.parse import urlparse, parse_qs
 import openai as openai_module
@@ -214,10 +213,7 @@ class ChatGPTService(LLMService):
         tool_choice_resp = await self.openai_client.chat.completions.create(**chat_completion_params)
 
         # Parse tools from response
-        if match := re.search(r"\[tools:(.*?)\]", tool_choice_resp.choices[0].message.content):
-            tool_names = match.group(1)
-        else:
-            tool_names = "NOT_FOUND"
+        tool_names = self.parse_tool_names(tool_choice_resp.choices[0].message.content)
 
         tools = []
         for t in tool_names.split(","):

@@ -755,9 +755,9 @@ Features available across all adapters.
 
 | Feature | Description |
 |---------|-------------|
-| **Avatar control tags** | Parse [face:name], [animation:name]. Extract avatar control from LLM output |
-| **Language detection** | Parse [language:code] tags. Multi-language TTS switching |
-| **Vision request** | Parse [vision:source] tags. Camera image retrieval request |
+| **Avatar control tags** | Parse [face:name], [animation:name] or XML equivalents. Extract avatar control from LLM output |
+| **Language detection** | Parse [language:code] or XML equivalents. Multi-language TTS switching |
+| **Vision request** | Parse [vision:source] or XML equivalents. Camera image retrieval request |
 | **Base64 encoding** | Base64 conversion of audio data. Send/receive via JSON |
 
 ---
@@ -1399,3 +1399,5 @@ Tags embedded in LLM responses to **control avatar and voice**.
 | [animation:name] | Animation | [animation:wave] | Wave hand animation |
 | [language:code] | Language switch | [language:en-US] | Switch TTS language to English |
 | [vision:source] | Image capture | [vision:camera] | Send camera image to LLM |
+
+> **Note:** XML-style tags are also supported: `<face name="joy" />`, `<animation name="wave" />`, `<language code="en-US" />`, `<vision source="camera" />`. Both bracket and XML formats can be used interchangeably.
