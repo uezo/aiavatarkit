@@ -21,6 +21,8 @@ class OpenAISpeechSynthesizer(SpeechSynthesizer):
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
         preprocessors: List[TTSPreprocessor] = None,
+        cache_dir: str = None,
+        cache_ext: str = "wav",
         debug: bool = False
     ):
         super().__init__(
@@ -29,6 +31,8 @@ class OpenAISpeechSynthesizer(SpeechSynthesizer):
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
             preprocessors=preprocessors,
+            cache_dir=cache_dir,
+            cache_ext=cache_ext,
             debug=debug
         )
         self.openai_api_key = openai_api_key
@@ -65,18 +69,22 @@ class OpenAISpeechSynthesizer(SpeechSynthesizer):
             url = f"{self.base_url}/audio/speech"
             headers = {"Authorization": f"Bearer {self.openai_api_key}"}
 
-        # Synthesize
-        resp = await self.http_client.post(
-            url=url,
-            headers=headers,
-            json= {
-                "model": self.model,
-                "voice": self.speaker,
-                "input": processed_text,
-                "instructions": self.instructions,
-                # "speed": self.speed,
-                "response_format": "wav"
-            }
-        )
+        json_body = {
+            "model": self.model,
+            "voice": self.speaker,
+            "input": processed_text,
+            "instructions": self.instructions,
+            # "speed": self.speed,
+            "response_format": "wav"
+        }
 
+        # Check cache
+        cache_key = self.make_cache_key(url=url, headers=headers, json_body=json_body)
+        if cached := await self.read_cache(cache_key):
+            return cached
+
+        # Synthesize
+        resp = await self.http_client.post(url=url, headers=headers, json=json_body)
+
+        await self.write_cache(cache_key, resp.content)
         return resp.content

@@ -17,6 +17,8 @@ class VoicevoxSpeechSynthesizer(SpeechSynthesizer):
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
         preprocessors: List[TTSPreprocessor] = None,
+        cache_dir: str = None,
+        cache_ext: str = "wav",
         debug: bool = False
     ):
         super().__init__(
@@ -25,6 +27,8 @@ class VoicevoxSpeechSynthesizer(SpeechSynthesizer):
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
             preprocessors=preprocessors,
+            cache_dir=cache_dir,
+            cache_ext=cache_ext,
             debug=debug
         )
         self.base_url = base_url
@@ -59,13 +63,19 @@ class VoicevoxSpeechSynthesizer(SpeechSynthesizer):
             speaker = int(style)
             logger.info(f"Apply style: {speaker}")
 
+        url = self.base_url + "/synthesis"
+        params = {"speaker": speaker}
+
+        # Check cache (audio_query is deterministic for text + speaker)
+        cache_key = self.make_cache_key(url=url, params=params, data=processed_text.encode())
+        if cached := await self.read_cache(cache_key):
+            return cached
+
         # Make query
         audio_query = await self.get_audio_query(processed_text, speaker)
 
         # Synthesize
-        response = await self.http_client.post(
-            url=self.base_url + "/synthesis",
-            params={"speaker": speaker},
-            json=audio_query
-        )
+        response = await self.http_client.post(url=url, params=params, json=audio_query)
+
+        await self.write_cache(cache_key, response.content)
         return response.content

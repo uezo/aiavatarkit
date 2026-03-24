@@ -21,6 +21,8 @@ class GoogleSpeechSynthesizer(SpeechSynthesizer):
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
         preprocessors: List[TTSPreprocessor] = None,
+        cache_dir: str = None,
+        cache_ext: str = "pcm",
         debug: bool = False
     ):
         super().__init__(
@@ -29,6 +31,8 @@ class GoogleSpeechSynthesizer(SpeechSynthesizer):
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
             preprocessors=preprocessors,
+            cache_dir=cache_dir,
+            cache_ext=cache_ext,
             debug=debug
         )
         self.google_api_key = google_api_key
@@ -62,16 +66,23 @@ class GoogleSpeechSynthesizer(SpeechSynthesizer):
             if language in self.voice_map:
                 voice = {"languageCode": language, "name": self.voice_map[language]}
 
+        url = f"https://texttospeech.googleapis.com/v1/text:synthesize?key={self.google_api_key}"
+        json_body = {
+            "input": {"text": processed_text},
+            "voice": voice,
+            "audioConfig": {"audioEncoding": self.audio_format}
+        }
+
+        # Check cache
+        cache_key = self.make_cache_key(url=url, json_body=json_body)
+        if cached := await self.read_cache(cache_key):
+            return cached
+
         # Synthesize
         # https://cloud.google.com/text-to-speech/docs/voices
-        resp = await self.http_client.post(
-            url=f"https://texttospeech.googleapis.com/v1/text:synthesize?key={self.google_api_key}",
-            json={
-                "input": {"text": processed_text},
-                "voice": voice,
-                "audioConfig": {"audioEncoding": self.audio_format}
-            }
-        )
+        resp = await self.http_client.post(url=url, json=json_body)
         resp_json = resp.json()
 
-        return base64.b64decode(resp_json["audioContent"])
+        audio_data = base64.b64decode(resp_json["audioContent"])
+        await self.write_cache(cache_key, audio_data)
+        return audio_data
