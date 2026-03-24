@@ -374,17 +374,30 @@ async def test_pipeline_integration():
 
     # Main LLM response via pipeline
     quick_response_text = request.quick_response_text
+    quick_response_voice_text = request.quick_response_voice_text
     main_responses = []
     async for response in pipeline.invoke(request):
         main_responses.append(response)
 
+    # is_first_chunk: quick response chunk should be first, LLM chunks should not
+    chunks = [r for r in main_responses if r.type == "chunk"]
+    assert len(chunks) >= 2
+    assert chunks[0].metadata.get("is_quick_response") is True
+    assert chunks[0].metadata.get("is_first_chunk") is True
+    for c in chunks[1:]:
+        assert c.metadata.get("is_first_chunk") is not True
+
+    # final should contain quick response text and voice_text
     final = [r for r in main_responses if r.type == "final"]
     assert len(final) == 1
+    assert final[0].text.startswith(quick_response_text)
+    assert final[0].voice_text.startswith(quick_response_voice_text)
     assert "祇園" in final[0].text
 
-    # Main response should not repeat quick response
-    answer_match = re.search(r"<answer>(.*?)</answer>", final[0].text, re.DOTALL)
-    answer_text = answer_match.group(1) if answer_match else final[0].text
+    # Main response (excluding quick response prefix) should not repeat quick response
+    main_response_text = final[0].text[len(quick_response_text):]
+    answer_match = re.search(r"<answer>(.*?)</answer>", main_response_text, re.DOTALL)
+    answer_text = answer_match.group(1) if answer_match else main_response_text
     assert quick_response_text not in answer_text
 
     await pipeline.shutdown()
