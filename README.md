@@ -518,6 +518,26 @@ The `{text}` and `{language}` placeholders in params, headers, and json will be 
 
 You can also make custom tts components by impelemting `SpeechSynthesizer` interface.
 
+### TTS Caching
+
+All TTS synthesizers support optional response caching. When `cache_dir` is set, synthesized audio is saved to disk and reused for identical requests, avoiding redundant API calls.
+
+```python
+tts = AzureSpeechSynthesizer(
+    azure_api_key=AZURE_API_KEY,
+    azure_region=AZURE_REGION,
+    speaker="ja-JP-MayuNeural",
+    cache_dir="./tts_cache/azure",  # Enable caching
+    cache_ext="wav",                # File extension (default: "wav")
+)
+```
+
+- Cache files are stored as `{sha256_hash}.{cache_ext}` in the specified directory
+- The hash is computed from all request parameters (URL, headers, body, etc.)
+- Set `cache_dir=None` (default) to disable caching
+- Works with all TTS classes: Azure, OpenAI, Google, Voicevox, and InstantSynthesizer
+- `SpeechGatewaySpeechSynthesizer` does not use this cache as it caches on the gateway side
+
 ### Preprocessing
 
 AIAvatarKit provides text preprocessing functionality that transforms text before Text-to-Speech processing. This enables improved speech quality and conversion of specific text patterns.

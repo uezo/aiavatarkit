@@ -20,6 +20,8 @@ class AzureSpeechSynthesizer(SpeechSynthesizer):
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
         preprocessors: List[TTSPreprocessor] = None,
+        cache_dir: str = None,
+        cache_ext: str = "wav",
         debug: bool = False
     ):
         super().__init__(
@@ -28,6 +30,8 @@ class AzureSpeechSynthesizer(SpeechSynthesizer):
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
             preprocessors=preprocessors,
+            cache_dir=cache_dir,
+            cache_ext=cache_ext,
             debug=debug
         )
         self.azure_api_key = azure_api_key
@@ -64,12 +68,16 @@ class AzureSpeechSynthesizer(SpeechSynthesizer):
         ssml_text = f"<speak version='1.0' xml:lang='{language or self.default_language}'><voice xml:lang='{language or self.default_language}' name='{speaker}'>{processed_text}</voice></speak>"
         data = ssml_text.encode("utf-8")
 
+        url = f"https://{self.azure_region}.tts.speech.microsoft.com/cognitiveservices/v1"
+
+        # Check cache
+        cache_key = self.make_cache_key(url=url, headers=headers, data=data)
+        if cached := await self.read_cache(cache_key):
+            return cached
+
         # Synthesize
         # https://learn.microsoft.com/ja-jp/azure/ai-services/speech-service/language-support?tabs=tts
-        resp = await self.http_client.post(
-            url=f"https://{self.azure_region}.tts.speech.microsoft.com/cognitiveservices/v1",
-            headers=headers,
-            data=data
-        )
+        resp = await self.http_client.post(url=url, headers=headers, data=data)
 
+        await self.write_cache(cache_key, resp.content)
         return resp.content
