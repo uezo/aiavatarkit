@@ -1,6 +1,5 @@
 import base64
 from logging import getLogger
-import re
 from typing import AsyncGenerator, Dict, List
 from google import genai
 from google.genai import types
@@ -216,10 +215,8 @@ class GeminiService(LLMService):
             )],
         )
 
-        if match := re.search(r"\[tools:(.*?)\]", tool_choice_resp.candidates[0].content.parts[0].text):
-            tool_names = match.group(1)
-        else:
-            tool_names = "NOT_FOUND"
+        # Parse tools from response
+        tool_names = self.parse_tool_names(tool_choice_resp.candidates[0].content.parts[0].text)
 
         tools = []
         for t in tool_names.split(","):

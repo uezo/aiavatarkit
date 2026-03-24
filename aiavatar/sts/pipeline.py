@@ -27,7 +27,7 @@ from .session_state_manager import SessionStateManager, SQLiteSessionStateManage
 
 logger = logging.getLogger(__name__)
 
-LANGUAGE_PATTERN = re.compile(r"\[(?:lang|language):([a-zA-Z-]+)\]")
+LANGUAGE_PATTERN = re.compile(r"""\[(?:lang|language):([a-zA-Z-]+)\]|<(?:lang|language)\s[^>]*code=["']([a-zA-Z-]+)["']""")
 
 
 class STSPipeline:
@@ -493,7 +493,7 @@ class STSPipeline:
 
                     # Parse language
                     if match := LANGUAGE_PATTERN.search(llm_stream_chunk.text):
-                        language = match.group(1)
+                        language = match.group(1) or match.group(2)
 
                     # Parse style info from LLM chunk
                     parsed_info = await self._process_llm_chunk(

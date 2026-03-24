@@ -1,6 +1,5 @@
 import json
 from logging import getLogger
-import re
 from typing import AsyncGenerator, Dict, List
 from litellm import acompletion
 from . import LLMService, LLMResponse, ToolCall, Tool
@@ -177,10 +176,7 @@ class LiteLLMService(LLMService):
         )
 
         # Parse tools from response
-        if match := re.search(r"\[tools:(.*?)\]", tool_choice_resp.choices[0].message.content):
-            tool_names = match.group(1)
-        else:
-            tool_names = "NOT_FOUND"
+        tool_names = self.parse_tool_names(tool_choice_resp.choices[0].message.content)
 
         tools = []
         for t in tool_names.split(","):

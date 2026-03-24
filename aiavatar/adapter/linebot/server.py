@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
-import re
 from typing import Dict, Tuple, Optional, Awaitable, Callable
 from uuid import uuid4
 import aiofiles
@@ -316,28 +315,6 @@ class AIAvatarLineBotServer(Adapter):
         await self.line_api.reply_message(reply_message_request)
 
     # Response
-    def parse_avatar_control_request(self, text: str) -> AvatarControlRequest:
-        avreq = AvatarControlRequest()
-
-        if not text:
-            return avreq
-
-        # Face
-        face_pattarn = r"\[face:(\w+)\]"
-        faces = re.findall(face_pattarn, text)
-        if faces:
-            avreq.face_name = faces[0]
-            avreq.face_duration = 4.0
-
-        # Animation
-        animation_pattarn = r"\[animation:(\w+)\]"
-        animations = re.findall(animation_pattarn, text)
-        if animations:
-            avreq.animation_name = animations[0]
-            avreq.animation_duration = 4.0
-
-        return avreq
-
     def process_avatar_control_request(self, func: Callable[[AvatarControlRequest, ReplyMessageRequest], Awaitable[None]]):
         self._process_avatar_control_request = func
         return func

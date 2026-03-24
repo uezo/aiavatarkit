@@ -297,7 +297,8 @@ class QuickResponderPro:
         else:
             content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
 
-        content = re.sub(r"\[(\w+):([^\]]+)\]", "", content).strip()
+        content = re.sub(r"\[(\w+):([^\]]+)\]", "", content)
+        content = re.sub(r"<\w+\s[^>]*>", "", content).strip()
         return content
 
     # -- TTS --

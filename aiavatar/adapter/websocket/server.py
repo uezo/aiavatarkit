@@ -302,28 +302,6 @@ class AIAvatarWebSocketServer(Adapter):
                 logger.info("Set session config: session=%s, barge_in_enabled=%s", session_id, value)
 
     # Response
-    def parse_avatar_control_request(self, text: str) -> AvatarControlRequest:
-        avreq = AvatarControlRequest()
-
-        if not text:
-            return avreq
-
-        # Face
-        face_pattarn = r"\[face:(\w+)\]"
-        faces = re.findall(face_pattarn, text)
-        if faces:
-            avreq.face_name = faces[0]
-            avreq.face_duration = 4.0
-
-        # Animation
-        animation_pattarn = r"\[animation:(\w+)\]"
-        animations = re.findall(animation_pattarn, text)
-        if animations:
-            avreq.animation_name = animations[0]
-            avreq.animation_duration = 4.0
-
-        return avreq
-
     async def send_response(self, aiavatar_response: AIAvatarResponse):
         await self.websockets[aiavatar_response.session_id].send_text(
             aiavatar_response.model_dump_json()
@@ -402,9 +380,10 @@ class AIAvatarWebSocketServer(Adapter):
             aiavatar_response.metadata["tool_call"] = response.tool_call.to_dict()
 
         elif response.type == "final":
-            if image_source_match := re.search(r"\[vision:(\w+)\]", response.text):
+            vision_source = self.parse_vision_source(response.text)
+            if vision_source:
                 aiavatar_response.type = "vision"
-                aiavatar_response.metadata={"source": image_source_match.group(1)}
+                aiavatar_response.metadata = {"source": vision_source}
 
         elif response.type == "stop":
             await self.stop_response(response)

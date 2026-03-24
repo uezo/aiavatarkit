@@ -1044,6 +1044,8 @@ Example
 """
 ```
 
+> **Note:** XML-style tags are also supported: `<face name="joy" />`, `<animation name="wave_hands" />`. Both bracket and XML formats can be used interchangeably.
+
 This allows emojis like 🥳 to be autonomously displayed in the terminal during conversations. To actually control the avatar's facial expressions in a metaverse platform, instead of displaying emojis like 🥳, you will need to use custom implementations tailored to the integration mechanisms of each platform. Please refer to our `VRChatFaceController` as an example.
 
 
@@ -1856,8 +1858,8 @@ That's all! Let's chat with the AIAvatar. Log in to VRChat on another machine (o
 
 AIAvatarKit controls the face expression by [Avatar OSC](https://docs.vrchat.com/docs/osc-avatar-parameters).
 
-LLM(ChatGPT/Claude/Gemini)  
-↓ *response with face tag* `[face:joy]Hello!`  
+LLM(ChatGPT/Claude/Gemini)
+↓ *response with face tag* `[face:joy]Hello!` or `<face name="joy" />Hello!`
 AIAvatarKit(VRCFaceExpressionController)  
 ↓ *osc* `FaceOSC=1`  
 VRChat(FX AnimatorController)  
@@ -2829,10 +2831,9 @@ def print_chat(role, context_id, user_id, text, files):
 
 AIAvatarKit captures and sends image to AI dynamically when the AI determine that vision is required to process the request. This gives "eyes" to your AIAvatar in metaverse platforms like VRChat.
 
-
 ```python
 # Instruct vision tag in the system message
-SYSTEM_PROMPR = """
+SYSTEM_PROMPT = """
 ## Using Vision
 
 If you need an image to process a user's request, you can obtain it using the following methods:
@@ -2883,6 +2884,8 @@ async def get_image_url(source: str) -> str:
         b64_url = f"data:image/jpeg;base64,{b64_encoded}"
         return b64_url
 ```
+
+> **Note:** XML-style tag is also supported: `<vision source="screenshot" />`
 
 
 ### 💾 Long-term Memory

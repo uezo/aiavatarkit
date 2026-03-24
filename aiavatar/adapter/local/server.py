@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import re
 from typing import List
 from ...database import PoolProvider
 from ...sts.models import STSRequest, STSResponse
@@ -14,7 +13,7 @@ from ...sts.tts import SpeechSynthesizer
 from ...sts.session_state_manager import SessionStateManager
 from ...sts.performance_recorder import PerformanceRecorder
 from ...sts.voice_recorder import VoiceRecorder
-from ..models import AvatarControlRequest, AIAvatarRequest, AIAvatarResponse, AIAvatarException
+from ..models import AIAvatarRequest, AIAvatarResponse, AIAvatarException
 from ..base import Adapter
 
 logger = logging.getLogger(__name__)
@@ -190,28 +189,6 @@ class AIAvatarLocalServer(Adapter):
     async def handle_microphone_data(self, audio_bytes, session_id):
         await self.sts.vad.process_samples(samples=audio_bytes, session_id=session_id)
 
-    def parse_avatar_control_request(self, text: str) -> AvatarControlRequest:
-        avreq = AvatarControlRequest()
-
-        if not text:
-            return avreq
-
-        # Face
-        face_pattarn = r"\[face:(\w+)\]"
-        faces = re.findall(face_pattarn, text)
-        if faces:
-            avreq.face_name = faces[0]
-            avreq.face_duration = 4.0
-
-        # Animation
-        animation_pattarn = r"\[animation:(\w+)\]"
-        animations = re.findall(animation_pattarn, text)
-        if animations:
-            avreq.animation_name = animations[0]
-            avreq.animation_duration = 4.0
-
-        return avreq
-
     async def handle_response(self, response: STSResponse):
         aiavatar_response = AIAvatarResponse(
             type=response.type,
@@ -236,10 +213,10 @@ class AIAvatarLocalServer(Adapter):
             aiavatar_response.avatar_control_request = self.parse_avatar_control_request(response.text)
 
         elif response.type == "final":
-            if response.text:
-                if image_source_match := re.search(r"\[vision:(\w+)\]", response.text):
-                    aiavatar_response.type = "vision"
-                    aiavatar_response.metadata={"source": image_source_match.group(1)}
+            vision_source = self.parse_vision_source(response.text)
+            if vision_source:
+                aiavatar_response.type = "vision"
+                aiavatar_response.metadata = {"source": vision_source}
 
         elif response.type == "error":
             raise AIAvatarException(
