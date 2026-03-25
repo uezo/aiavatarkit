@@ -82,6 +82,7 @@ class Tool:
         self._background_tasks: set = set()
         self.immediate_message = immediate_message
         self.background_timeout = background_timeout
+        self._response_formatter: Callable = None
 
     def on_completed(self, func: Callable):
         self._on_completed = func
@@ -89,6 +90,10 @@ class Tool:
 
     def on_submitted(self, func: Callable):
         self._on_submitted = func
+        return func
+
+    def response_formatter(self, func: Callable):
+        self._response_formatter = func
         return func
 
     def parse_spec(self, spec: Dict[str, Any]) -> Tuple[str, str, Dict[str, Any]]:

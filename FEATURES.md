@@ -250,6 +250,7 @@ Function Calling feature for LLM to call external functions (APIs, databases, we
 | **Dynamic tool selection** | `use_dynamic_tools`: When many tools exist, LLM selects only relevant ones. Reduces prompt size |
 | **Tool filtering** | Automatic relevant tool selection by LLM. Narrows 100 tools to 5, etc. |
 | **Streaming results** | Stream intermediate results of tool execution. Notifies user of progress for long-running processes |
+| **Response formatter** | `@response_formatter`: Bypass 2nd LLM call and speak tool result directly via template. For accuracy-critical data and latency reduction |
 | **MCP integration** | Model Context Protocol server integration via StdioMCP/StreamableHttpMCP |
 
 ### 3.6 Built-in Tools

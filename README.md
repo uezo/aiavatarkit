@@ -152,6 +152,7 @@ You can also access the Admin Panel at http://127.0.0.1:8000/admin.
 - [🦜 AI Agent](#-ai-agent)
     - [⚡️ Tool Call](#️-tool-call)
     - [⌛️ Tool Call with Streaming Progress](#%EF%B8%8F-tool-call-with-streaming-progress)
+    - [📋 Tool Response Formatter (Direct Response)](#-tool-response-formatter-direct-response)
     - [🪄 Dynamic Tool Call](#-dynamic-tool-call)
     - [🔌 MCP](#-mcp)
     - [🛠️ Built-in Tools](#️-built-in-tools)
@@ -2248,6 +2249,39 @@ async def on_completed(result, metadata):
 - If the tool exceeds the timeout → switches to background mode, returns `immediate_message`, and calls `on_completed` when done
 
 **Note**: `on_completed` (background execution) and `AsyncGenerator` (streaming progress) are mutually exclusive. A tool should use one pattern or the other.
+
+
+### 📋 Tool Response Formatter (Direct Response)
+
+By default, after a tool executes, the result is passed back to the LLM to generate a human-friendly response (2nd LLM call). However, in some cases you may want to **bypass the LLM and speak the tool result directly**:
+
+- **Accuracy**: Critical information (e.g., order details, reservation IDs) that must not be paraphrased or hallucinated
+- **Latency**: Eliminating the 2nd LLM call for faster response times
+
+Use the `@response_formatter` decorator to define a function that converts the tool result into the exact text to speak. When a `response_formatter` is set, the 2nd LLM call is skipped entirely, and the formatted text is spoken directly.
+
+```python
+@llm.tool(weather_tool_spec)
+async def get_weather(location: str = None):
+    weather = await weather_api(location=location)
+    return weather  # {"weather": "clear", "temperature": 23.4}
+
+# Register response_formatter to speak the result directly
+@llm.tools["get_weather"].response_formatter
+def format_weather(result, arguments):
+    return f"The weather in {arguments['location']} is {result['weather']}, with a temperature of {result['temperature']} degrees."
+```
+
+The formatter receives two arguments:
+
+| Argument | Description |
+|----------|-------------|
+| `result` | The dict returned by the tool function |
+| `arguments` | The dict of arguments passed to the tool by the LLM |
+
+The tool call and its result are still saved to conversation context, so follow-up questions like "What was the temperature again?" work naturally. The formatted text is stored as the assistant's response.
+
+**Note**: Tools without a `response_formatter` continue to work as before (2nd LLM call generates the response). You can mix both patterns — some tools with formatters and others without.
 
 
 ### 🪄 Dynamic Tool Call

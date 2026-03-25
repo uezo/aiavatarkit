@@ -270,6 +270,7 @@ class LiteLLMService(LLMService):
 
             # Execute tools
             messages_length = len(messages)
+            has_direct_response = False
             for tc in tool_calls:
                 if self.debug:
                     logger.info(f"ToolCall: {tc.name}")
@@ -294,6 +295,13 @@ class LiteLLMService(LLMService):
                     logger.info(f"ToolCall result: {tool_result}")
 
                 if tool_result:
+                    # Use response_formatter for direct response if available
+                    tool_obj = self.tools.get(tc.name)
+                    if tool_obj and tool_obj._response_formatter:
+                        direct_text = tool_obj._response_formatter(tool_result, json.loads(tc.arguments))
+                        yield LLMResponse(context_id=context_id, text=direct_text)
+                        has_direct_response = True
+
                     messages.append({
                         "role": "assistant",
                         "tool_calls": [{
@@ -313,7 +321,7 @@ class LiteLLMService(LLMService):
                         "tool_call_id": tc.id
                     })
 
-            if len(messages) > messages_length or try_dynamic_tools:
+            if not has_direct_response and (len(messages) > messages_length or try_dynamic_tools):
                 # Generate human-friendly message that explains tool result
                 async for llm_response in self.get_llm_stream_response(
                     context_id, user_id, messages, system_prompt_params=system_prompt_params, tools=filtered_tools
