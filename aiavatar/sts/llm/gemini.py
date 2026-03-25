@@ -331,6 +331,7 @@ class GeminiService(LLMService):
             #       Multiple tools will be called sequentially: user -(llm)-> function_call -> function_response -(llm)-> function_call -> function_response -(llm)-> assistant
             # Execute tools
             messages_length = len(messages)
+            has_direct_response = False
             for tc in tool_calls:
                 if self.debug:
                     logger.info(f"ToolCall: {tc.name}")
@@ -359,6 +360,13 @@ class GeminiService(LLMService):
                     logger.info(f"ToolCall result: {tool_result}")
 
                 if tool_result:
+                    # Use response_formatter for direct response if available
+                    tool_obj = self.tools.get(tc.name)
+                    if tool_obj and tool_obj._response_formatter:
+                        direct_text = tool_obj._response_formatter(tool_result, tc.arguments)
+                        yield LLMResponse(context_id=context_id, text=direct_text)
+                        has_direct_response = True
+
                     messages.append(types.Content(
                         role="model",
                         parts=model_response_parts
@@ -368,7 +376,7 @@ class GeminiService(LLMService):
                         parts=[types.Part.from_function_response(name=tc.name, response=tool_result)]
                     ))
 
-            if len(messages) > messages_length or try_dynamic_tools:
+            if not has_direct_response and (len(messages) > messages_length or try_dynamic_tools):
                 # Generate human-friendly message that explains tool result
                 async for llm_response in self.get_llm_stream_response(
                     context_id, user_id, messages, system_prompt_params=system_prompt_params, tools=filtered_tools

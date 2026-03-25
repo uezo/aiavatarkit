@@ -317,6 +317,82 @@ async def test_chatgpt_service_tool_calls():
     await service.openai_client.close()
 
 @pytest.mark.asyncio
+async def test_chatgpt_service_tool_calls_response_formatter():
+    """
+    Test ChatGPTService with a registered tool that has response_formatter.
+    The tool result should be formatted directly without a 2nd LLM call.
+    """
+    service = ChatGPTService(
+        openai_api_key=OPENAI_API_KEY,
+        system_prompt="You can call a tool to solve math problems if necessary.",
+        model=MODEL,
+        temperature=0.5
+    )
+    context_id = f"test_tool_response_formatter_context_{uuid4()}"
+
+    # Register tool
+    tool_spec = {
+        "type": "function",
+        "function": {
+            "name": "solve_math",
+            "description": "Solve simple math problems",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "problem": {"type": "string"}
+                },
+                "required": ["problem"]
+            }
+        }
+    }
+    @service.tool(tool_spec)
+    async def solve_math(problem: str) -> Dict[str, Any]:
+        if problem.strip() == "1+1":
+            return {"answer": 2}
+        else:
+            return {"answer": "unknown"}
+
+    # Register response_formatter
+    @service.tools["solve_math"].response_formatter
+    def format_result(result, arguments):
+        return f"Formatter: {arguments['problem']}の計算結果は{result['answer']}です。"
+
+    user_message = "次の問題を解いて: 1+1"
+    collected_text = []
+
+    async for resp in service.chat_stream(context_id, "test_user", user_message):
+        if resp.text:
+            collected_text.append(resp.text)
+
+    full_text = "".join(collected_text)
+
+    # The direct response from response_formatter should be in the text
+    assert "Formatter: 1+1の計算結果は2です。" in full_text, f"Direct response not found in text: {full_text}"
+
+    # Check context
+    messages = await service.context_manager.get_histories(context_id)
+    assert len(messages) == 4
+
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"] == user_message
+
+    assert messages[1]["role"] == "assistant"
+    assert messages[1]["tool_calls"] is not None
+    assert messages[1]["tool_calls"][0]["function"]["name"] == "solve_math"
+    tool_call_id = messages[1]["tool_calls"][0]["id"]
+
+    assert messages[2]["role"] == "tool"
+    assert messages[2]["tool_call_id"] == tool_call_id
+    assert messages[2]["content"] == json.dumps({"answer": 2})
+
+    # The assistant response in context should be the direct formatted text
+    assert messages[3]["role"] == "assistant"
+    assert "Formatter: 1+1の計算結果は2です。" in messages[3]["content"]
+
+    await service.openai_client.close()
+
+
+@pytest.mark.asyncio
 async def test_chatgpt_service_tool_calls_iter():
     """
     Test ChatGPTService with a registered tool that returns iteration.
