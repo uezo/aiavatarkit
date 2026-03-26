@@ -89,8 +89,8 @@ class DifyService(LLMService):
         return [message]
 
     async def update_context(self, context_id: str, user_id: str, messages: List[Dict], response_text: str):
-        # Context is managed at Dify server
-        pass
+        # Context is managed at Dify server. Just save empty data to keep context_id
+        await self.context_manager.add_histories(context_id, [{}], "dify")
 
 
     async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
