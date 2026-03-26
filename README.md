@@ -13,7 +13,7 @@
 - **🧩 Modular architecture**: Components such as VAD, STT, LLM, and TTS are modular and easy to integrate via lightweight interfaces. Supported modules include:
     - VAD: Built-in standard VAD (silence-based end-of-turn detection), SileroVAD
     - STT: Google, Azure, OpenAI, AmiVoice
-    - LLM: ChatGPT, Gemini, Claude, and any model supported by LiteLLM or Dify
+    - LLM: ChatGPT, OpenAI Responses API (REST / WebSocket), Gemini, Claude, and any model supported by LiteLLM or Dify
     - TTS: VOICEVOX / AivisSpeech, OpenAI, SpeechGateway (including Style-Bert-VITS2 and Aivis Cloud API)
 - **⚡️ AI Agent native**: Designed to support agentic systems. In addition to standard tool calls, it offers Dynamic Tool Calls for extensibility and supports progress feedback for high-latency operations.
 
@@ -110,6 +110,7 @@ You can also access the Admin Panel at http://127.0.0.1:8000/admin.
 
 - [🎓 Generative AI](#-generative-ai)
     - [ChatGPT](#chatgpt)
+    - [OpenAI Responses API](#openai-responses-api)
     - [Claude](#claude)
     - [Gemini](#gemini)
     - [Dify](#dify)
@@ -222,6 +223,40 @@ aiavatar_app = AIAvatar(
     openai_api_key=OPENAI_API_KEY   # API Key for STT
 )
 ```
+
+### OpenAI Responses API
+
+Use `OpenAIResponsesService` to leverage the OpenAI Responses API. Conversation history is managed server-side via `previous_response_id`, eliminating the need for client-side context management.
+
+```python
+from aiavatar.sts.llm.openai_responses import OpenAIResponsesService
+llm = OpenAIResponsesService(
+    openai_api_key=OPENAI_API_KEY,
+    model="gpt-5.4",
+    system_prompt="You are my cat."
+)
+
+aiavatar_app = AIAvatar(
+    llm=llm,
+    openai_api_key=OPENAI_API_KEY   # API Key for STT
+)
+```
+
+For lower latency, use the WebSocket variant. This maintains persistent connections via a connection pool, which can reduce latency by up to 40%, especially in tool-call-heavy workflows.
+
+```python
+# pip install websockets
+from aiavatar.sts.llm.openai_responses_websocket import OpenAIResponsesWebSocketService
+llm = OpenAIResponsesWebSocketService(
+    openai_api_key=OPENAI_API_KEY,
+    model="gpt-5.4",
+    reasoning_effort="low",
+    system_prompt="You are my cat."
+)
+```
+
+NOTE: The WebSocket variant does not support the `temperature` parameter. Use `reasoning_effort` ("none", "low", "medium", "high") instead to control response behavior. Dynamic Tool Calls are not supported in either variant, as the server-side history management via `previous_response_id` is incompatible with the pre-flight tool filtering calls.
+
 
 ### Claude
 
