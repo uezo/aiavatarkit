@@ -173,6 +173,8 @@ A component that generates conversation responses.
 | Implementation | Provider | Characteristics |
 |----------------|----------|-----------------|
 | **ChatGPTService** | OpenAI / Azure OpenAI | Tool calling, o1/o3 reasoning model support |
+| **OpenAIResponsesService** | OpenAI (Responses API) | Server-side conversation history via `previous_response_id` |
+| **OpenAIResponsesWebSocketService** | OpenAI (Responses API, WebSocket) | Persistent connection pooling for lower latency. No `temperature` support |
 | **ClaudeService** | Anthropic | Content block streaming |
 | **GeminiService** | Google | Extended thinking mode, image download support |
 | **LiteLLMService** | Multiple providers | Model-agnostic unified interface |

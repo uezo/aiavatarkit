@@ -1,0 +1,266 @@
+import copy
+import json
+from logging import getLogger
+from typing import AsyncGenerator, Dict, List, Union
+import openai as openai_module
+from . import LLMService, LLMResponse, ToolCall, Tool
+from .context_manager import ContextManager
+
+logger = getLogger(__name__)
+
+
+class OpenAIResponsesService(LLMService):
+    def __init__(
+        self,
+        *,
+        openai_api_key: str = None,
+        system_prompt: str = None,
+        base_url: str = None,
+        model: str = "gpt-5.4",
+        temperature: float = None,
+        reasoning_effort: str = None,
+        extra_body: dict = None,
+        initial_messages: List[dict] = None,
+        split_chars: List[str] = None,
+        option_split_chars: List[str] = None,
+        option_split_threshold: int = 50,
+        split_on_control_tags: bool = True,
+        voice_text_tag: Union[str, List[str]] = None,
+        context_manager: ContextManager = None,
+        shared_context_ids: List[str] = None,
+        db_connection_str: str = "aiavatar.db",
+        debug: bool = False
+    ):
+        super().__init__(
+            system_prompt=system_prompt,
+            model=model,
+            temperature=temperature,
+            initial_messages=initial_messages,
+            split_chars=split_chars,
+            option_split_chars=option_split_chars,
+            option_split_threshold=option_split_threshold,
+            split_on_control_tags=split_on_control_tags,
+            voice_text_tag=voice_text_tag,
+            context_manager=context_manager,
+            shared_context_ids=shared_context_ids,
+            db_connection_str=db_connection_str,
+            debug=debug
+        )
+        self.reasoning_effort = reasoning_effort
+        self.extra_body = extra_body
+        self.response_ids: Dict[str, str] = {}
+        self._edit_response_params = None
+
+        self.openai_client = openai_module.AsyncClient(
+            api_key=openai_api_key, base_url=base_url
+        )
+
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config["reasoning_effort"] = self.reasoning_effort
+        config["extra_body"] = self.extra_body
+        return config
+
+    @property
+    def dynamic_tool_name(self) -> str:
+        return None
+
+    def edit_response_params(self, func):
+        self._edit_response_params = func
+        return func
+
+    async def compose_messages(self, context_id: str, user_id: str, text: str, files: List[Dict[str, str]] = None, system_prompt_params: Dict[str, any] = None) -> List[Dict]:
+        messages = []
+
+        # Add initial messages for the first call only (no server-side history yet)
+        if not self.response_ids.get(context_id):
+            initial_msgs = await self._get_initial_messages(context_id, user_id, system_prompt_params)
+            if initial_msgs:
+                messages.extend(initial_msgs)
+
+        # Build user message
+        if files:
+            content = []
+            for f in files:
+                if url := f.get("url"):
+                    content.append({"type": "input_image", "image_url": url})
+            if text:
+                content.append({"type": "input_text", "text": text})
+        else:
+            content = text
+        messages.append({"role": "user", "content": content})
+
+        return messages
+
+    async def update_context(self, context_id: str, user_id: str, messages: List[Dict], response_text: str):
+        # Context is managed at OpenAI server via previous_response_id
+        await self.context_manager.add_histories(context_id, [{}], "openai_responses")
+
+    def tool(self, spec: Dict):
+        def decorator(func):
+            # Accept Chat Completions format and convert to Responses API format
+            if spec.get("type") == "function" and "function" in spec:
+                tool_name = spec["function"]["name"]
+                responses_spec = {
+                    "type": "function",
+                    "name": spec["function"]["name"],
+                    "description": spec["function"]["description"],
+                    "parameters": spec["function"]["parameters"],
+                }
+            else:
+                tool_name = spec.get("name", func.__name__)
+                responses_spec = spec
+
+            self.tools[tool_name] = Tool(
+                name=tool_name,
+                spec=responses_spec,
+                func=func
+            )
+            return func
+        return decorator
+
+    def add_tool(self, tool: Tool, is_dynamic: bool = False, use_original: bool = False):
+        if use_original:
+            tool_to_add = tool
+        else:
+            tool_to_add = copy.copy(tool)
+            n, d, p = tool.parse_spec(tool.spec)
+            tool_to_add.spec = {
+                "type": "function",
+                "name": n,
+                "description": d,
+                "parameters": p,
+            }
+            tool_to_add.is_dynamic = is_dynamic
+        self.tools[tool_to_add.name] = tool_to_add
+
+    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[Dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
+        # Build tools list
+        all_tools = [t.spec for _, t in self.tools.items()]
+
+        # Build params
+        response_params = {
+            "model": self.model,
+            "input": messages,
+            "stream": True,
+        }
+
+        # Instructions (system prompt)
+        if system_prompt := await self._get_system_prompt(context_id, user_id, system_prompt_params):
+            response_params["instructions"] = system_prompt
+
+        # Previous response for conversation continuity
+        if previous_response_id := self.response_ids.get(context_id):
+            response_params["previous_response_id"] = previous_response_id
+
+        # Temperature and reasoning effort
+        if self.reasoning_effort is not None:
+            response_params["reasoning"] = {"effort": self.reasoning_effort}
+        if self.temperature is not None:
+            response_params["temperature"] = self.temperature
+
+        if self.extra_body:
+            response_params["extra_body"] = self.extra_body
+
+        # Tools
+        if all_tools:
+            response_params["tools"] = all_tools
+
+        # Inline params
+        if inline_llm_params:
+            for k, v in inline_llm_params.items():
+                response_params[k] = v
+
+        # Edit params callback
+        if self._edit_response_params:
+            self._edit_response_params(response_params, context_id, user_id)
+
+        if self.debug:
+            logger.info(f"Request to OpenAI Responses API: {response_params}")
+
+        # Send request
+        try:
+            stream_resp = await self.openai_client.responses.create(**response_params)
+
+        except openai_module.APIStatusError as aserr:
+            response_json = None
+            try:
+                response_json = aserr.response.json()
+            except:
+                pass
+            logger.warning(f"APIStatusError from OpenAI Responses API: {aserr}")
+            yield LLMResponse(context_id=context_id, error_info={"exception": aserr, "response_json": response_json})
+            return
+
+        except Exception as ex:
+            logger.warning(f"Error from OpenAI Responses API: {ex}")
+            yield LLMResponse(context_id=context_id, error_info={"exception": ex, "response_json": None})
+            return
+
+        # Process streaming events
+        tool_calls: List[ToolCall] = []
+        tool_call_map: Dict[int, int] = {}  # output_index -> tool_calls list index
+
+        async for event in stream_resp:
+            if event.type == "response.output_text.delta":
+                yield LLMResponse(context_id=context_id, text=event.delta)
+
+            elif event.type == "response.output_item.added":
+                if event.item.type == "function_call":
+                    tc = ToolCall(event.item.call_id, event.item.name, "")
+                    tool_call_map[event.output_index] = len(tool_calls)
+                    tool_calls.append(tc)
+
+            elif event.type == "response.function_call_arguments.delta":
+                idx = tool_call_map.get(event.output_index)
+                if idx is not None:
+                    tool_calls[idx].arguments += event.delta
+
+            elif event.type == "response.completed":
+                self.response_ids[context_id] = event.response.id
+
+        # Execute tool calls
+        if tool_calls:
+            await self._on_before_tool_calls(tool_calls)
+
+            tool_outputs = []
+            has_direct_response = False
+            for tc in tool_calls:
+                if self.debug:
+                    logger.info(f"ToolCall: {tc.name}")
+                yield LLMResponse(context_id=context_id, tool_call=ToolCall(id=tc.id, name=tc.name, arguments=tc.arguments, result=None))
+
+                tool_result = None
+                async for tr in self.execute_tool(tc.name, json.loads(tc.arguments), {"context_id": context_id, "user_id": user_id}):
+                    tc.result = tr
+                    if tr.text:
+                        yield LLMResponse(context_id=context_id, text=tr.text)
+                    else:
+                        yield LLMResponse(context_id=context_id, tool_call=tc)
+                        if tr.is_final:
+                            tool_result = tr.data
+                            break
+
+                if self.debug:
+                    logger.info(f"ToolCall result: {tool_result}")
+
+                if tool_result:
+                    # Use response_formatter for direct response if available
+                    tool_obj = self.tools.get(tc.name)
+                    if tool_obj and tool_obj._response_formatter:
+                        direct_text = tool_obj._response_formatter(tool_result, json.loads(tc.arguments))
+                        yield LLMResponse(context_id=context_id, text=direct_text)
+                        has_direct_response = True
+
+                    tool_outputs.append({
+                        "type": "function_call_output",
+                        "call_id": tc.id,
+                        "output": json.dumps(tool_result),
+                    })
+
+            if not has_direct_response and tool_outputs:
+                # Send tool results back via recursive call with previous_response_id
+                async for llm_response in self.get_llm_stream_response(
+                    context_id, user_id, tool_outputs, system_prompt_params=system_prompt_params
+                ):
+                    yield llm_response
