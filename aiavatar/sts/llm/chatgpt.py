@@ -20,8 +20,8 @@ class ChatGPTService(LLMService):
         openai_api_key: str = None,
         system_prompt: str = None,
         base_url: str = None,
-        model: str = "gpt-5-mini",
-        temperature: float = 0.5,
+        model: str = "gpt-5.4",
+        temperature: float = None,
         reasoning_effort: str = None,
         enable_tool_filtering: bool = True,
         extra_body: dict = None,
@@ -195,13 +195,9 @@ class ChatGPTService(LLMService):
         else:
             chat_completion_params["messages"] = messages[:-1] + [{"role": "user", "content": user_content_for_tool}]
 
-        if self.reasoning_effort:
+        if self.reasoning_effort is not None:
             chat_completion_params["reasoning_effort"] = self.reasoning_effort
-        elif self.model.startswith("gpt-5.1"):
-            chat_completion_params["reasoning_effort"] = "none"
-        elif self.model.startswith("gpt-5"):
-            chat_completion_params["reasoning_effort"] = "minimal"
-        else:
+        if self.temperature is not None:
             chat_completion_params["temperature"] = self.temperature
 
         if self.extra_body:
@@ -256,13 +252,9 @@ class ChatGPTService(LLMService):
         }
 
         # Temperature and Reasoning Effort
-        if self.reasoning_effort:
+        if self.reasoning_effort is not None:
             chat_completion_params["reasoning_effort"] = self.reasoning_effort
-        elif self.model.startswith("gpt-5.1") or self.model.startswith("gpt-5.2"):
-            chat_completion_params["reasoning_effort"] = "none"
-        elif self.model.startswith("gpt-5") and not self.model.startswith("gpt-5."):
-            chat_completion_params["reasoning_effort"] = "minimal"
-        elif self.temperature:
+        if self.temperature is not None:
             chat_completion_params["temperature"] = self.temperature
 
         if self.extra_body:

@@ -17,7 +17,8 @@ class LiteLLMService(LLMService):
         system_prompt_by_user_prompt: bool = False,
         base_url: str = None,
         model: str = None,
-        temperature: float = 0.5,
+        temperature: float = None,
+        reasoning_effort: str = None,
         initial_messages: List[dict] = None,
         split_chars: List[str] = None,
         option_split_chars: List[str] = None,
@@ -49,6 +50,7 @@ class LiteLLMService(LLMService):
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
+        self.reasoning_effort = reasoning_effort
         self.system_prompt_by_user_prompt = system_prompt_by_user_prompt
 
         self.dynamic_tool_spec = {
@@ -76,6 +78,7 @@ class LiteLLMService(LLMService):
     def get_config(self) -> dict:
         config = super().get_config()
         config["base_url"] = self.base_url
+        config["reasoning_effort"] = self.reasoning_effort
         config["system_prompt_by_user_prompt"] = self.system_prompt_by_user_prompt
         return config
 
@@ -166,14 +169,19 @@ class LiteLLMService(LLMService):
             user_content_for_tool = user_content + tool_listing_prompt
 
         # Call LLM to filter tools
-        tool_choice_resp = await acompletion(
-            api_key=self.api_key,
-            base_url=self.base_url,
-            model=self.model,
-            messages=messages[:-1] + [{"role": "user", "content": user_content_for_tool}],
-            temperature=0.0,
-            tools = []  # Somtimes error occurs with Claude without empty tools
-        )
+        tool_choice_params = {
+            "api_key": self.api_key,
+            "base_url": self.base_url,
+            "model": self.model,
+            "messages": messages[:-1] + [{"role": "user", "content": user_content_for_tool}],
+            "tools": []  # Sometimes error occurs with Claude without empty tools
+        }
+        if self.reasoning_effort is not None:
+            tool_choice_params["reasoning_effort"] = self.reasoning_effort
+        if self.temperature is not None:
+            tool_choice_params["temperature"] = self.temperature
+
+        tool_choice_resp = await acompletion(**tool_choice_params)
 
         # Parse tools from response
         tool_names = self.parse_tool_names(tool_choice_resp.choices[0].message.content)
@@ -228,10 +236,13 @@ class LiteLLMService(LLMService):
             "base_url": self.base_url,
             "model": self.model,
             "messages": [system_message_for_tool] + messages[1:],
-            "temperature": self.temperature,
             "tools": filtered_tools,
             "stream": True
         }
+        if self.reasoning_effort is not None:
+            acompletion_params["reasoning_effort"] = self.reasoning_effort
+        if self.temperature is not None:
+            acompletion_params["temperature"] = self.temperature
 
         # Inline params
         if inline_llm_params:
