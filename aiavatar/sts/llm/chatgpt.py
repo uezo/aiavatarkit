@@ -61,6 +61,8 @@ class ChatGPTService(LLMService):
 
         client_module = custom_openai_module or openai_module
         if "azure" in model:
+            if base_url:
+                base_url = base_url.rstrip("/")
             api_version = parse_qs(urlparse(base_url).query).get("api-version", [None])[0]
             self.openai_client = client_module.AsyncAzureOpenAI(
                 api_key=openai_api_key,
