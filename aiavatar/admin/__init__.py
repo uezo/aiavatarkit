@@ -4,7 +4,7 @@ import secrets
 from typing import Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response
-from .character import setup_character_api
+from .character import setup_character_api, CharacterService
 from .config import setup_config_api, _adapter_key
 from .control import setup_control_api
 from .evaluation import setup_evaluation_api
@@ -78,8 +78,8 @@ def setup_admin_panel(
     adapter: Adapter,
     title: str = "AIAvatarKit Admin Panel",
     html: str = None,
-    evaluator=None,
-    character_service=None,
+    evaluator: DialogEvaluator = None,
+    character_service: CharacterService = None,
     character_id: str = None,
     default_session_id: str = None,
     api_key: str = None,
@@ -147,7 +147,7 @@ def setup_admin_panel(
         if isinstance(adapter.sts.llm, ChatGPTService):
             eval_llm = ChatGPTService(
                 openai_api_key=adapter.sts.llm.openai_client.api_key,
-                base_url=adapter.sts.llm.openai_client.base_url,
+                base_url=str(adapter.sts.llm.openai_client.base_url),
                 model=adapter.sts.llm.model,
                 temperature=adapter.sts.llm.temperature,
                 reasoning_effort=adapter.sts.llm.reasoning_effort
