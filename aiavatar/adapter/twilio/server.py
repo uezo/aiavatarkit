@@ -29,8 +29,10 @@ logger = logging.getLogger(__name__)
 
 class TwilioSessionData:
     def __init__(self):
-        self.id: str = None
         self.call_sid: str = None
+        self.stream_sid: str = None
+        self.caller: str = ""
+        self.websocket: WebSocket = None
         self.muted: bool = False
 
         self.last_mark: str = ""
@@ -162,7 +164,6 @@ class AIAvatarTwilioServer(Adapter):
 
         # Call base after self.sts is set
         super().__init__(self.sts)
-        self.websockets: Dict[str, WebSocket] = {}
         self.sessions: Dict[str, TwilioSessionData] = {}
 
         # Callbacks
@@ -175,8 +176,6 @@ class AIAvatarTwilioServer(Adapter):
 
         # Twilio
         self.twilio_client = Client(account_sid, auth_token) if account_sid and auth_token else None
-        self.callers: Dict[str, str] = {}
-        self.call_sids: Dict[str, str] = {}
 
         # Timeout operations
         self.first_utterance_timeout = first_utterance_timeout
@@ -285,7 +284,7 @@ class AIAvatarTwilioServer(Adapter):
         return None
 
     # Request
-    async def process_websocket(self, websocket: WebSocket, session_data: TwilioSessionData):
+    async def process_websocket(self, websocket: WebSocket, session_data: TwilioSessionData) -> TwilioSessionData:
         message_str = await websocket.receive_text()
         message = json.loads(message_str)
         event_type = message.get("event")
@@ -293,23 +292,21 @@ class AIAvatarTwilioServer(Adapter):
         if event_type == "start":
             stream_sid = message["start"]["streamSid"]
             call_sid = message["start"]["callSid"]
-            user_id = self.callers.get(call_sid, "")
 
-            # Set session info
-            self.websockets[stream_sid] = websocket
-            session_data.id = stream_sid
-            session_data.call_sid = call_sid
-            self.call_sids[stream_sid] = call_sid
-            self.sessions[session_data.id] = session_data
+            session_data = self.sessions[call_sid]
+            session_data.stream_sid = stream_sid
+            session_data.websocket = websocket
 
-            self.sts.vad.set_session_data(stream_sid, "user_id", user_id, True)
+            user_id = session_data.caller
+
+            self.sts.vad.set_session_data(session_data.call_sid, "user_id", user_id, True)
 
             logger.info(f"WebSocket connected for stream_sid: {stream_sid} / call_sid: {call_sid} / user_id: {user_id}")
 
             # Callback for session start (base class)
             request = AIAvatarRequest(
                 type="start",
-                session_id=stream_sid,
+                session_id=session_data.call_sid,
                 user_id=user_id
             )
             for on_session_start in self._on_session_start_handlers:
@@ -319,41 +316,41 @@ class AIAvatarTwilioServer(Adapter):
                 asyncio.create_task(self._on_connect(request, session_data))
 
         elif event_type == "media":
-            if session_data.muted:
-                return
+            if not session_data or session_data.muted:
+                return session_data
 
             payload_b64 = message["media"]["payload"]
             mulaw_chunk = base64.b64decode(payload_b64)
             linear16_chunk = audioop.ulaw2lin(mulaw_chunk, 2)
             # Convert from 8kHz to 16kHz
             resampled_chunk, _ = audioop.ratecv(linear16_chunk, 2, 1, 8000, 16000, None)
-            is_recording = await self.sts.vad.process_samples(resampled_chunk, session_data.id)
+            is_recording = await self.sts.vad.process_samples(resampled_chunk, session_data.call_sid)
             if is_recording:
                 # Reset idling if user is speaking
                 session_data.idling_start_at = datetime.now()
 
         elif event_type == "mark":
             mark = message["mark"]["name"]
-            stream_sid = message["streamSid"]
-            logger.info(f"mark: {mark} ({stream_sid})")
+            logger.info(f"mark: {mark} ({session_data.call_sid})")
 
             if mark == session_data.last_mark:
                 # Clear last mark if not overwritten by successive voice
                 session_data.last_mark = ""
 
             if session_data.hang_mark == mark:
-                logger.info(f"Hangup: {mark} ({stream_sid})")
-                await self.websockets[stream_sid].close()
+                logger.info(f"Hangup: {mark} ({session_data.call_sid})")
+                await session_data.websocket.close()
 
         elif event_type == "dtmf":
             digit = message["dtmf"]["digit"]
-            stream_sid = message["streamSid"]
-            logger.info(f"dtmf: {digit} ({stream_sid})")
+            logger.info(f"dtmf: {digit} ({session_data.call_sid})")
             if self._on_dtmf:
-                asyncio.create_task(self._on_dtmf(digit, stream_sid))
+                asyncio.create_task(self._on_dtmf(digit, session_data.call_sid))
 
         else:
             logger.info(f"event: {event_type}")
+
+        return session_data
 
     # Response
     async def handle_response(self, response: STSResponse):
@@ -399,11 +396,11 @@ class AIAvatarTwilioServer(Adapter):
                 await self.send_voice(response.session_id, audio_data=response.audio_data)
 
         elif response.type == "final":
-            if response.text and "[operation:hangup]" in response.text:
-                logger.info(f"Hangup after: {session_data.last_mark} ({session_data.id})")
+            if response.text and ("[operation:hangup]" in response.text or "<operation name=\"hangup\" />" in response.text):
+                logger.info(f"Hangup after: {session_data.last_mark} ({session_data.call_sid})")
                 session_data.hang_mark = session_data.last_mark
                 if session_data.max_turn:
-                    logger.info(f"Muted by hang_mark after max turn exceeded: {session_data.id}")
+                    logger.info(f"Muted by hang_mark after max turn exceeded: {session_data.call_sid}")
                     session_data.muted = True
 
         elif response.type == "stop":
@@ -420,7 +417,8 @@ class AIAvatarTwilioServer(Adapter):
             text: Text for TTS synthesis. Used when audio_data is not provided.
             audio_data: 16kHz linear16 PCM audio bytes. If None, synthesized from text using pipeline TTS.
         """
-        if session_id not in self.websockets:
+        session_data = self.sessions.get(session_id)
+        if not session_data or not session_data.websocket:
             logger.warning(f"WebSocket not found for session: {session_id}")
             return
 
@@ -443,9 +441,9 @@ class AIAvatarTwilioServer(Adapter):
         base64_encoded = base64.b64encode(mulaw_data).decode("utf-8")
 
         # Send media
-        await self.websockets[session_id].send_json({
+        await session_data.websocket.send_json({
             "event": "media",
-            "streamSid": session_id,
+            "streamSid": session_data.stream_sid,
             "media": {
                 "payload": base64_encoded
             }
@@ -453,27 +451,31 @@ class AIAvatarTwilioServer(Adapter):
 
         # Send mark to track playback completion
         mark = f"{session_id}-{uuid4()}"
-        await self.websockets[session_id].send_json({
+        await session_data.websocket.send_json({
             "event": "mark",
-            "streamSid": session_id,
+            "streamSid": session_data.stream_sid,
             "mark": {
                 "name": mark
             }
         })
 
-        session_data = self.sessions.get(session_id)
-        if session_data:
-            session_data.last_mark = mark
+        session_data.last_mark = mark
 
     async def stop_response(self, session_id: str, context_id: str):
-        if session_id in self.websockets:
+        session_data = self.sessions.get(session_id)
+        if session_data and session_data.websocket:
             # Clear voice queue to stop speech
-            await self.websockets[session_id].send_json({
+            await session_data.websocket.send_json({
                 "event": "clear",
-                "streamSid": session_id,
+                "streamSid": session_data.stream_sid,
             })
 
-    def get_websocket_router(self, wss_base_url: str, path: str = "/ws"):
+    def get_websocket_router(self, websocket_url: str, path: str = None):
+        if path is None:
+            # Extract path from the last "/" in the URL
+            # e.g., "wss://example.com/twilio/ws" → "/ws"
+            path = "/" + websocket_url.rsplit("/", 1)[-1]
+
         router = APIRouter()
 
         @router.post("/voice")
@@ -481,63 +483,65 @@ class AIAvatarTwilioServer(Adapter):
             form_data = await request.form()
             caller = form_data.get("Caller", "").replace("+", "")
             call_sid = form_data.get("CallSid", "")
-            self.callers[call_sid] = caller
+
+            session_data = TwilioSessionData()
+            session_data.call_sid = call_sid
+            session_data.caller = caller
+            self.sessions[call_sid] = session_data
+
             logger.info(f"Incoming call from: {caller} (CallSid: {call_sid})")
 
             response = VoiceResponse()
             connect = Connect()
-            connect.stream(url=f"{wss_base_url}{path}")
+            connect.stream(url=websocket_url)
             response.append(connect)
             return HTMLResponse(content=str(response), media_type="application/xml")
 
         @router.websocket(path)
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
-            session_data = TwilioSessionData()
+            session_data = None
 
             try:
                 while True:
-                    now = datetime.now()
-                    if session_data.last_mark:
-                        # Reset idling if AI is speaking
-                        session_data.idling_start_at = now
+                    if session_data:
+                        now = datetime.now()
+                        if session_data.last_mark:
+                            # Reset idling if AI is speaking
+                            session_data.idling_start_at = now
 
-                    # Timeout operations
-                    idling_for = (now - session_data.idling_start_at).total_seconds()
-                    if idling_for >= self.hangup_timeout and self._on_hangup_timeout is not None:
-                        asyncio.create_task(self._on_hangup_timeout(session_data.id))
-                    elif (idling_for >= self.first_utterance_timeout and idling_for < self.hangup_timeout) and self._on_first_utterance_timeout is not None and not session_data.is_first_utterance_timeout_invoked:
-                        session_data.is_first_utterance_timeout_invoked = True
-                        asyncio.create_task(self._on_first_utterance_timeout(session_data.id))
+                        # Timeout operations
+                        idling_for = (now - session_data.idling_start_at).total_seconds()
+                        if idling_for >= self.hangup_timeout and self._on_hangup_timeout is not None:
+                            asyncio.create_task(self._on_hangup_timeout(session_data.call_sid))
+                        elif (idling_for >= self.first_utterance_timeout and idling_for < self.hangup_timeout) and self._on_first_utterance_timeout is not None and not session_data.is_first_utterance_timeout_invoked:
+                            session_data.is_first_utterance_timeout_invoked = True
+                            asyncio.create_task(self._on_first_utterance_timeout(session_data.call_sid))
 
-                    await self.process_websocket(websocket, session_data)
+                    session_data = await self.process_websocket(websocket, session_data)
 
             except Exception as ex:
                 error_message = str(ex)
 
                 if "WebSocket is not connected" in error_message:
-                    logger.info(f"WebSocket disconnected (1): session_id={session_data.id}")
+                    logger.info(f"WebSocket disconnected (1): session_id={session_data.call_sid}")
                 elif "<CloseCode.NO_STATUS_RCVD: 1005>" in error_message:
-                    logger.info(f"WebSocket disconnected (2): session_id={session_data.id}")
+                    logger.info(f"WebSocket disconnected (2): session_id={session_data.call_sid}")
                 else:
                     raise
 
             finally:
-                if session_data.id:
+                if session_data and session_data.call_sid:
                     if self._on_disconnect:
                         await self._on_disconnect(session_data)
 
                     # Clean up turn counts for this session's context
-                    context_id = self.sts.vad.get_session_data(session_data.id, "context_id")
+                    context_id = self.sts.vad.get_session_data(session_data.call_sid, "context_id")
                     if context_id and context_id in self._turn_counts:
                         del self._turn_counts[context_id]
 
-                    await self.sts.finalize(session_data.id)
-                    if session_data.id in self.websockets:
-                        del self.websockets[session_data.id]
-                    if session_data.id in self.sessions:
-                        del self.sessions[session_data.id]
-                    if session_data.id in self.call_sids:
-                        del self.call_sids[session_data.id]
+                    await self.sts.finalize(session_data.call_sid)
+                    if session_data.call_sid in self.sessions:
+                        del self.sessions[session_data.call_sid]
 
         return router

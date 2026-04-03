@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(asctime)s : %(
 OPENAI_API_KEY = "YOUR_OPENAI_API_KEY"
 TWILIO_ACCOUNT_SID = "YOUR_TWILIO_ACCOUNT_SID"
 TWILIO_AUTH_TOKEN = "YOUR_TWILIO_AUTH_TOKEN"
-WSS_BASE_URL = "wss://your-server.example.com"
+WEBSOCKET_URL = "wss://your-server.example.com/ws"
 
 SYSTEM_PROMPT = """You are "Mia," the user's tsundere little sister, talking on the phone.
 
@@ -183,13 +183,12 @@ async def on_dtmf(digit: str, session_id: str):
     logger.info(f"DTMF received: {digit} ({session_id})")
     if digit == "0":
         # Example: transfer to operator
-        if app_twilio.twilio_client and app_twilio.transfer_url:
-            call_sid = app_twilio.call_sids.get(session_id)
-            if call_sid:
-                app_twilio.twilio_client.calls(call_sid).update(
-                    url="https://transfer_url/path",
-                    method="POST"
-                )
+        session_data = app_twilio.sessions.get(session_id)
+        if app_twilio.twilio_client and session_data:
+            app_twilio.twilio_client.calls(session_id).update(
+                url="https://transfer_url/path",
+                method="POST"
+            )
 
 
 # Session start
@@ -210,7 +209,7 @@ async def on_response(aiavatar_response: AIAvatarResponse, sts_response: STSResp
 # Disconnect
 @app_twilio.on_disconnect
 async def on_disconnect(session_data: TwilioSessionData):
-    logger.info(f"Disconnected: {session_data.id}")
+    logger.info(f"Disconnected: {session_data.call_sid}")
 
 
 # =============================================================
@@ -218,7 +217,7 @@ async def on_disconnect(session_data: TwilioSessionData):
 # =============================================================
 
 app = FastAPI()
-router = app_twilio.get_websocket_router(wss_base_url=WSS_BASE_URL, path="/ws")
+router = app_twilio.get_websocket_router(websocket_url=WEBSOCKET_URL)
 app.include_router(router)
 
 # Run: uvicorn server:app --host 0.0.0.0 --port 8000
