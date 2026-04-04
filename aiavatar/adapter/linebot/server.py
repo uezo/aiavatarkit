@@ -38,7 +38,7 @@ from ...sts.session_state_manager import SessionStateManager
 from ...sts.performance_recorder import PerformanceRecorder
 from ..models import AvatarControlRequest
 from .. import Adapter
-from .session_manager import LineBotSession, LineBotSessionManager, SQLiteLineBotSessionManager
+from ..session_manager import ChannelSession, ChannelSessionManager, SQLiteChannelSessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 # Schema
 class GetSessionResponse(BaseModel):
     session_id: str
-    linebot_user_id: str
+    channel_user_id: str
     user_id: str
     context_id: Optional[str] = None
     updated_at: Optional[datetime] = None
@@ -64,7 +64,7 @@ class AIAvatarLineBotServer(Adapter):
         image_upload_dir: str = "linebot_images",
         image_download_url_base: str = None,
         default_error_message: str = "Error 😢",
-        session_manager: LineBotSessionManager = None,
+        session_manager: ChannelSessionManager = None,
 
         # Quick start
         openai_api_key: str = None,
@@ -152,17 +152,18 @@ class AIAvatarLineBotServer(Adapter):
             "location": self.parse_location_message
         }
 
-        # LINE Bot session management
-        self.session_manager = session_manager or SQLiteLineBotSessionManager(
-            db_path=db_connection_str,
-        )
+        # Session management
         self.linebot_session_timeout = linebot_session_timeout
+        self.session_manager = session_manager or SQLiteChannelSessionManager(
+            db_path=db_connection_str,
+            timeout=linebot_session_timeout,
+        )
 
         # Image
         self.image_upload_dir = Path(image_upload_dir)
         self.image_download_url_base = image_download_url_base
 
-        self._edit_linebot_session = None
+        self._edit_channel_session = None
         self._preprocess_request = None
         self._preprocess_response = None
         self._process_avatar_control_request = None
@@ -185,8 +186,8 @@ class AIAvatarLineBotServer(Adapter):
         return credentials.credentials
 
     # Session
-    def edit_linebot_session(self, func: Callable[[LineBotSession], Awaitable[None]]):
-        self._edit_linebot_session = func
+    def edit_channel_session(self, func: Callable[[ChannelSession], Awaitable[None]]):
+        self._edit_channel_session = func
         return func
 
     # Message parsers
@@ -231,11 +232,11 @@ class AIAvatarLineBotServer(Adapter):
             return func
         return decorator
 
-    def default_event_handler(self, func: Callable[[MessageEvent, LineBotSession], Awaitable[None]]):
+    def default_event_handler(self, func: Callable[[MessageEvent, ChannelSession], Awaitable[None]]):
         self._default_event_handler = func
         return func
 
-    async def handle_message_event(self, event: MessageEvent, linebot_session: LineBotSession):
+    async def handle_message_event(self, event: MessageEvent, channel_session: ChannelSession):
         if message_parser := self._message_parsers.get(event.message.type):
             text, image_bytes = await message_parser(event.message)
         else:
@@ -244,13 +245,13 @@ class AIAvatarLineBotServer(Adapter):
 
         files = None
         if image_bytes:
-            image_id = await self.save_image(user_id=linebot_session.user_id, image_bytes=image_bytes)
+            image_id = await self.save_image(user_id=channel_session.user_id, image_bytes=image_bytes)
             files = [{"url": f"{self.image_download_url_base}/image/{image_id}"}]
 
         request = STSRequest(
-            session_id=linebot_session.id,
-            user_id=linebot_session.user_id,
-            context_id=linebot_session.context_id,
+            session_id=channel_session.session_id,
+            user_id=channel_session.user_id,
+            context_id=channel_session.context_id,
             text=text,
             files=files
         )
@@ -262,10 +263,8 @@ class AIAvatarLineBotServer(Adapter):
             if not response.metadata:
                 response.metadata = {}
             response.metadata["reply_token"] = event.reply_token
-            linebot_session.context_id = response.context_id
-            if response.type == "final":
-                linebot_session.updated_at = datetime.now(timezone.utc)
-                await self.session_manager.upsert_session(linebot_session=linebot_session)
+            if response.type == "final" and response.context_id:
+                await self.session_manager.update_context_id("line", channel_session.channel_user_id, response.context_id)
             await self.sts.handle_response(response)
 
     # Processors
@@ -275,15 +274,15 @@ class AIAvatarLineBotServer(Adapter):
             await self.process_event(event)
 
     async def process_event(self, event: Event):
-        linebot_session = None
+        channel_session = None
         try:
             if event_handler := self._event_handlers.get(event.type) or self._default_event_handler:
-                linebot_session = await self.session_manager.get_session(event.source.user_id)
-                if self._edit_linebot_session:
-                    await self._edit_linebot_session(linebot_session)
+                channel_session = await self.session_manager.get_session("line", event.source.user_id)
+                if self._edit_channel_session:
+                    await self._edit_channel_session(channel_session)
                 await event_handler(
                     event=event,
-                    linebot_session=linebot_session
+                    channel_session=channel_session
                 )
             else:
                 logger.info(f"Unhandled event: {event}")
@@ -292,15 +291,15 @@ class AIAvatarLineBotServer(Adapter):
             logger.exception(f"Error at process_event: {event}")
             await self.send_error_message(
                 event=event,
-                linebot_session=linebot_session,
+                channel_session=channel_session,
                 ex=ex
             )
 
-    def on_send_error_message(self, func: Callable[[ReplyMessageRequest, LineBotSession, Event, Exception], Awaitable[None]]):
+    def on_send_error_message(self, func: Callable[[ReplyMessageRequest, ChannelSession, Event, Exception], Awaitable[None]]):
         self._on_send_error_message = func
         return func
 
-    async def send_error_message(self, event: Event, linebot_session: LineBotSession, ex: Exception):
+    async def send_error_message(self, event: Event, channel_session: ChannelSession, ex: Exception):
         if not hasattr(event, "reply_token"):
             return
 
@@ -310,7 +309,7 @@ class AIAvatarLineBotServer(Adapter):
         )
 
         if self._on_send_error_message:
-            await self._on_send_error_message(reply_message_request, linebot_session, event, ex)
+            await self._on_send_error_message(reply_message_request, channel_session, event, ex)
 
         await self.line_api.reply_message(reply_message_request)
 
@@ -371,17 +370,15 @@ class AIAvatarLineBotServer(Adapter):
             if self.api_key:
                 self.api_key_auth(credentials)
 
-            session = await self.session_manager.get_session(line_user_id)
-            if not session:
-                raise HTTPException(status_code=404, detail=f"No session found: line_user_id: {line_user_id}")
+            channel_session = await self.session_manager.get_session("line", line_user_id)
 
             return GetSessionResponse(
-                session_id=session.id,
-                linebot_user_id=session.linebot_user_id,
-                user_id=session.user_id,
-                context_id=session.context_id,
-                updated_at=session.updated_at,
-                data=session.data
+                session_id=channel_session.session_id,
+                channel_user_id=channel_session.channel_user_id,
+                user_id=channel_session.user_id,
+                context_id=channel_session.context_id,
+                updated_at=channel_session.updated_at,
+                data=channel_session.data
             )
 
         @router.delete("/session/{line_user_id}")
@@ -392,11 +389,7 @@ class AIAvatarLineBotServer(Adapter):
             if self.api_key:
                 self.api_key_auth(credentials)
 
-            session = await self.session_manager.get_session(linebot_user_id=line_user_id)
-            if not session:
-                raise HTTPException(status_code=404, detail=f"No session found: line_user_id: {line_user_id}")
-
-            await self.session_manager.delete_session(linebot_user_id=line_user_id)
+            await self.session_manager.delete_session("line", line_user_id)
 
             return JSONResponse(content={"result": "success"})
 
