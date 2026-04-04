@@ -24,14 +24,6 @@ class ContextManager(ABC):
     async def get_last_created_at(self, context_id: str) -> datetime:
         pass
 
-    @abstractmethod
-    async def get_context_id_by_user_id(self, user_id: str) -> Optional[str]:
-        pass
-
-    @abstractmethod
-    async def set_context_id_for_user_id(self, user_id: str, context_id: str):
-        pass
-
     async def merge_context(self, from_context_id: str, to_context_id: str):
         if self._on_merge_context:
             await self._on_merge_context(from_context_id, to_context_id, self)
@@ -76,17 +68,6 @@ class SQLiteContextManager(ContextManager):
                     """
                     CREATE INDEX IF NOT EXISTS idx_chat_histories_context_id_created_at
                     ON chat_histories (context_id, created_at)
-                    """
-                )
-
-                # Create user_contexts table for user_id -> context_id mapping
-                conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS user_contexts (
-                        user_id TEXT PRIMARY KEY,
-                        context_id TEXT NOT NULL,
-                        updated_at TIMESTAMP NOT NULL
-                    )
                     """
                 )
 
@@ -208,56 +189,11 @@ class SQLiteContextManager(ContextManager):
         finally:
             conn.close()
 
-    async def get_context_id_by_user_id(self, user_id: str) -> Optional[str]:
-        conn = sqlite3.connect(self.db_path)
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT context_id FROM user_contexts WHERE user_id = ?",
-                (user_id,)
-            )
-            row = cursor.fetchone()
-            return row[0] if row else None
-
-        except Exception as ex:
-            logger.exception(f"Error at get_context_id_by_user_id: {ex}")
-            return None
-
-        finally:
-            conn.close()
-
-    async def set_context_id_for_user_id(self, user_id: str, context_id: str):
-        conn = sqlite3.connect(self.db_path)
-        try:
-            now_utc = datetime.now(timezone.utc)
-            conn.execute(
-                """
-                INSERT INTO user_contexts (user_id, context_id, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET
-                    context_id = excluded.context_id,
-                    updated_at = excluded.updated_at
-                """,
-                (user_id, context_id, now_utc)
-            )
-            conn.commit()
-
-        except Exception as ex:
-            logger.exception(f"Error at set_context_id_for_user_id: {ex}")
-            conn.rollback()
-
-        finally:
-            conn.close()
-
     async def _merge_context(self, from_context_id: str, to_context_id: str):
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute(
                 "UPDATE chat_histories SET context_id = ? WHERE context_id = ?",
-                (to_context_id, from_context_id)
-            )
-            conn.execute(
-                "UPDATE user_contexts SET context_id = ? WHERE context_id = ?",
                 (to_context_id, from_context_id)
             )
             conn.commit()

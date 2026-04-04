@@ -117,32 +117,9 @@ async def test_get_histories_timeout(context_manager):
 
 
 @pytest.mark.asyncio
-async def test_get_context_id_by_user_id_not_found(context_manager):
-    result = await context_manager.get_context_id_by_user_id("unknown_user")
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_set_and_get_context_id_by_user_id(context_manager):
-    await context_manager.set_context_id_for_user_id("user_1", "ctx_aaa")
-    result = await context_manager.get_context_id_by_user_id("user_1")
-    assert result == "ctx_aaa"
-
-
-@pytest.mark.asyncio
-async def test_set_context_id_for_user_id_update(context_manager):
-    await context_manager.set_context_id_for_user_id("user_1", "ctx_aaa")
-    await context_manager.set_context_id_for_user_id("user_1", "ctx_bbb")
-    result = await context_manager.get_context_id_by_user_id("user_1")
-    assert result == "ctx_bbb"
-
-
-@pytest.mark.asyncio
 async def test_merge_context(context_manager):
     await context_manager.add_histories("ctx_from", [{"message": "Hello from phone"}])
     await context_manager.add_histories("ctx_to", [{"message": "Hello from web"}])
-    await context_manager.set_context_id_for_user_id("user_phone", "ctx_from")
-    await context_manager.set_context_id_for_user_id("user_web", "ctx_to")
 
     await context_manager.merge_context("ctx_from", "ctx_to")
 
@@ -153,10 +130,6 @@ async def test_merge_context(context_manager):
     # ctx_from has no histories left
     histories_from = await context_manager.get_histories("ctx_from")
     assert len(histories_from) == 0
-
-    # user_phone now points to ctx_to
-    assert await context_manager.get_context_id_by_user_id("user_phone") == "ctx_to"
-    assert await context_manager.get_context_id_by_user_id("user_web") == "ctx_to"
 
 
 @pytest.mark.asyncio
