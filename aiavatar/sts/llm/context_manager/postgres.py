@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 import json
 import logging
-from typing import List, Dict, Optional, Union, Callable, Awaitable
+from typing import List, Dict, Union, Callable, Awaitable
 import asyncpg
 from ..base import ContextManager
 
@@ -102,16 +102,6 @@ class PostgreSQLContextManager(ContextManager):
                     """
                 )
 
-                # Create user_contexts table for user_id -> context_id mapping
-                await conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS user_contexts (
-                        user_id TEXT PRIMARY KEY,
-                        context_id TEXT NOT NULL,
-                        updated_at TIMESTAMP NOT NULL
-                    )
-                    """
-                )
             except Exception as ex:
                 logger.exception(f"Error at init_db: {ex}")
 
@@ -225,52 +215,14 @@ class PostgreSQLContextManager(ContextManager):
                 logger.exception(f"Error at get_last_created_at: {ex}")
                 return datetime.min.replace(tzinfo=timezone.utc)
 
-    async def get_context_id_by_user_id(self, user_id: str) -> Optional[str]:
-        pool = await self.get_pool()
-        async with pool.acquire() as conn:
-            try:
-                row = await conn.fetchrow(
-                    "SELECT context_id FROM user_contexts WHERE user_id = $1",
-                    user_id
-                )
-                return row["context_id"] if row else None
-
-            except Exception as ex:
-                logger.exception(f"Error at get_context_id_by_user_id: {ex}")
-                return None
-
-    async def set_context_id_for_user_id(self, user_id: str, context_id: str):
-        pool = await self.get_pool()
-        async with pool.acquire() as conn:
-            try:
-                now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-                await conn.execute(
-                    """
-                    INSERT INTO user_contexts (user_id, context_id, updated_at)
-                    VALUES ($1, $2, $3)
-                    ON CONFLICT(user_id) DO UPDATE SET
-                        context_id = EXCLUDED.context_id,
-                        updated_at = EXCLUDED.updated_at
-                    """,
-                    user_id, context_id, now_utc
-                )
-
-            except Exception as ex:
-                logger.exception(f"Error at set_context_id_for_user_id: {ex}")
-
     async def _merge_context(self, from_context_id: str, to_context_id: str):
         pool = await self.get_pool()
         async with pool.acquire() as conn:
             try:
-                async with conn.transaction():
-                    await conn.execute(
-                        "UPDATE chat_histories SET context_id = $1 WHERE context_id = $2",
-                        to_context_id, from_context_id
-                    )
-                    await conn.execute(
-                        "UPDATE user_contexts SET context_id = $1 WHERE context_id = $2",
-                        to_context_id, from_context_id
-                    )
+                await conn.execute(
+                    "UPDATE chat_histories SET context_id = $1 WHERE context_id = $2",
+                    to_context_id, from_context_id
+                )
 
             except Exception as ex:
                 logger.exception(f"Error at _merge_context: {ex}")

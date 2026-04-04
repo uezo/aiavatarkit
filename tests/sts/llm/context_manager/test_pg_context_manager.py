@@ -121,3 +121,45 @@ async def test_get_histories_timeout(context_manager):
     histories = await context_manager.get_histories(context_id)
     assert len(histories) == 1
     assert histories[0]["message"] == "New data"
+
+
+@pytest.mark.asyncio
+async def test_merge_context(context_manager):
+    ctx_from = f"ctx_from_{uuid4()}"
+    ctx_to = f"ctx_to_{uuid4()}"
+    await context_manager.add_histories(ctx_from, [{"message": "From message"}])
+    await context_manager.add_histories(ctx_to, [{"message": "To message"}])
+
+    await context_manager.merge_context(ctx_from, ctx_to)
+
+    histories = await context_manager.get_histories(ctx_to)
+    assert len(histories) == 2
+
+    histories_from = await context_manager.get_histories(ctx_from)
+    assert len(histories_from) == 0
+
+
+@pytest.mark.asyncio
+async def test_merge_context_with_hook(context_manager):
+    hook_called = {}
+
+    @context_manager.on_merge_context
+    async def my_hook(from_id, to_id, cm):
+        hook_called["from"] = from_id
+        hook_called["to"] = to_id
+        hook_called["histories"] = await cm.get_histories(from_id)
+
+    ctx_src = f"ctx_src_{uuid4()}"
+    ctx_dst = f"ctx_dst_{uuid4()}"
+    await context_manager.add_histories(ctx_src, [{"message": "Source message"}])
+    await context_manager.add_histories(ctx_dst, [{"message": "Dest message"}])
+
+    await context_manager.merge_context(ctx_src, ctx_dst)
+
+    assert hook_called["from"] == ctx_src
+    assert hook_called["to"] == ctx_dst
+    assert len(hook_called["histories"]) == 1
+    assert hook_called["histories"][0]["message"] == "Source message"
+
+    histories = await context_manager.get_histories(ctx_dst)
+    assert len(histories) == 2
