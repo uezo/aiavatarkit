@@ -7,17 +7,18 @@ import logging
 from typing import List, Dict, Callable, Awaitable, Optional
 from uuid import uuid4
 from fastapi import APIRouter, Request, WebSocket, Response
+from pydantic import BaseModel
 from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse, Connect
 from ...database import PoolProvider
 from ...sts.models import STSRequest, STSResponse
 from ...sts.pipeline import STSPipeline
-from ...sts.vad import SpeechDetector
-from ...sts.stt import SpeechRecognizer
+from ...sts.vad import SpeechDetector, SpeechDetectorDummy
+from ...sts.stt import SpeechRecognizer, SpeechRecognizerDummy
 from ...sts.stt.openai import OpenAISpeechRecognizer
 from ...sts.llm import LLMService
 from ...sts.llm.context_manager import ContextManager
-from ...sts.tts import SpeechSynthesizer
+from ...sts.tts import SpeechSynthesizer, SpeechSynthesizerDummy
 from ...sts.session_state_manager import SessionStateManager
 from ...sts.performance_recorder import PerformanceRecorder
 from ...sts.voice_recorder import VoiceRecorder
@@ -32,15 +33,40 @@ class TwilioSessionData:
         self.call_sid: str = None
         self.stream_sid: str = None
         self.caller: str = ""
+        self.direction: str = ""  # "inbound" or "outbound-api"
         self.websocket: WebSocket = None
         self.muted: bool = False
 
         self.last_mark: str = ""
         self.hang_mark: str = ""
+        self.unmute_mark: str = ""
         self.is_first_utterance_timeout_invoked: bool = False
         self.max_turn: bool = False
         self.idling_start_at: datetime = datetime.now()
         self.data = {}
+
+
+class TwilioSMSMessage:
+    def __init__(self, message_sid: str, from_number: str, to_number: str, body: str):
+        self.message_sid = message_sid
+        self.from_number = from_number
+        self.to_number = to_number
+        self.body = body
+
+
+class MakeCallRequest(BaseModel):
+    to: str
+    call_reason: Optional[str] = None
+
+class MakeCallResponse(BaseModel):
+    call_sid: str
+
+class SendSMSRequest(BaseModel):
+    to: str
+    body: str
+
+class SendSMSResponse(BaseModel):
+    message_sid: str
 
 
 class HTMLResponse(Response):
@@ -104,6 +130,12 @@ class AIAvatarTwilioServer(Adapter):
         # Twilio
         account_sid: str = None,
         auth_token: str = None,
+        phone_number: str = None,
+        webhook_base_url: str = None,
+
+        # SMS
+        enable_sms: bool = False,
+        sms_sts: STSPipeline = None,
 
         # Timeout operations
         first_utterance_timeout: float = 10.0,
@@ -170,12 +202,41 @@ class AIAvatarTwilioServer(Adapter):
         self._on_connect: Callable[[AIAvatarRequest, TwilioSessionData], Awaitable[None]] = None
         self._on_disconnect: Callable[[TwilioSessionData], Awaitable[None]] = None
         self._on_dtmf: Callable[[str, str], Awaitable[None]] = None
+        self._on_sms_received: Callable[[TwilioSMSMessage], Awaitable[None]] = None
 
         # Audio
         self.tts_sample_rate = tts_sample_rate
 
         # Twilio
+        self.phone_number = phone_number
         self.twilio_client = Client(account_sid, auth_token) if account_sid and auth_token else None
+        self.webhook_base_url: str = webhook_base_url
+        self._outbound_call_data: Dict[str, dict] = {}
+
+        # SMS pipeline
+        if sms_sts:
+            self.sms_sts = sms_sts
+        elif enable_sms:
+            self.sms_sts = STSPipeline(
+                vad=SpeechDetectorDummy(),
+                stt=SpeechRecognizerDummy(),
+                llm=self.sts.llm,
+                tts=SpeechSynthesizerDummy(),
+                timestamp_interval_seconds=self.sts.timestamp_interval_seconds,
+                timestamp_prefix=self.sts.timestamp_prefix,
+                timestamp_timezone=self.sts.timestamp_timezone,
+                db_pool_provider=self.sts.db_pool_provider,
+                session_state_manager=self.sts.session_state_manager,
+                performance_recorder=self.sts.performance_recorder,
+                voice_recorder_enabled=False,
+                debug=self.sts.debug,
+            )
+        else:
+            self.sms_sts = None
+
+        if self.sms_sts:
+            self.sms_sts.handle_response = self._handle_sms_response
+            self.sms_sts.stop_response = self._stop_sms_response
 
         # Timeout operations
         self.first_utterance_timeout = first_utterance_timeout
@@ -277,6 +338,10 @@ class AIAvatarTwilioServer(Adapter):
         self._on_hangup_timeout = func
         return func
 
+    def on_sms_received(self, func: Callable[[TwilioSMSMessage], Awaitable[None]]):
+        self._on_sms_received = func
+        return func
+
     def get_session_by_user_id(self, user_id: str) -> Optional[TwilioSessionData]:
         for session_id, session_data in reversed(self.sessions.items()):
             if self.sts.vad.get_session_data(session_id, "user_id") == user_id:
@@ -337,6 +402,11 @@ class AIAvatarTwilioServer(Adapter):
                 # Clear last mark if not overwritten by successive voice
                 session_data.last_mark = ""
 
+            if session_data.unmute_mark == mark:
+                logger.info(f"Unmute: {mark} ({session_data.call_sid})")
+                session_data.muted = False
+                session_data.unmute_mark = ""
+
             if session_data.hang_mark == mark:
                 logger.info(f"Hangup: {mark} ({session_data.call_sid})")
                 await session_data.websocket.close()
@@ -381,7 +451,12 @@ class AIAvatarTwilioServer(Adapter):
         if not (response.metadata and response.metadata.get("keep_idling")):
             session_data.idling_start_at = datetime.now()
 
-        if response.type == "start":
+        if response.type == "accepted":
+            # Mute audio input while AI is speaking to block barge-in
+            if response.metadata and response.metadata.get("block_barge_in"):
+                session_data.muted = True
+
+        elif response.type == "start":
             # Reset marks
             session_data.last_mark = ""
             session_data.hang_mark = ""
@@ -396,6 +471,10 @@ class AIAvatarTwilioServer(Adapter):
                 await self.send_voice(response.session_id, audio_data=response.audio_data)
 
         elif response.type == "final":
+            # Schedule unmute after last audio chunk finishes playing
+            if session_data.muted and session_data.last_mark:
+                session_data.unmute_mark = session_data.last_mark
+
             if response.text and ("[operation:hangup]" in response.text or "<operation name=\"hangup\" />" in response.text):
                 logger.info(f"Hangup after: {session_data.last_mark} ({session_data.call_sid})")
                 session_data.hang_mark = session_data.last_mark
@@ -470,26 +549,69 @@ class AIAvatarTwilioServer(Adapter):
                 "streamSid": session_data.stream_sid,
             })
 
-    def get_websocket_router(self, websocket_url: str, path: str = None):
-        if path is None:
-            # Extract path from the last "/" in the URL
-            # e.g., "wss://example.com/twilio/ws" → "/ws"
-            path = "/" + websocket_url.rsplit("/", 1)[-1]
+    # Outbound call
+    def make_call(self, to: str, from_: str = None, call_reason: str = None) -> str:
+        from_number = from_ or self.phone_number
+        if not from_number:
+            raise ValueError("phone_number is required for making calls. Set it in the constructor or pass from_ parameter.")
+        if not self.twilio_client:
+            raise ValueError("twilio_client is not configured. Set account_sid and auth_token in the constructor.")
+        if not self.webhook_base_url:
+            raise ValueError("webhook_base_url is required for making calls. Set it in the constructor or call get_router first.")
+        call = self.twilio_client.calls.create(to=to, from_=from_number, url=self.webhook_base_url + "/voice")
+        if call_reason:
+            self._outbound_call_data[call.sid] = {"call_reason": call_reason}
+        return call.sid
+
+    # Response (SMS)
+    async def _handle_sms_response(self, response: STSResponse):
+        pass
+
+    async def _stop_sms_response(self, session_id: str, context_id: str):
+        pass
+
+    # Outbound SMS
+    async def send_sms(self, to: str, body: str, from_: str = None) -> str:
+        from_number = from_ or self.phone_number
+        if not from_number:
+            raise ValueError("phone_number is required for sending SMS. Set it in the constructor or pass from_ parameter.")
+        if not self.twilio_client:
+            raise ValueError("twilio_client is not configured. Set account_sid and auth_token in the constructor.")
+        message = self.twilio_client.messages.create(body=body, from_=from_number, to=to)
+        return message.sid
+
+    # FastAPI Router
+    def get_router(self):
+        # Endpoints: /voice, /ws, /call/make, /sms, /sms/send
+        websocket_url = self.webhook_base_url.replace("https://", "wss://").replace("http://", "ws://") + "/ws"
 
         router = APIRouter()
 
+        # Phone
         @router.post("/voice")
         async def incoming_call(request: Request):
             form_data = await request.form()
-            caller = form_data.get("Caller", "").replace("+", "")
+            direction = form_data.get("Direction", "inbound")
             call_sid = form_data.get("CallSid", "")
+
+            if direction == "outbound-api":
+                caller = form_data.get("Called", "")
+            else:
+                caller = form_data.get("Caller", "")
 
             session_data = TwilioSessionData()
             session_data.call_sid = call_sid
             session_data.caller = caller
+            session_data.direction = direction
+
+            # Pick up outbound call data (text, etc.) stored by make_call
+            outbound_data = self._outbound_call_data.pop(call_sid, None)
+            if outbound_data:
+                session_data.data.update(outbound_data)
+
             self.sessions[call_sid] = session_data
 
-            logger.info(f"Incoming call from: {caller} (CallSid: {call_sid})")
+            logger.info(f"Call ({direction}) with: {caller} (CallSid: {call_sid})")
 
             response = VoiceResponse()
             connect = Connect()
@@ -497,7 +619,7 @@ class AIAvatarTwilioServer(Adapter):
             response.append(connect)
             return HTMLResponse(content=str(response), media_type="application/xml")
 
-        @router.websocket(path)
+        @router.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
             session_data = None
@@ -543,5 +665,30 @@ class AIAvatarTwilioServer(Adapter):
                     await self.sts.finalize(session_data.call_sid)
                     if session_data.call_sid in self.sessions:
                         del self.sessions[session_data.call_sid]
+
+        @router.post("/call/make", response_model=MakeCallResponse)
+        async def make_outbound_call(request_body: MakeCallRequest):
+            call_sid = self.make_call(to=request_body.to, call_reason=request_body.call_reason)
+            return MakeCallResponse(call_sid=call_sid)
+
+        # SMS
+        @router.post("/sms")
+        async def incoming_sms(request: Request):
+            form_data = await request.form()
+            message = TwilioSMSMessage(
+                message_sid=form_data.get("MessageSid", ""),
+                from_number=form_data.get("From", ""),
+                to_number=form_data.get("To", ""),
+                body=form_data.get("Body", ""),
+            )
+            logger.info(f"Incoming SMS from: {message.from_number} (MessageSid: {message.message_sid})")
+            if self._on_sms_received:
+                asyncio.create_task(self._on_sms_received(message))
+            return HTMLResponse(content="<Response></Response>", media_type="application/xml")
+
+        @router.post("/sms/send", response_model=SendSMSResponse)
+        async def send_sms_endpoint(request_body: SendSMSRequest):
+            message_sid = await self.send_sms(to=request_body.to, body=request_body.body)
+            return SendSMSResponse(message_sid=message_sid)
 
         return router
