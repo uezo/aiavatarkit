@@ -47,35 +47,35 @@ class PostgreSQLContextManager(ContextManager):
                 async with self._pool_lock:
                     if not self._db_initialized:
                         await self.init_db(pool)
-                        self._db_initialized = True
             return pool
 
         # Otherwise, create own pool (backward compatible)
-        if self._pool is not None:
+        if self._pool is not None and self._db_initialized:
             return self._pool
 
         async with self._pool_lock:
-            if self._pool is not None:
+            if self._pool is not None and self._db_initialized:
                 return self._pool
 
-            if self.connection_str:
-                self._pool = await asyncpg.create_pool(
-                    dsn=self.connection_str,
-                    min_size=self.db_pool_min_size,
-                    max_size=self.db_pool_max_size,
-                )
-            else:
-                self._pool = await asyncpg.create_pool(
-                    host=self.host,
-                    port=self.port,
-                    database=self.dbname,
-                    user=self.user,
-                    password=self.password,
-                    min_size=self.db_pool_min_size,
-                    max_size=self.db_pool_max_size,
-                )
+            if self._pool is None:
+                if self.connection_str:
+                    self._pool = await asyncpg.create_pool(
+                        dsn=self.connection_str,
+                        min_size=self.db_pool_min_size,
+                        max_size=self.db_pool_max_size,
+                    )
+                else:
+                    self._pool = await asyncpg.create_pool(
+                        host=self.host,
+                        port=self.port,
+                        database=self.dbname,
+                        user=self.user,
+                        password=self.password,
+                        min_size=self.db_pool_min_size,
+                        max_size=self.db_pool_max_size,
+                    )
+
             await self.init_db(self._pool)
-            self._db_initialized = True
 
         return self._pool
 
@@ -101,9 +101,10 @@ class PostgreSQLContextManager(ContextManager):
                     ON chat_histories (context_id, created_at)
                     """
                 )
+                self._db_initialized = True
 
-            except Exception as ex:
-                logger.exception(f"Error at init_db: {ex}")
+            except Exception:
+                logger.exception("Error at init_db")
 
     async def get_histories(self, context_id: Union[str, List[str]], limit: int = 100) -> List[Dict]:
         pool = await self.get_pool()
