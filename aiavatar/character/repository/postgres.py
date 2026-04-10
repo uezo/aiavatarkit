@@ -1,11 +1,14 @@
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone, date
 from typing import List, Dict, Any, Optional, Callable, Awaitable
 from uuid import uuid4
 import asyncpg
 from .base import CharacterRepositoryBase, ActivityRepositoryBase, UserRepository
 from ..models import Character, WeeklySchedule, DailySchedule, Diary, User
+
+logger = logging.getLogger(__name__)
 
 
 class PostgreSQLCharacterRepository(CharacterRepositoryBase):
@@ -45,61 +48,67 @@ class PostgreSQLCharacterRepository(CharacterRepositoryBase):
                 async with self._pool_lock:
                     if not self._db_initialized:
                         await self.init_db(pool)
-                        self._db_initialized = True
             return pool
 
         # Otherwise, create own pool (backward compatible)
-        if self._pool is not None:
+        if self._pool is not None and self._db_initialized:
             return self._pool
 
         async with self._pool_lock:
-            if self._pool is not None:
+            if self._pool is not None and self._db_initialized:
                 return self._pool
 
-            if self.connection_str:
-                self._pool = await asyncpg.create_pool(
-                    dsn=self.connection_str,
-                    min_size=self.db_pool_min_size,
-                    max_size=self.db_pool_max_size,
-                )
-            else:
-                self._pool = await asyncpg.create_pool(
-                    host=self.host,
-                    port=self.port,
-                    database=self.dbname,
-                    user=self.user,
-                    password=self.password,
-                    min_size=self.db_pool_min_size,
-                    max_size=self.db_pool_max_size,
-                )
+            if self._pool is None:
+                if self.connection_str:
+                    self._pool = await asyncpg.create_pool(
+                        dsn=self.connection_str,
+                        min_size=self.db_pool_min_size,
+                        max_size=self.db_pool_max_size,
+                    )
+                else:
+                    self._pool = await asyncpg.create_pool(
+                        host=self.host,
+                        port=self.port,
+                        database=self.dbname,
+                        user=self.user,
+                        password=self.password,
+                        min_size=self.db_pool_min_size,
+                        max_size=self.db_pool_max_size,
+                    )
+
             await self.init_db(self._pool)
-            self._db_initialized = True
 
         return self._pool
 
-    async def init_db(self, pool: asyncpg.Pool) -> None:
+    async def init_db(self, pool: asyncpg.Pool):
         async with pool.acquire() as conn:
-            await conn.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {self.TABLE_NAME} (
-                    id TEXT PRIMARY KEY,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL,
-                    name TEXT NOT NULL,
-                    prompt TEXT NOT NULL,
-                    episode TEXT,
-                    attribute TEXT,
-                    conversation_example TEXT,
-                    metadata JSONB NOT NULL DEFAULT '{{}}'
+            try:
+                await conn.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self.TABLE_NAME} (
+                        id TEXT PRIMARY KEY,
+                        created_at TIMESTAMPTZ NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL,
+                        name TEXT NOT NULL,
+                        prompt TEXT NOT NULL,
+                        episode TEXT,
+                        attribute TEXT,
+                        conversation_example TEXT,
+                        metadata JSONB NOT NULL DEFAULT '{{}}'
+                    )
+                    """
                 )
-                """
-            )
-            # Migration: add columns if not present
-            for col in ("episode", "attribute", "conversation_example"):
-                try:
-                    await conn.execute(f"ALTER TABLE {self.TABLE_NAME} ADD COLUMN {col} TEXT")
-                except asyncpg.exceptions.DuplicateColumnError:
-                    pass
+                # Migration: add columns if not present
+                for col in ("episode", "attribute", "conversation_example"):
+                    try:
+                        await conn.execute(f"ALTER TABLE {self.TABLE_NAME} ADD COLUMN {col} TEXT")
+                    except asyncpg.exceptions.DuplicateColumnError:
+                        pass
+
+                self._db_initialized = True
+
+            except Exception:
+                logger.exception("Error at init_db")
 
     def _row_to_character(self, row) -> Character:
         metadata = row["metadata"]
@@ -289,79 +298,84 @@ class PostgreSQLActivityRepository(ActivityRepositoryBase):
                 async with self._pool_lock:
                     if not self._db_initialized:
                         await self.init_db(pool)
-                        self._db_initialized = True
             return pool
 
         # Otherwise, create own pool (backward compatible)
-        if self._pool is not None:
+        if self._pool is not None and self._db_initialized:
             return self._pool
 
         async with self._pool_lock:
-            if self._pool is not None:
+            if self._pool is not None and self._db_initialized:
                 return self._pool
 
-            if self.connection_str:
-                self._pool = await asyncpg.create_pool(
-                    dsn=self.connection_str,
-                    min_size=self.db_pool_min_size,
-                    max_size=self.db_pool_max_size,
-                )
-            else:
-                self._pool = await asyncpg.create_pool(
-                    host=self.host,
-                    port=self.port,
-                    database=self.dbname,
-                    user=self.user,
-                    password=self.password,
-                    min_size=self.db_pool_min_size,
-                    max_size=self.db_pool_max_size,
-                )
+            if self._pool is None:
+                if self.connection_str:
+                    self._pool = await asyncpg.create_pool(
+                        dsn=self.connection_str,
+                        min_size=self.db_pool_min_size,
+                        max_size=self.db_pool_max_size,
+                    )
+                else:
+                    self._pool = await asyncpg.create_pool(
+                        host=self.host,
+                        port=self.port,
+                        database=self.dbname,
+                        user=self.user,
+                        password=self.password,
+                        min_size=self.db_pool_min_size,
+                        max_size=self.db_pool_max_size,
+                    )
+
             await self.init_db(self._pool)
-            self._db_initialized = True
 
         return self._pool
 
-    async def init_db(self, pool: asyncpg.Pool) -> None:
+    async def init_db(self, pool: asyncpg.Pool):
         async with pool.acquire() as conn:
-            await conn.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {self.WEEKLY_SCHEDULES_TABLE} (
-                    id TEXT PRIMARY KEY,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL,
-                    character_id TEXT NOT NULL UNIQUE,
-                    content TEXT NOT NULL
+            try:
+                await conn.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self.WEEKLY_SCHEDULES_TABLE} (
+                        id TEXT PRIMARY KEY,
+                        created_at TIMESTAMPTZ NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL,
+                        character_id TEXT NOT NULL UNIQUE,
+                        content TEXT NOT NULL
+                    )
+                    """
                 )
-                """
-            )
-            await conn.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {self.DAILY_SCHEDULES_TABLE} (
-                    id TEXT PRIMARY KEY,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL,
-                    character_id TEXT NOT NULL,
-                    schedule_date DATE NOT NULL,
-                    content TEXT NOT NULL,
-                    content_context JSONB NOT NULL DEFAULT '{{}}',
-                    UNIQUE (character_id, schedule_date)
+                await conn.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self.DAILY_SCHEDULES_TABLE} (
+                        id TEXT PRIMARY KEY,
+                        created_at TIMESTAMPTZ NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL,
+                        character_id TEXT NOT NULL,
+                        schedule_date DATE NOT NULL,
+                        content TEXT NOT NULL,
+                        content_context JSONB NOT NULL DEFAULT '{{}}',
+                        UNIQUE (character_id, schedule_date)
+                    )
+                    """
                 )
-                """
-            )
-            await conn.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {self.DIARIES_TABLE} (
-                    id TEXT PRIMARY KEY,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL,
-                    character_id TEXT NOT NULL,
-                    diary_date DATE NOT NULL,
-                    content TEXT NOT NULL,
-                    content_context JSONB NOT NULL DEFAULT '{{}}',
-                    UNIQUE (character_id, diary_date)
+                await conn.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self.DIARIES_TABLE} (
+                        id TEXT PRIMARY KEY,
+                        created_at TIMESTAMPTZ NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL,
+                        character_id TEXT NOT NULL,
+                        diary_date DATE NOT NULL,
+                        content TEXT NOT NULL,
+                        content_context JSONB NOT NULL DEFAULT '{{}}',
+                        UNIQUE (character_id, diary_date)
+                    )
+                    """
                 )
-                """
-            )
+                self._db_initialized = True
+
+            except Exception:
+                logger.exception("Error at init_db")
 
     # WeeklySchedule operations
 
@@ -832,51 +846,56 @@ class PostgreSQLUserRepository(UserRepository):
                 async with self._pool_lock:
                     if not self._db_initialized:
                         await self.init_db(pool)
-                        self._db_initialized = True
             return pool
 
         # Otherwise, create own pool (backward compatible)
-        if self._pool is not None:
+        if self._pool is not None and self._db_initialized:
             return self._pool
 
         async with self._pool_lock:
-            if self._pool is not None:
+            if self._pool is not None and self._db_initialized:
                 return self._pool
 
-            if self.connection_str:
-                self._pool = await asyncpg.create_pool(
-                    dsn=self.connection_str,
-                    min_size=self.db_pool_min_size,
-                    max_size=self.db_pool_max_size,
-                )
-            else:
-                self._pool = await asyncpg.create_pool(
-                    host=self.host,
-                    port=self.port,
-                    database=self.dbname,
-                    user=self.user,
-                    password=self.password,
-                    min_size=self.db_pool_min_size,
-                    max_size=self.db_pool_max_size,
-                )
+            if self._pool is None:
+                if self.connection_str:
+                    self._pool = await asyncpg.create_pool(
+                        dsn=self.connection_str,
+                        min_size=self.db_pool_min_size,
+                        max_size=self.db_pool_max_size,
+                    )
+                else:
+                    self._pool = await asyncpg.create_pool(
+                        host=self.host,
+                        port=self.port,
+                        database=self.dbname,
+                        user=self.user,
+                        password=self.password,
+                        min_size=self.db_pool_min_size,
+                        max_size=self.db_pool_max_size,
+                    )
+
             await self.init_db(self._pool)
-            self._db_initialized = True
 
         return self._pool
 
-    async def init_db(self, pool: asyncpg.Pool) -> None:
+    async def init_db(self, pool: asyncpg.Pool):
         async with pool.acquire() as conn:
-            await conn.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {self.TABLE_NAME} (
-                    id TEXT PRIMARY KEY,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL,
-                    name TEXT NOT NULL,
-                    metadata JSONB NOT NULL DEFAULT '{{}}'
+            try:
+                await conn.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self.TABLE_NAME} (
+                        id TEXT PRIMARY KEY,
+                        created_at TIMESTAMPTZ NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL,
+                        name TEXT NOT NULL,
+                        metadata JSONB NOT NULL DEFAULT '{{}}'
+                    )
+                    """
                 )
-                """
-            )
+                self._db_initialized = True
+
+            except Exception:
+                logger.exception("Error at init_db")
 
     async def create(
         self,

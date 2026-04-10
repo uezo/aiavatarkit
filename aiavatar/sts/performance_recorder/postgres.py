@@ -33,35 +33,38 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
         self.stop_event = threading.Event()
         self._pool: asyncpg.Pool = None
         self._pool_lock = asyncio.Lock()
+        self._db_initialized = False
         self._loop: asyncio.AbstractEventLoop = None
 
         self.worker_thread = threading.Thread(target=self.start_worker, daemon=True)
         self.worker_thread.start()
 
     async def get_pool(self) -> asyncpg.Pool:
-        if self._pool is not None:
+        if self._pool is not None and self._db_initialized:
             return self._pool
 
         async with self._pool_lock:
-            if self._pool is not None:
+            if self._pool is not None and self._db_initialized:
                 return self._pool
 
-            if self.connection_str:
-                self._pool = await asyncpg.create_pool(
-                    dsn=self.connection_str,
-                    min_size=self.db_pool_size,
-                    max_size=self.db_pool_size,
-                )
-            else:
-                self._pool = await asyncpg.create_pool(
-                    host=self.host,
-                    port=self.port,
-                    database=self.dbname,
-                    user=self.user,
-                    password=self.password,
-                    min_size=self.db_pool_size,
-                    max_size=self.db_pool_size,
-                )
+            if self._pool is None:
+                if self.connection_str:
+                    self._pool = await asyncpg.create_pool(
+                        dsn=self.connection_str,
+                        min_size=self.db_pool_size,
+                        max_size=self.db_pool_size,
+                    )
+                else:
+                    self._pool = await asyncpg.create_pool(
+                        host=self.host,
+                        port=self.port,
+                        database=self.dbname,
+                        user=self.user,
+                        password=self.password,
+                        min_size=self.db_pool_size,
+                        max_size=self.db_pool_size,
+                    )
+
             await self.init_db()
 
         return self._pool
@@ -149,9 +152,10 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON performance_records (user_id)")
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_context_id ON performance_records (context_id)")
 
-            except Exception as ex:
-                logger.error(f"Error at init_db: {ex}")
-                raise
+                self._db_initialized = True
+
+            except Exception:
+                logger.exception("Error at init_db")
 
     def start_worker(self):
         self._loop = asyncio.new_event_loop()
@@ -160,7 +164,13 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
         self._loop.close()
 
     async def _worker(self):
-        pool = await self.get_pool()
+        # Warm up the pool so the first record doesn't pay the init cost.
+        # If this fails, the worker keeps running and retries on each record.
+        try:
+            await self.get_pool()
+        except Exception:
+            logger.exception("Initial pool init failed; will retry on each record")
+
         try:
             while not self.stop_event.is_set() or not self.record_queue.empty():
                 try:
@@ -169,19 +179,25 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
                     continue
 
                 try:
+                    pool = await self.get_pool()
                     await self.insert_record(pool, record)
                 except (asyncpg.InterfaceError, asyncpg.PostgresError) as e:
                     logger.warning(f"Error inserting record, retrying: {e}")
                     await asyncio.sleep(0.5)
                     try:
                         await self.insert_record(pool, record)
-                    except Exception as retry_error:
-                        logger.error(f"Retry failed: {retry_error}")
+                    except Exception:
+                        logger.exception("Retry failed, dropping performance record")
+                except Exception:
+                    logger.exception("Failed to insert performance record")
 
                 self.record_queue.task_done()
         finally:
             if self._pool is not None:
-                await self._pool.close()
+                try:
+                    await self._pool.close()
+                except Exception:
+                    logger.exception("Error closing PostgreSQL pool")
 
     async def insert_record(self, pool: asyncpg.Pool, record: PerformanceRecord):
         columns = [field.name for field in fields(PerformanceRecord)] + ["created_at"]
