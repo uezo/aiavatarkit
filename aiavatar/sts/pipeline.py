@@ -544,7 +544,8 @@ class STSPipeline:
                         session_id=request.session_id,
                         user_id=request.user_id,
                         context_id=llm_stream_chunk.context_id,
-                        tool_call=llm_stream_chunk.tool_call
+                        tool_call=llm_stream_chunk.tool_call,
+                        structured_content=llm_stream_chunk.structured_content
                     )
                     continue
 
@@ -562,7 +563,8 @@ class STSPipeline:
                     voice_text=llm_stream_chunk.voice_text,
                     language=language,
                     audio_data=audio_chunk,
-                    metadata={"is_first_chunk": is_first_chunk, "is_guardrail_triggered": True if guradrail_name else False}
+                    metadata={"is_first_chunk": is_first_chunk, "is_guardrail_triggered": True if guradrail_name else False},
+                    structured_content=llm_stream_chunk.structured_content
                 )
                 is_first_chunk = False
 

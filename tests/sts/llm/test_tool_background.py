@@ -402,3 +402,101 @@ async def test_async_generator_yields_tool_call_result():
     assert results[0].is_final is False
     assert results[1].data == {"answer": "hello"}
     assert results[1].is_final is True
+
+
+# --- structured_content ---
+
+def test_tool_call_result_structured_content():
+    tr = ToolCallResult(
+        data={"raw": "data"},
+        structured_content={"key": "value", "nested": {"a": 1}}
+    )
+    assert tr.structured_content == {"key": "value", "nested": {"a": 1}}
+    assert tr.data == {"raw": "data"}
+
+
+def test_tool_call_result_structured_content_default_none():
+    tr = ToolCallResult(data={"msg": "hello"})
+    assert tr.structured_content is None
+
+
+def test_tool_call_to_dict_with_structured_content():
+    tr = ToolCallResult(
+        data={"msg": "hello"},
+        structured_content={"ui_data": [1, 2, 3]}
+    )
+    tc = ToolCall(id="1", name="test", arguments='{"q":"hi"}', result=tr)
+    d = tc.to_dict()
+    assert d["result"]["structured_content"] == {"ui_data": [1, 2, 3]}
+
+
+def test_tool_call_to_dict_without_structured_content():
+    tr = ToolCallResult(data={"msg": "hello"})
+    tc = ToolCall(id="1", name="test", arguments='{"q":"hi"}', result=tr)
+    d = tc.to_dict()
+    assert "structured_content" not in d["result"]
+
+
+@pytest.mark.asyncio
+async def test_structured_content_direct_return():
+    async def my_func(query: str):
+        return ToolCallResult(
+            data={"answer": query},
+            structured_content={"display": {"title": query, "type": "info"}}
+        )
+
+    tool = make_tool(my_func)
+    svc = make_service_with_tool(tool)
+
+    results = []
+    async for tr in svc.execute_tool("test_tool", {"query": "weather"}, {"context_id": "c1", "user_id": "u1"}):
+        results.append(tr)
+
+    assert len(results) == 1
+    assert results[0].data == {"answer": "weather"}
+    assert results[0].structured_content == {"display": {"title": "weather", "type": "info"}}
+
+
+@pytest.mark.asyncio
+async def test_structured_content_async_generator():
+    async def my_func(query: str):
+        yield ToolCallResult(data={"progress": 50}, is_final=False, structured_content={"status": "loading"})
+        yield ToolCallResult(data={"answer": query}, is_final=True, structured_content={"status": "complete", "results": [1, 2, 3]})
+
+    tool = make_tool(my_func)
+    svc = make_service_with_tool(tool)
+
+    results = []
+    async for tr in svc.execute_tool("test_tool", {"query": "test"}, {"context_id": "c1", "user_id": "u1"}):
+        results.append(tr)
+
+    assert results[0].structured_content == {"status": "loading"}
+    assert results[1].structured_content == {"status": "complete", "results": [1, 2, 3]}
+
+
+@pytest.mark.asyncio
+async def test_structured_content_background_timeout_completes():
+    completed = []
+
+    async def my_func(query: str):
+        await asyncio.sleep(0.1)
+        return ToolCallResult(
+            data={"answer": query},
+            structured_content={"card": {"title": query}}
+        )
+
+    tool = make_tool(my_func, background_timeout=5.0)
+
+    @tool.on_completed
+    async def handle_completed(result, metadata):
+        completed.append(result)
+
+    svc = make_service_with_tool(tool)
+
+    results = []
+    async for tr in svc.execute_tool("test_tool", {"query": "fast"}, {"context_id": "c1", "user_id": "u1"}):
+        results.append(tr)
+
+    assert len(results) == 1
+    assert results[0].data == {"answer": "fast"}
+    assert results[0].structured_content == {"card": {"title": "fast"}}

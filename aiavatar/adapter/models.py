@@ -35,6 +35,7 @@ class AIAvatarResponse(BaseModel):
     avatar_control_request: Optional[AvatarControlRequest] = None
     audio_data: Optional[Union[bytes, str]] = None
     metadata: Optional[Dict] = None
+    structured_content: Optional[Dict] = None
 
 
 class AIAvatarException(Exception):

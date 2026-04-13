@@ -37,3 +37,4 @@ class STSResponse:
     audio_data: bytes = None
     tool_call: ToolCall = None
     metadata: dict = None
+    structured_content: dict = None

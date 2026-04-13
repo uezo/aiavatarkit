@@ -396,7 +396,8 @@ class AIAvatarTwilioServer(Adapter):
 
         elif event_type == "mark":
             mark = message["mark"]["name"]
-            logger.info(f"mark: {mark} ({session_data.call_sid})")
+            if self.debug:
+                logger.info(f"mark: {mark} ({session_data.call_sid})")
 
             if mark == session_data.last_mark:
                 # Clear last mark if not overwritten by successive voice
@@ -432,7 +433,8 @@ class AIAvatarTwilioServer(Adapter):
             text=response.text,
             voice_text=response.voice_text,
             audio_data=response.audio_data,
-            metadata=response.metadata or {}
+            metadata=response.metadata or {},
+            structured_content=response.structured_content
         )
 
         # Callback for each response chunk (base class)

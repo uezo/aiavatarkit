@@ -294,7 +294,8 @@ class AIAvatarHttpServer(Adapter):
                         text=response.text,
                         voice_text=response.voice_text,
                         audio_data=response.audio_data,
-                        metadata=response.metadata or {}
+                        metadata=response.metadata or {},
+                        structured_content=response.structured_content
                     )
 
                     # Callback for each response chunk

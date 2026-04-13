@@ -13,11 +13,12 @@ logger = logging.getLogger(__name__)
 
 
 class ToolCallResult:
-    def __init__(self, data: dict = None, is_final: bool = True, text: str = None, task_id: str = None):
+    def __init__(self, data: dict = None, is_final: bool = True, text: str = None, task_id: str = None, structured_content: dict = None):
         self.data = data or {}
         self.is_final = is_final
         self.text = text
         self.task_id = task_id
+        self.structured_content = structured_content
 
 
 class ToolCall:
@@ -37,6 +38,8 @@ class ToolCall:
             result_dict = {"data": self.result.data, "is_final": self.result.is_final}
             if self.result.task_id:
                 result_dict["task_id"] = self.result.task_id
+            if self.result.structured_content:
+                result_dict["structured_content"] = self.result.structured_content
             d["result"] = result_dict
         return d
 
@@ -60,13 +63,14 @@ class Guardrail(ABC):
 
 
 class LLMResponse:
-    def __init__(self, context_id: str, text: str = None, voice_text: str = None, tool_call: ToolCall = None, guradrail_name: str = None, error_info: dict = None):
+    def __init__(self, context_id: str, text: str = None, voice_text: str = None, tool_call: ToolCall = None, guradrail_name: str = None, error_info: dict = None, structured_content: dict = None):
         self.context_id = context_id
         self.text = text
         self.voice_text = voice_text
         self.tool_call = tool_call
         self.guradrail_name = guradrail_name
         self.error_info = error_info or {}
+        self.structured_content = structured_content
 
 
 class Tool:
@@ -414,7 +418,11 @@ The list of tools is as follows:
                 # Try synchronous first, fallback to background on timeout
                 done, _ = await asyncio.wait({task}, timeout=tool.background_timeout)
                 if done:
-                    yield ToolCallResult(data=task.result())
+                    result = task.result()
+                    if isinstance(result, ToolCallResult):
+                        yield result
+                    else:
+                        yield ToolCallResult(data=result)
                     return
 
             # Immediate background or timed-out: register callback and return
