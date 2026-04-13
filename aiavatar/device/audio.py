@@ -5,7 +5,7 @@ import logging
 import numpy as np
 import queue
 import threading
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Callable
 import wave
 import pyaudio
 
@@ -151,6 +151,11 @@ class AudioPlayer:
         self.wave_params = None
         self.is_playing = False
         self.stop_event = threading.Event()
+        self._before_play: Callable[[bytes, int, int, int], bytes] = None
+
+    def before_play(self, func: Callable[[bytes, int, int, int], bytes]):
+        self._before_play = func
+        return func
 
     def is_wave_params_changed(self, current_params: wave._wave_params):
         return self.wave_params is None or current_params is None \
@@ -199,6 +204,8 @@ class AudioPlayer:
                     while data:
                         if self.stop_event.is_set():
                             break
+                        if self._before_play:
+                            data = self._before_play(data, current_params.framerate, current_params.nchannels, current_params.sampwidth)
                         self.play_stream.write(data)
                         data = wf.readframes(self.chunk_size)
 
@@ -217,6 +224,8 @@ class AudioPlayer:
             if has_wave_header:
                 self.play(data)
             else:
+                if self._before_play:
+                    data = self._before_play(data, self.wave_params.framerate, self.wave_params.nchannels, self.wave_params.sampwidth)
                 self.play_stream.write(data)
             self.is_playing = False
 
