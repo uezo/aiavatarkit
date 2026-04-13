@@ -1,6 +1,6 @@
 # AIAvatarKit Feature List
 
-**Version 0.8.8** (February 2026)
+**Version 0.8.14** (April 2026)
 
 AIAvatarKit is a Speech-to-Speech framework for building real-time voice-interactive AI avatars. This document systematically summarizes the features of each component.
 
@@ -34,7 +34,8 @@ A component that detects the start and end of speech to extract utterance segmen
 | **StandardSpeechDetector** | Volume threshold-based | Fast, lightweight, runs locally | Simple detection in quiet environments |
 | **SileroSpeechDetector** | Deep learning model | High accuracy, noise resistant | Noisy environments or when high precision is required |
 | **SileroStreamSpeechDetector** | Deep learning model + Streaming STT | Real-time segment recognition during recording | Low-latency response with partial transcription feedback |
-| **AzureStreamSpeechDetector** | Cloud API | Can retrieve real-time recognition text | When displaying recognition results during speech |
+| **AzureStreamSpeechDetector** | Cloud API (Azure) | Can retrieve real-time recognition text | When displaying recognition results during speech |
+| **AmazonTranscribeStreamSpeechDetector** | Cloud API (AWS) | Silence-based accumulation of multiple recognition results | When using AWS infrastructure or need accumulated utterances |
 
 ### 1.2 Common Features
 
@@ -82,7 +83,33 @@ Extends `SileroSpeechDetector` with segment-based speech recognition. Performs p
 | **Pre-roll time specification** | `preroll_buffer_sec`: Specify pre-roll time in seconds |
 | **Text validation** | `@validate_recognized_text` decorator to filter invalid recognition results |
 
-### 1.6 VAD Callbacks
+### 1.6 AmazonTranscribeStreamSpeechDetector-Specific Features
+
+Uses Amazon Transcribe's streaming speech recognition for both detection and transcription. **Silence-based accumulation** combines multiple recognition results into a single speech event.
+
+| Feature | Description |
+|---------|-------------|
+| **Streaming recognition** | Continuous audio streaming to Amazon Transcribe |
+| **Silence accumulation** | `silence_duration_threshold`: Accumulate multiple final results within silence window into one utterance |
+| **Max duration** | `max_duration`: Triggers immediate speech detection with accumulated text when reached |
+| **on_speech_detecting callback** | Partial transcription results with accumulated text prepended |
+| **Text validation** | `@validate_recognized_text` decorator to filter invalid recognition results |
+| **AWS credential chain** | Optional explicit credentials or default AWS credential chain |
+
+```python
+from aiavatar.sts.vad.amazon_transcribe_stream import AmazonTranscribeStreamSpeechDetector
+
+vad = AmazonTranscribeStreamSpeechDetector(
+    aws_region="ap-northeast-1",
+    aws_language="ja-JP",
+    silence_duration_threshold=0.5,  # Accumulate results within silence window
+    max_duration=20.0,
+)
+```
+
+> **Note:** The `silence_duration_threshold` timer starts from when Amazon Transcribe returns a final result, not from when the user stops speaking. Actual perceived delay = Transcribe processing delay + `silence_duration_threshold`.
+
+### 1.7 VAD Callbacks
 
 Extension points for custom processing at various VAD stages. **Multiple callbacks can be registered for each event**.
 
@@ -180,7 +207,17 @@ A component that generates conversation responses.
 | **LiteLLMService** | Multiple providers | Model-agnostic unified interface |
 | **DifyService** | Dify | External workflow integration |
 
-### 3.2 Common Features
+### 3.2 OpenAI-Compatible APIs
+
+`ChatGPTService` supports OpenAI-compatible APIs, enabling use of **Grok, Gemini, Claude, and other providers** via `base_url` with a non-reasoning configuration.
+
+| Provider | Configuration |
+|----------|---------------|
+| **Grok** | `model="grok-4-1-fast-non-reasoning"`, `base_url="https://api.x.ai/v1"` |
+| **Gemini** | `model="gemini-2.5-flash"`, `base_url="https://generativelanguage.googleapis.com/v1beta/openai/"` |
+| **Claude** | `model="claude-haiku-4-5"`, `base_url="https://api.anthropic.com/v1/"` |
+
+### 3.3 Common Features
 
 | Feature | Description |
 |---------|-------------|
@@ -190,8 +227,9 @@ A component that generates conversation responses.
 | **Context management** | Saves/retrieves conversation history (SQLite/PostgreSQL). Maintains context for multi-turn conversations |
 | **Shared context** | `shared_context_ids`: Integrates context from multiple sessions. Used for knowledge sharing between bots or injecting global information |
 | **Initial messages** | `initial_messages`: Sample messages for few-shot learning. Guides LLM output by demonstrating response style and format |
+| **Inline LLM parameters** | `inline_llm_params`: Override model, temperature, etc. per-request when calling `chat_stream` directly |
 
-### 3.3 Text Splitting (Low-Latency Voice Response)
+### 3.4 Text Splitting (Low-Latency Voice Response)
 
 A feature that splits LLM response streams at punctuation and **executes TTS processing in parallel with LLM generation** to speed up voice response delivery to users.
 
@@ -211,7 +249,7 @@ LLM output: "nice weather." → Split at "." → Send "Today is nice weather" to
 User starts hearing "Hello" before LLM completes full text generation
 ```
 
-### 3.4 Zero-shot CoT (Think Before Answering)
+### 3.5 Zero-shot CoT (Think Before Answering)
 
 A feature that enables Chain-of-Thought (CoT) where AI "thinks before answering". The thinking process is not vocalized; only the answer portion is sent to TTS.
 
@@ -242,20 +280,23 @@ llm = ChatGPTService(
 )
 ```
 
-### 3.5 Tool Calling
+### 3.6 Tool Calling
 
 Function Calling feature for LLM to call external functions (APIs, databases, web search, etc.).
 
 | Feature | Description |
 |---------|-------------|
-| **Tool registration** | Register tool functions with `@service.tool` decorator. Auto-converts to OpenAI/Claude/Gemini formats |
+| **Tool registration** | Register tool functions with `@service.tool` decorator or `add_tool`. Auto-converts to OpenAI/Claude/Gemini formats |
 | **Dynamic tool selection** | `use_dynamic_tools`: When many tools exist, LLM selects only relevant ones. Reduces prompt size |
-| **Tool filtering** | Automatic relevant tool selection by LLM. Narrows 100 tools to 5, etc. |
-| **Streaming results** | Stream intermediate results of tool execution. Notifies user of progress for long-running processes |
+| **Custom tool repository** | `@get_dynamic_tools` hook for vector-search-based tool retrieval at scale (thousands of tools) |
+| **Streaming results** | Stream intermediate results and voice feedback for long-running processes. Yield string for immediate speech |
+| **Background tool execution** | `@on_completed`/`@on_submitted` callbacks for long-running tools. Avatar acknowledges immediately, notifies on completion |
+| **Background timeout** | `background_timeout`: Hybrid mode — try sync first, fall back to background if timeout exceeded |
 | **Response formatter** | `@response_formatter`: Bypass 2nd LLM call and speak tool result directly via template. For accuracy-critical data and latency reduction |
+| **Structured content** | `ToolCallResult.structured_content`: Send structured data directly to client for UI rendering, separate from LLM context |
 | **MCP integration** | Model Context Protocol server integration via StdioMCP/StreamableHttpMCP |
 
-### 3.6 Built-in Tools
+### 3.7 Built-in Tools
 
 Ready-to-use built-in tools.
 
@@ -267,8 +308,9 @@ Ready-to-use built-in tools.
 | **WebScraperTool** | Web scraping using Playwright. Gets content after JavaScript rendering |
 | **NanoBananaTool** | Gemini image generation. Generates images from text |
 | **NanoBananaSelfieTool** | Character selfie generation. Specify expression, outfit, background |
+| **OpenClawTool** | Autonomous AI agent delegation via [OpenClaw](https://openclaw.ai). Background execution with push/polling delivery |
 
-### 3.7 Guardrails
+### 3.8 Guardrails
 
 Safety features for filtering inappropriate content and detecting/replacing specific patterns. **Parallel execution** and **async evaluation** ensure safety without compromising user experience.
 
@@ -310,7 +352,7 @@ This design provides:
 # → User isn't blocked waiting; issues are naturally corrected
 ```
 
-### 3.8 Callbacks/Hooks
+### 3.9 Callbacks/Hooks
 
 Extension points for inserting custom logic at each processing stage.
 
@@ -341,7 +383,7 @@ def print_chat(role, context_id, user_id, text, files):
     print(f"{color}[{timestamp}] {role}: {text}\033[0m")
 ```
 
-### 3.9 Observability
+### 3.10 Observability
 
 A feature to **monitor** request contents to LLM, interpretation results, tool calls, and generated responses. Used for quality improvement and governance.
 
@@ -378,8 +420,8 @@ A component that converts text to speech. Outputs LLM responses as the **avatar'
 | **AzureSpeechSynthesizer** | Azure | SSML support | Multi-language, emotional expression |
 | **GoogleSpeechSynthesizer** | Google Cloud | Multi-language support | General-purpose speech synthesis |
 | **OpenAISpeechSynthesizer** | OpenAI | Voice instruction feature, Azure OpenAI support | Natural English voice |
-| **SpeechGatewaySpeechSynthesizer** | Custom | General gateway | Style-Bert-VITS2 integration, etc. |
-| **create_instant_synthesizer** | Custom | Factory function for custom TTS creation | Integration with proprietary TTS services |
+| **SpeechGatewaySpeechSynthesizer** | Custom | General gateway | Style-Bert-VITS2, Aivis Cloud API integration |
+| **create_instant_synthesizer** | Custom | Factory function for quick HTTP API integration | ElevenLabs, Kotodama, Coefont, Amazon Polly, Style-Bert-VITS2, Aivis Cloud API, etc. |
 
 ### 4.2 Common Features
 
@@ -389,7 +431,37 @@ A component that converts text to speech. Outputs LLM responses as the **avatar'
 | **Debug mode** | `debug`: Detailed log output |
 | **Follow redirects** | `follow_redirects`: Follow HTTP redirects |
 
-### 4.3 Style Application
+### 4.3 Instant TTS Synthesizer
+
+A factory function `create_instant_synthesizer` for quickly integrating custom TTS services with HTTP APIs. Supports flexible request customization via **JSON templates**, **custom request makers**, and **response parsers**.
+
+| Feature | Description |
+|---------|-------------|
+| **JSON template** | Use `{text}` and `{language}` placeholders in params/headers/json for auto-replacement |
+| **Custom request maker** | `request_maker` function for complex authentication (e.g., HMAC signing for Coefont, SigV4 for AWS Polly) |
+| **Custom response parser** | `response_parser` function for non-standard response formats (e.g., base64 decoding, PCM-to-WAV conversion) |
+| **Tested services** | Style-Bert-VITS2, ElevenLabs, Aivis Cloud API, Kotodama, Coefont, Amazon Polly |
+
+```python
+from aiavatar.sts.tts import create_instant_synthesizer
+
+# Simple example: ElevenLabs
+elevenlabs_tts = create_instant_synthesizer(
+    method="POST",
+    url=f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+    headers={"xi-api-key": ELEVENLABS_API_KEY},
+    json={"text": "{text}", "model_id": "eleven_v3", "output_format": "pcm_16000"}
+)
+
+# Advanced example: Custom request maker for signed requests
+tts = create_instant_synthesizer(
+    request_maker=my_custom_request_maker,
+    response_parser=my_custom_response_parser,
+    follow_redirects=True
+)
+```
+
+### 4.4 Style Application
 
 A feature to **dynamically switch voice style (speaker/emotion)** based on keywords in LLM output.
 
@@ -410,7 +482,7 @@ style_mapper = {
 # extract style info in @process_llm_chunk and pass to TTS
 ```
 
-### 4.4 Pronunciation Dictionary (Preprocessors)
+### 4.5 Pronunciation Dictionary (Preprocessors)
 
 A feature to **convert strings TTS can't pronounce correctly into readable format**. Controls pronunciation of numbers and foreign words.
 
@@ -447,7 +519,7 @@ Converts foreign words to Katakana using LLM. Supports **kana_map** for storing 
 | **Persistence** | Export/import `kana_map` as JSON for reuse across sessions |
 | **Debug logging** | Logs `[KanaMap]` for cached hits and `[LLM]` for new readings with elapsed time |
 
-### 4.5 Audio Format Conversion
+### 4.6 Audio Format Conversion
 
 #### AudioConverter
 ffmpeg-based audio format conversion. **Converts TTS output to match playback environment**.
@@ -458,7 +530,7 @@ ffmpeg-based audio format conversion. **Converts TTS output to match playback en
 | **Sample rate conversion** | Convert to any sample rate. Supports telephony (8kHz) or web (16kHz) |
 | **Channel conversion** | Mono/stereo conversion |
 
-### 4.6 Local Gateway Mode
+### 4.7 Local Gateway Mode
 
 A feature to execute TTS processing **directly in-process** without HTTP overhead. Available for `SpeechGatewaySpeechSynthesizer`.
 
@@ -482,7 +554,7 @@ tts.add_local_gateway(
 )
 ```
 
-### 4.7 Per-Session Speech Speed Control
+### 4.8 Per-Session Speech Speed Control
 
 A feature to **dynamically adjust speech speed per session**. Enables personalized voice output for each user.
 
@@ -501,7 +573,7 @@ async def process_llm_chunk(llm_stream_chunk: LLMResponse, session_id: str, user
             return {"speed": float(speed)}
 ```
 
-### 4.8 TTS Response Caching
+### 4.9 TTS Response Caching
 
 A feature to **cache synthesized audio to local files**, avoiding redundant API calls for the same text and parameters. Cache keys are generated by SHA-256 hashing all request parameters (URL, headers, params, JSON body, data).
 
@@ -566,9 +638,71 @@ A mode that activates on specific keywords. **Smart speaker-like behavior that d
 | **wakewords** | List of activation keywords. ["Hey Avatar", "OK Avatar"], etc. |
 | **wakeword_timeout** | Validity period after activation (seconds). 60 seconds means no wake word needed for 1 minute |
 
-### 5.4 Queue Management
+### 5.4 Quick Response
 
-Controls sequential request processing. Controls **behavior when multiple requests arrive simultaneously**.
+A feature to **reduce first response latency** by generating a short acknowledgment phrase (e.g., "Sure!" or "なるほど。") before the main LLM response. Keeps conversations feeling responsive while the full answer is being generated.
+
+#### QuickResponder
+Uses the existing LLM to generate a brief phrase and synthesize it with TTS (with caching).
+
+| Feature | Description |
+|---------|-------------|
+| **Immediate acknowledgment** | Generates and speaks a short phrase before main LLM response |
+| **Request rewriting** | Rewrites `request.text` so the main LLM continues naturally without repetition |
+| **TTS caching** | Caches synthesized quick response audio for reuse |
+| **Customizable prompts** | Configurable `quick_response_prompt_prefix` and `request_prefix` |
+
+```python
+from aiavatar.sts import QuickResponder
+
+quick_responder = QuickResponder(llm=llm, tts=tts)
+
+@aiavatar_app.sts.on_before_llm
+async def on_before_llm(request: STSRequest):
+    await quick_responder.respond(request)
+```
+
+#### QuickResponderPro
+Performance-tuned variant that **bypasses LLMService** and calls the OpenAI-compatible API directly with `stream=False`.
+
+| Feature | Description |
+|---------|-------------|
+| **Direct API call** | Calls OpenAI-compatible API with `stream=False` for minimum latency |
+| **Dedicated context** | Manages its own context via dedicated `ContextManager` with history cleaning |
+| **Pre-generation** | Start generating during silence period with `create_generation_task` (SileroStreamSpeechDetector) |
+| **History cleaning** | Auto-cleans conversation history: strips tags, deduplicates quick response turns |
+| **Custom system prompt** | Separate system prompt for quick response generation |
+| **Azure / Custom client** | Supports `AsyncAzureOpenAI` or any pre-configured client |
+| **extra_body** | Additional request parameters (e.g., `{"thinking": {"type": "disabled"}}` for Claude) |
+
+```python
+from aiavatar.sts.quick_responder.pro import QuickResponderPro
+
+quick_responder_pro = QuickResponderPro(
+    api_key="YOUR_API_KEY",
+    model="gpt-4.1-nano",
+    tts=tts,
+    context_manager=context_manager,
+    timeout=1.5,
+)
+
+# Pre-generation during silence (optional)
+@vad.on_speech_detecting
+async def on_speech_detecting(text, vad_session):
+    await quick_responder_pro.create_generation_task(
+        text, vad_session.session_id, vad_session.data.get("context_id")
+    )
+```
+
+### 5.5 Queue Management
+
+Controls sequential request processing. Controls **behavior when multiple requests arrive simultaneously**. Three invoke modes are supported:
+
+| Mode | Settings | Behavior |
+|------|----------|----------|
+| **Direct** (default) | `use_invoke_queue=False` | New requests immediately interrupt the current response |
+| **Queued (Interrupt)** | `use_invoke_queue=True`, `wait_in_queue=False` | Requests queued but clear pending; current response interrupted |
+| **Queued (Wait)** | `use_invoke_queue=True`, `wait_in_queue=True` | Requests wait until previous ones complete; no interruption |
 
 | Setting | Description |
 |---------|-------------|
@@ -577,7 +711,7 @@ Controls sequential request processing. Controls **behavior when multiple reques
 | **invoke_timeout** | Request processing timeout. Prevents infinite waiting |
 | **wait_in_queue** | true: Wait for previous request completion, false: Cancel previous request |
 
-### 5.5 Performance Recording
+### 5.6 Performance Recording
 
 Detailed processing time recording. Used for **bottleneck identification** and **quality improvement**.
 
@@ -595,7 +729,7 @@ Detailed processing time recording. Used for **bottleneck identification** and *
 | **tool_calls** | Detailed tool call logging. Function name, arguments, and results |
 | **error_info** | Error tracking. Captures STT/LLM/TTS failures with traceback |
 
-### 5.6 Voice Recording
+### 5.7 Voice Recording
 
 Request/response audio saving. Used for **quality verification, debugging, and training data collection**.
 
@@ -605,7 +739,7 @@ Request/response audio saving. Used for **quality verification, debugging, and t
 | **voice_recorder_dir** | Save directory |
 | **voice_recorder_response_audio_format** | Response audio format |
 
-### 5.7 Callbacks/Hooks
+### 5.8 Callbacks/Hooks
 
 Insert custom logic at each pipeline stage.
 
@@ -630,7 +764,7 @@ async def validate_request(request: STSRequest):
     return None  # Proceed with request
 ```
 
-### 5.8 Session State Management
+### 5.9 Session State Management
 
 Tracks state per session. Enables **state isolation in multi-user environments**.
 
@@ -655,6 +789,7 @@ Connection interfaces to external systems. An abstraction layer for **running av
 | **WebSocket** | Real-time bidirectional | PCM chunking, barge-in support | Interactive UI |
 | **WebSocket STT** | Streaming speech recognition | VAD + STT only, no LLM/TTS | Speech-to-text microservices |
 | **LINE Bot** | LINE Messenger | Session persistence, image upload | Customer support on LINE |
+| **Twilio** | Telephony | Voice calls via Twilio | Phone-based voice interaction |
 | **Local** | Local execution | No network required, embedded | Desktop apps, embedded devices |
 
 ### 6.2 HTTP Adapter Features
@@ -692,6 +827,12 @@ Real-time bidirectional communication. Optimal for **streaming voice transmissio
 | **connected** | S→C | Connection confirmation |
 | **chunk** | S→C | Response chunk. Partial response with text + audio |
 | **final** | S→C | Final response. Full text |
+
+#### Connection/Disconnection Handling
+| Feature | Description |
+|---------|-------------|
+| **@on_connect** | Callback when client connects. Session initialization, user preferences loading |
+| **@on_disconnect** | Callback when client disconnects. Cleanup, session data saving |
 
 #### PCM Chunking
 Split audio into small chunks for transmission. Enables **streaming playback**.
@@ -780,7 +921,28 @@ async def handle_response(response, sts_response):
     pass
 ```
 
-### 6.8 Common Features
+### 6.8 Channel Context Bridge
+
+Maps channel-specific user IDs (e.g., LINE user ID, Twilio phone number) to app-level user IDs and **persists conversation context per user across channels**. Essential when channels cannot pass `context_id` from the client side.
+
+| Feature | Description |
+|---------|-------------|
+| **Channel user mapping** | Map `(channel_id, channel_user_id)` to app-level `user_id` with arbitrary data |
+| **Context persistence** | Store `context_id` per user with automatic expiry (`timeout`, default: 3600s) |
+| **Auto-create** | `auto_create=True` creates channel user on first access |
+| **Cross-channel sharing** | Same `user_id` linked across channels shares the same `context_id` |
+| **bind() helper** | Auto-configure adapter hooks for context sync in one call |
+| **SQLite backend** | `SQLiteChannelContextBridge` for development |
+| **PostgreSQL backend** | `PostgreSQLChannelContextBridge` for production |
+
+```python
+from aiavatar.adapter.channel_context_bridge import SQLiteChannelContextBridge
+
+bridge = SQLiteChannelContextBridge(db_path="aiavatar.db", timeout=3600)
+bridge.bind(aiavatar_app, channel_id="websocket")
+```
+
+### 6.9 Common Features
 
 Features available across all adapters.
 
@@ -808,6 +970,7 @@ Multiple components can share a single PostgreSQL connection pool for efficient 
 | **PerformanceRecorder** | ○ | ○ | Response time and metrics recording |
 | **SpeakerRegistry** | File | pgvector | Speaker embedding storage with vector search |
 | **LineBotSessionManager** | ○ | ○ | LINE Bot per-user sessions |
+| **ChannelContextBridge** | ○ | ○ | Channel user mapping and context persistence |
 | **CharacterService** | - | ○ | Character schedules, diaries, memory (**PostgreSQL required**) |
 
 ### 7.2 PostgreSQL Pool Provider
@@ -950,7 +1113,26 @@ Records **"what happened today"** for the character. Can remember past events an
 | **Emotional expression** | Character's perspective and feelings. Joy, anger, sorrow, pleasure |
 | **Length control** | Specify character count with diary_length |
 
-### 7.4 Memory System
+### 7.4 Batch Generation
+
+Generate daily schedules and diaries for a date range. Useful for **recovering data when automatic updates were stopped** or building initial data for a new character.
+
+| Feature | Description |
+|---------|-------------|
+| **Date range** | `create_activity_range_with_generation(start_date, end_date)` generates for a range |
+| **Overwrite control** | `overwrite=False` skips existing data; `overwrite=True` regenerates |
+| **Automatic continuity** | Each day's generation uses previous day's data for natural continuity |
+
+```python
+await character_service.create_activity_range_with_generation(
+    character_id=YOUR_CHARACTER_ID,
+    start_date=date(2026, 1, 8),
+    end_date=date(2026, 1, 16),
+    overwrite=False,
+)
+```
+
+### 7.5 Memory System
 
 **Remembers past conversations**, can recall "that XX we talked about before".
 
@@ -961,7 +1143,7 @@ Records **"what happened today"** for the character. Can remember past events an
 | **Message storage** | Async storage of conversation pairs. No performance impact |
 | **Diary integration** | Register diaries into memory system. Diary contents also searchable |
 
-### 7.5 MemorySearchTool
+### 7.6 MemorySearchTool
 
 A tool for LLM to **recall the past during conversation**.
 
@@ -976,7 +1158,7 @@ llm.add_tool(memory_tool)
 # LLM: [Calls memory_tool to search] → "It was Your Name, right!"
 ```
 
-### 7.6 User Management
+### 7.7 User Management
 
 Manages **user profiles** for personalized conversations. Enables the character to remember user information across sessions.
 
@@ -1007,7 +1189,7 @@ A tool for LLM to **update user's name during conversation**.
 # Future conversations: "Hello Alice!"
 ```
 
-### 7.7 bind_character Helper
+### 7.8 bind_character Helper
 
 A single-function setup for **complete character integration**. Reduces boilerplate from 50+ lines to one function call.
 
@@ -1030,7 +1212,37 @@ bind_character(
 | **Response metadata** | Sends username and character name to client on connection |
 | **Tool registration** | Auto-registers UpdateUsernameTool, GetDiaryTool, MemorySearchTool |
 
-### 7.8 System Prompt Management
+### 7.9 CharacterLoader (Lightweight Alternative)
+
+`CharacterLoader` is a lightweight alternative to `CharacterService` that loads character settings from **local files** instead of a database. No database or external API required.
+
+| Feature | Description |
+|---------|-------------|
+| **Single file mode** | Point to a markdown file for system prompt |
+| **Directory mode** | Load from directory with `character.md`, `response_instructions.md`, `episode.md`, `attribute.md`, `conversation_example.md` |
+| **Split initial messages** | Inject episodes, attributes, conversation examples as pseudo user/assistant turns |
+| **Hot reload** | All files cached with mtime-based invalidation. Changes reflected on next request without restart |
+| **Custom user name resolution** | `@loader.get_user_name` decorator for dynamic resolution from DB or external service |
+| **Custom message formatting** | `@loader.format_messages` decorator for post-processing initial messages |
+| **Message templates** | `message_templates.json` defines initial message and self-introduction structure per language |
+
+| | CharacterLoader | CharacterService |
+|---|---|---|
+| Data source | Local files (`.md`, `.json`) | Database (SQLite / PostgreSQL) |
+| Dependencies | None (standard library only) | `openai`, database libraries |
+| Schedule / Diary generation | Not supported | Auto-generated via LLM |
+| Long-term memory | Not supported | Supported via MemoryClient |
+| Character tools | Not included | username update, diary, memory search |
+| Hot reload | Supported (mtime-based) | Not supported |
+
+```python
+from aiavatar.character.loader import CharacterLoader
+
+loader = CharacterLoader("my_character", split_initial_messages=True, lang="ja")
+loader.bind(adapter.sts.llm)
+```
+
+### 7.10 System Prompt Management
 
 Generates the **final prompt** integrating character settings and schedule.
 
@@ -1375,9 +1587,9 @@ List of available providers. **Select based on use case and budget**.
 | Category | Providers | Selection Criteria |
 |----------|-----------|-------------------|
 | **STT** | Google, Azure, OpenAI Whisper, AmiVoice | Accuracy, language support, cost |
-| **LLM** | ChatGPT, Claude, Gemini, LiteLLM, Dify | Capability, latency, cost |
-| **TTS** | VOICEVOX, Azure, Google, OpenAI, SpeechGateway | Voice quality, voice variety, cost |
-| **VAD** | Standard (volume), Silero (ML), Azure (cloud) | Accuracy, computational resources |
+| **LLM** | ChatGPT, OpenAI Responses API, Claude, Gemini, LiteLLM, Dify, OpenAI-compatible APIs (Grok, etc.) | Capability, latency, cost |
+| **TTS** | VOICEVOX, Azure, Google, OpenAI, SpeechGateway, Instant (ElevenLabs, Coefont, Polly, etc.) | Voice quality, voice variety, cost |
+| **VAD** | Standard (volume), Silero (ML), Azure (cloud), AWS Amazon Transcribe (cloud) | Accuracy, computational resources |
 
 ### Database Support
 
@@ -1390,6 +1602,7 @@ List of available providers. **Select based on use case and budget**.
 | Performance recording | ○ | ○ | Response time recording, etc. |
 | Speaker registry | File | pgvector | Vector search for speaker identification |
 | LINE Bot sessions | ○ | ○ | Per-user sessions |
+| Channel context bridge | ○ | ○ | Channel user mapping, context persistence |
 | Character management | ○ | ○ | Schedules, diaries, memory |
 | User management | ○ | ○ | User profiles and metadata |
 

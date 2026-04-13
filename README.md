@@ -153,7 +153,9 @@ You can also access the Admin Panel at http://127.0.0.1:8000/admin.
 - [🦜 AI Agent](#-ai-agent)
     - [⚡️ Tool Call](#️-tool-call)
     - [⌛️ Tool Call with Streaming Progress](#%EF%B8%8F-tool-call-with-streaming-progress)
+    - [🔄 Background Tool Execution](#-background-tool-execution)
     - [📋 Tool Response Formatter (Direct Response)](#-tool-response-formatter-direct-response)
+    - [📦 Structured Content (Client-side Data)](#-structured-content-client-side-data)
     - [🪄 Dynamic Tool Call](#-dynamic-tool-call)
     - [🔌 MCP](#-mcp)
     - [🛠️ Built-in Tools](#️-built-in-tools)
@@ -183,6 +185,7 @@ You can also access the Admin Panel at http://127.0.0.1:8000/admin.
     - [🧵 Request merging](#-request-merging)
     - [📥 Invoke Queue](#-invoke-queue)
     - [🧺 Shared Context](#-shared-context)
+    - [🔗 Channel Session Manager](#-channel-session-manager)
     - [🔈 Audio Device](#-audio-device)
     - [🐆 Quick Response](#-quick-response)
     - [🎭 Custom Behavior](#-custom-behavior)
@@ -1688,19 +1691,9 @@ app.include_router(router)
 ```
 
 
-By default, the LINE Messaging API user ID is used as the AIAvatarKit user ID. If you want to map it to your own AIAvatarKit user IDs, implement `edit_linebot_session` as shown below to update the session data.
+By default, the LINE Messaging API user ID is used as the AIAvatarKit user ID. To map channel user IDs to your own app-level user IDs, use `ChannelContextBridge`. See [Channel Context Bridge](#-channel-context-bridge) for details.
 
-```python
-from aiavatar.adapter.linebot import LineBotSession
-@aiavatar_app.edit_linebot_session
-async def edit_linebot_session(linebot_session: LineBotSession):
-    # Get user_id by LINE Bot user id
-    aiavatar_user_id = map_user_id(linebot_session.linebot_user_id)
-    # Set user_id to LINE Bot session
-    linebot_session.user_id = aiavatar_user_id
-```
-
-Other customization hooks are below.
+Customization hooks:
 
 ```python
 @aiavatar_app.preprocess_request
@@ -1724,26 +1717,25 @@ async def process_avatar_control_request(avatar_control_request: AvatarControlRe
         reply_message_request.messages[0].sender = Sender(iconUrl=f"https://your_domain/path/to/icon/{face}.png")
 
 @aiavatar_app.on_send_error_message
-async def on_send_error_message(reply_message_request: ReplyMessageRequest, linebot_session: LineBotSession, event: Event, ex: Exception):
+async def on_send_error_message(reply_message_request: ReplyMessageRequest, event: Event, ex: Exception):
     # Pre-process error message
     # e.g. edit error response
     text = make_user_friendly_error_message(event, ex)
     reply_message_request.messages[0] = TextMessage(text=text)
 
 @aiavatar_app.event("postback")
-async def handle_postback_event(event: Event, linebot_session: LineBotSession):
+async def handle_postback_event(event: Event, user_id: str, context_id: Optional[str]):
     # Process event
     # e.g. Register postback data
-    await register_data(linebot_session.user_id, event.postback.data)
+    await register_data(user_id, event.postback.data)
 ```
 
 
-Session data is stored in `aiavatar.db` via SQLite by default. To use PostgreSQL, create a `PostgreSQLLineBotSessionManager` and pass it to `AIAvatarLineBotServer` as `session_manager`.
+Context data is stored in `aiavatar.db` via SQLite by default. To use PostgreSQL, create a `PostgreSQLChannelContextBridge` and pass it to `AIAvatarLineBotServer` as `channel_context_bridge`. See [Channel Context Bridge](#-channel-context-bridge) for details.
 
 ```python
-# Create PostgreSQLLineBotSessionManager
-from aiavatar.adapter.linebot.session_manager.postgres import PostgreSQLLineBotSessionManager
-linebot_session_manager = PostgreSQLLineBotSessionManager(
+from aiavatar.adapter.channel_context_bridge.postgres import PostgreSQLChannelContextBridge
+bridge = PostgreSQLChannelContextBridge(
     host=DB_HOST,
     port=DB_PORT,
     dbname=DB_NAME,
@@ -1758,7 +1750,7 @@ aiavatar_app = AIAvatarLineBotServer(
     channel_access_token=LINEBOT_CHANNEL_ACCESS_TOKEN,
     channel_secret=LINEBOT_CHANNEL_SECRET,
     image_download_url_base="https://{your.domain}",
-    session_manager=linebot_session_manager,    # <- Set PostgresSQL session manager
+    channel_context_bridge=bridge,    # <- Set PostgreSQL context bridge
     debug=True
 )
 ```
@@ -2317,6 +2309,50 @@ The formatter receives two arguments:
 The tool call and its result are still saved to conversation context, so follow-up questions like "What was the temperature again?" work naturally. The formatted text is stored as the assistant's response.
 
 **Note**: Tools without a `response_formatter` continue to work as before (2nd LLM call generates the response). You can mix both patterns — some tools with formatters and others without.
+
+
+### 📦 Structured Content (Client-side Data)
+
+By default, tool results (`data`) are passed back to the LLM as context. If you also want to send **structured data directly to the client application** (e.g., for rendering UI components, displaying charts, or updating app state), use `structured_content` in `ToolCallResult`.
+
+```python
+from aiavatar.sts.llm import ToolCallResult
+
+@llm.tool(weather_tool_spec)
+async def get_weather(location: str):
+    weather = await weather_api(location)
+    return ToolCallResult(
+        data={"summary": f"{weather['temperature']}°C, {weather['condition']}"},  # → passed to LLM
+        structured_content={"temperature": weather["temperature"], "condition": weather["condition"], "forecast": weather["forecast"]}  # → passed to client
+    )
+```
+
+`structured_content` propagates through the entire response pipeline (`LLMResponse` → `STSResponse` → `AIAvatarResponse`) and is delivered to the client as a **top-level field** in the JSON response:
+
+```json
+{
+    "type": "tool_call",
+    "structured_content": {"temperature": 23.4, "condition": "sunny", "forecast": [...]},
+    "metadata": {"tool_call": {"name": "get_weather", ...}}
+}
+```
+
+You can also use `structured_content` with async generators for streaming scenarios:
+
+```python
+@llm.tool(search_tool_spec)
+async def search(query: str):
+    yield ToolCallResult(data={"status": "searching"}, is_final=False, structured_content={"loading": True})
+    results = await do_search(query)
+    yield ToolCallResult(data={"results": results}, is_final=True, structured_content={"loading": False, "items": results})
+```
+
+| Field | Destination | Purpose |
+|-------|-------------|---------|
+| `data` | LLM (as context) | Model uses this to generate a response |
+| `structured_content` | Client application | Program handles this for UI/logic |
+
+**Note**: `structured_content` defaults to `None`. Existing tools that return plain `dict` or use shorthand return types are unaffected.
 
 
 ### 🪄 Dynamic Tool Call
@@ -3262,6 +3298,73 @@ llm = ChatGPTService(
     system_prompt="You are a helpful virtual assistant.",
     model="gpt-4.1",
     shared_context_id=["shared_context_id"]
+)
+```
+
+
+### 🔗 Channel Context Bridge
+
+`ChannelContextBridge` maps channel-specific user IDs (e.g. LINE user ID, Twilio phone number) to app-level user IDs and persists conversation context (`context_id`) per user across channels. This is essential when some channels (e.g. Twilio) cannot pass `context_id` from the client side.
+
+It manages two separate concerns:
+- **Channel Users**: keyed by `(channel_id, channel_user_id)`, maps to an app-level `user_id` with arbitrary `data`.
+- **User Contexts**: keyed by `user_id`, stores `context_id` with automatic expiry based on `timeout` (default: 3600 seconds).
+
+The LINE adapter uses `ChannelContextBridge` internally. For WebSocket or other adapters, use `bind()` to automatically sync context via adapter hooks:
+
+```python
+from aiavatar.adapter.channel_context_bridge import SQLiteChannelContextBridge
+
+bridge = SQLiteChannelContextBridge(db_path="aiavatar.db", timeout=3600)
+bridge.bind(aiavatar_app, channel_id="websocket")
+```
+
+Or register hooks manually:
+
+```python
+from aiavatar.adapter.channel_context_bridge import SQLiteChannelContextBridge, UserContext
+
+bridge = SQLiteChannelContextBridge(db_path="aiavatar.db", timeout=3600)
+
+@aiavatar_app.on_session_start
+async def on_session_start(request, session_data):
+    if not request.user_id:
+        return
+
+    channel_user = await bridge.get_channel_user("websocket", request.user_id, auto_create=True)
+
+    # Restore application-level user_id if mapped
+    if channel_user.user_id != request.user_id:
+        request.user_id = channel_user.user_id
+
+    # Restore context_id
+    ctx = await bridge.get_context(request.user_id)
+    if ctx and ctx.context_id:
+        request.context_id = ctx.context_id
+
+@aiavatar_app.on_response
+async def on_response(response, _):
+    if response.type == "start" and response.user_id and response.context_id:
+        await bridge.upsert_context(UserContext(
+            user_id=response.user_id,
+            context_id=response.context_id,
+        ))
+```
+
+**Cross-channel context sharing**: When the same `user_id` is linked across multiple channels, they share the same `context_id`, maintaining conversation continuity. Use `link_channel_user()` to map different channel user IDs to a single app-level user.
+
+**PostgreSQL backend**:
+
+```python
+from aiavatar.adapter.channel_context_bridge.postgres import PostgreSQLChannelContextBridge
+
+bridge = PostgreSQLChannelContextBridge(
+    host="localhost",
+    port=5432,
+    dbname="aiavatar",
+    user="postgres",
+    password="your_password",
+    timeout=3600,
 )
 ```
 
