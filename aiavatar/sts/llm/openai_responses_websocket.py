@@ -334,7 +334,7 @@ class OpenAIResponsesWebSocketService(LLMService):
                             if tr.text:
                                 yield LLMResponse(context_id=context_id, text=tr.text)
                             else:
-                                yield LLMResponse(context_id=context_id, tool_call=tc)
+                                yield LLMResponse(context_id=context_id, tool_call=tc, structured_content=tr.structured_content)
                                 if tr.is_final:
                                     tool_result = tr.data
                                     break
@@ -346,7 +346,7 @@ class OpenAIResponsesWebSocketService(LLMService):
                             tool_obj = self.tools.get(tc.name)
                             if tool_obj and tool_obj._response_formatter:
                                 direct_text = tool_obj._response_formatter(tool_result, json.loads(tc.arguments))
-                                yield LLMResponse(context_id=context_id, text=direct_text)
+                                yield LLMResponse(context_id=context_id, text=direct_text, structured_content=tc.result.structured_content if tc.result else None)
                                 has_direct_response = True
 
                             tool_outputs.append({
