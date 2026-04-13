@@ -9,7 +9,7 @@ class AvatarUI {
     constructor({ aiavatar, userId, camera, onStop, toolLabels }) {
         this.aiavatar = aiavatar;
         this.sessionId = crypto.randomUUID();
-        this.userId = userId || localStorage.getItem("userId") || "user01";
+        this.userId = userId || localStorage.getItem("userId") || crypto.randomUUID();
         this.camera = camera;
         this.onStop = onStop || (() => {});
         this.toolLabels = toolLabels || {};
