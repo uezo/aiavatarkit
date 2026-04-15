@@ -1,28 +1,47 @@
 # AIAvatarKit
 
-🥰 Building AI-based conversational avatars lightning fast ⚡️💬
+[![PyPI version](https://badge.fury.io/py/aiavatarkit.svg)](https://badge.fury.io/py/aiavatarkit)
+[![License](https://img.shields.io/github/license/uezo/aiavatarkit)](https://github.com/uezo/aiavatarkit/blob/main/LICENSE)
+[![Python Versions](https://img.shields.io/pypi/pyversions/aiavatarkit)](https://pypi.org/project/aiavatarkit/)
+[![Stars](https://img.shields.io/github/stars/uezo/aiavatarkit?style=social)](https://github.com/uezo/aiavatarkit)
+[![Last Commit](https://img.shields.io/github/last-commit/uezo/aiavatarkit)](https://github.com/uezo/aiavatarkit/commits/main)
+
+## 📋 Table of Contents
+
+- [✨ Features](#-features)
+- [🚀 Quick Start](#-quick-start)
+- [📦 Contents](#-contents)
+- [🤖 Generative AI](#-generative-ai)
+- [🎙️ Speech](#️-speech)
+- [🧩 Avatar](#-avatar)
+- [💾 Memory](#-memory)
+- [🔌 Integrations](#-integrations)
+- [Contributing](#contributing)
+
+
+ð¥° Building AI-based conversational avatars lightning fast â¡ï¸ð¬
 
 ![AIAvatarKit Architecture Overview](documents/images/aiavatarkit_overview.png) 
 
-## ✨ Features
+## â¨ Features
 
-- **🌏 Live anywhere**: AIAvatarKit is a general-purpose Speech-to-Speech framework with multimodal input/output support. It can serve as the backend for a wide range of conversational AI systems.
+- **ð Live anywhere**: AIAvatarKit is a general-purpose Speech-to-Speech framework with multimodal input/output support. It can serve as the backend for a wide range of conversational AI systems.
     - Metaverse Platforms: Compatible with VRChat, cluster, Vket Cloud, and other platforms
     - Standalone Apps: Enables ultra-low latency real-time interaction via WebSocket or HTTP (SSE), with a unified interface that abstracts differences between LLMs
     - Channels and Devices: Supports edge devices like Raspberry Pi and telephony services like Twilio
-- **🧩 Modular architecture**: Components such as VAD, STT, LLM, and TTS are modular and easy to integrate via lightweight interfaces. Supported modules include:
+- **ð§© Modular architecture**: Components such as VAD, STT, LLM, and TTS are modular and easy to integrate via lightweight interfaces. Supported modules include:
     - VAD: Built-in standard VAD (silence-based end-of-turn detection), SileroVAD
     - STT: Google, Azure, OpenAI, AmiVoice
     - LLM: ChatGPT, OpenAI Responses API (REST / WebSocket), Gemini, Claude, and any model supported by LiteLLM or Dify
     - TTS: VOICEVOX / AivisSpeech, OpenAI, SpeechGateway (including Style-Bert-VITS2 and Aivis Cloud API)
-- **⚡️ AI Agent native**: Designed to support agentic systems. In addition to standard tool calls, it offers Dynamic Tool Calls for extensibility and supports progress feedback for high-latency operations.
+- **â¡ï¸ AI Agent native**: Designed to support agentic systems. In addition to standard tool calls, it offers Dynamic Tool Calls for extensibility and supports progress feedback for high-latency operations.
 
 
-## 🚀 Quick start
+## ð Quick start
 
 **Requirements**: Python 3.11+, OpenAI API key, and a running VOICEVOX instance for TTS
 
-### 📺 Local (Console)
+### ðº Local (Console)
 
 Install AIAvatarKit.
 
@@ -30,7 +49,7 @@ Install AIAvatarKit.
 pip install aiavatar
 ```
 
-**NOTE:** If the steps in technical blogs don’t work as expected, the blog may be based on a version prior to v0.6. Some features may be limited, but you can try downgrading with `pip install aiavatar==0.5.8` to match the environment described in the blog.
+**NOTE:** If the steps in technical blogs donât work as expected, the blog may be based on a version prior to v0.6. Some features may be limited, but you can try downgrading with `pip install aiavatar==0.5.8` to match the environment described in the blog.
 
 
 Make the script as `run.py`.
@@ -52,12 +71,12 @@ Start AIAvatar. Also, don't forget to launch VOICEVOX beforehand.
 $ python run.py
 ```
 
-Conversation will start when you say the wake word "こんにちは" (or "Hello" when language is not `ja-JP`).
+Conversation will start when you say the wake word "ããã«ã¡ã¯" (or "Hello" when language is not `ja-JP`).
 
 Feel free to enjoy the conversation afterwards!
 
 
-### 🌐 WebSocket (Browser)
+### ð WebSocket (Browser)
 
 Install AIAvatarKit and additional dependencies.
 
@@ -106,9 +125,9 @@ Open following URLs and enjoy the conversation!
 You can also access the Admin Panel at http://127.0.0.1:8000/admin.
 
 
-## 🔖 Contents
+## ð Contents
 
-- [🎓 Generative AI](#-generative-ai)
+- [ð Generative AI](#-generative-ai)
     - [ChatGPT](#chatgpt)
     - [OpenAI Responses API](#openai-responses-api)
     - [Claude](#claude)
@@ -117,13 +136,13 @@ You can also access the Admin Panel at http://127.0.0.1:8000/admin.
     - [OpenAI-compatible APIs](#openai-compatible-apis)
     - [Other LLMs](#other-llms)
 
-- [🗣️ Voice](#️voice)
+- [ð£ï¸ Voice](#ï¸voice)
 
-- [👂 Speech Listener](#-speech-listener)
+- [ð Speech Listener](#-speech-listener)
     - [Preprocessing and Postprocessing](#preprocessing-and-postprocessing)
     - [Speaker Diarization](#speaker-diarization)
 
-- [🎙️ Speech Detector](#%EF%B8%8F-speech-detector)
+- [ðï¸ Speech Detector](#%EF%B8%8F-speech-detector)
     - [Silero VAD Speech Detector](#silero-speech-detector)
     - [Silero Stream Speech Detector](#silero-stream-speech-detector)
     - [Azure Stream Speech Detector](#azure-stream-speech-detector)
@@ -131,11 +150,11 @@ You can also access the Admin Panel at http://127.0.0.1:8000/admin.
     - [Customization](#customization)
     - [Standard Speech Detector (Legacy)](#standard-speech-detector-legacy)
 
-- [🥰 Face Expression](#-face-expression)
+- [ð¥° Face Expression](#-face-expression)
 
-- [💃 Animation](#-animation)
+- [ð Animation](#-animation)
 
-- [🥳 Character Management](#-character-management)
+- [ð¥³ Character Management](#-character-management)
     - [Get started](#get-started)
     - [Updating Diaries](#updating-diaries)
     - [Updating Schedules](#updating-schedules)
@@ -144,57 +163,57 @@ You can also access the Admin Panel at http://127.0.0.1:8000/admin.
     - [Long-term Memory](#long-term-memory)
     - [Binding to Adapter](#binding-to-adapter)
 
-- [🧩 API](#-api)
-    - [💫 RESTful API (SSE)](#-restful-api-sse)
-    - [🔵 Dify-compatible API](#-dify-compatible-api)
-    - [🔌 WebSocket](#-websocket)
-    - [🟩 LINE Bot](#-line-bot)
+- [ð§© API](#-api)
+    - [ð« RESTful API (SSE)](#-restful-api-sse)
+    - [ðµ Dify-compatible API](#-dify-compatible-api)
+    - [ð WebSocket](#-websocket)
+    - [ð© LINE Bot](#-line-bot)
 
-- [🦜 AI Agent](#-ai-agent)
-    - [⚡️ Tool Call](#️-tool-call)
-    - [⌛️ Tool Call with Streaming Progress](#%EF%B8%8F-tool-call-with-streaming-progress)
-    - [🔄 Background Tool Execution](#-background-tool-execution)
-    - [📋 Tool Response Formatter (Direct Response)](#-tool-response-formatter-direct-response)
-    - [📦 Structured Content (Client-side Data)](#-structured-content-client-side-data)
-    - [🪄 Dynamic Tool Call](#-dynamic-tool-call)
-    - [🔌 MCP](#-mcp)
-    - [🛠️ Built-in Tools](#️-built-in-tools)
-    - [🦞 OpenClaw](#-openclaw)
+- [ð¦ AI Agent](#-ai-agent)
+    - [â¡ï¸ Tool Call](#ï¸-tool-call)
+    - [âï¸ Tool Call with Streaming Progress](#%EF%B8%8F-tool-call-with-streaming-progress)
+    - [ð Background Tool Execution](#-background-tool-execution)
+    - [ð Tool Response Formatter (Direct Response)](#-tool-response-formatter-direct-response)
+    - [ð¦ Structured Content (Client-side Data)](#-structured-content-client-side-data)
+    - [ðª Dynamic Tool Call](#-dynamic-tool-call)
+    - [ð MCP](#-mcp)
+    - [ð ï¸ Built-in Tools](#ï¸-built-in-tools)
+    - [ð¦ OpenClaw](#-openclaw)
 
-- [🛡️ Guardrail](#%EF%B8%8F-guardrail)
+- [ð¡ï¸ Guardrail](#%EF%B8%8F-guardrail)
 
-- [🌎 Platform Guide](#-platform-guide)
-    - [🐈 VRChat](#-vrchat)
-    - [🍓 Raspberry Pi](#-raspberry-pi)
+- [ð Platform Guide](#-platform-guide)
+    - [ð VRChat](#-vrchat)
+    - [ð Raspberry Pi](#-raspberry-pi)
 
-- [⚙️ Administration](#️-administration)
+- [âï¸ Administration](#ï¸-administration)
     - [Admin Panel](#admin-panel)
     - [REST API](#rest-api)
-    - [📈 Observability](#-observability)
+    - [ð Observability](#-observability)
 
-- [🧪 Evaluation](#-evaluation)
+- [ð§ª Evaluation](#-evaluation)
 
-- [🤿 Deep Dive](#-deep-dive)
-    - [🐘 PostgreSQL](#-postgresql)
-    - [👀 Vision](#-vision)
-    - [💾 Long-term Memory](#-long-term-memory)
-    - [🐓 Wakeword](#-wakeword)
-    - [📋 System Prompt Parameters](#-system-prompt-parameters)
-    - [🎛️ Inline LLM Parameters](#️-inline-llm-parameters)
-    - [⏰ Timestamp Insertion](#-timestamp-insertion)
-    - [🧵 Request merging](#-request-merging)
-    - [📥 Invoke Queue](#-invoke-queue)
-    - [🧺 Shared Context](#-shared-context)
-    - [🔗 Channel Session Manager](#-channel-session-manager)
-    - [🔈 Audio Device](#-audio-device)
-    - [🐆 Quick Response](#-quick-response)
-    - [🎭 Custom Behavior](#-custom-behavior)
-    - [✅ Request Validation](#-request-validation)
-    - [🎚️ Noise Filter](#%EF%B8%8F-noise-filter)
-    - [🔄 Migration Guide: From v0.6.x to v0.7.0](#-migration-guide-from-v06x-to-v070)
+- [ð¤¿ Deep Dive](#-deep-dive)
+    - [ð PostgreSQL](#-postgresql)
+    - [ð Vision](#-vision)
+    - [ð¾ Long-term Memory](#-long-term-memory)
+    - [ð Wakeword](#-wakeword)
+    - [ð System Prompt Parameters](#-system-prompt-parameters)
+    - [ðï¸ Inline LLM Parameters](#ï¸-inline-llm-parameters)
+    - [â° Timestamp Insertion](#-timestamp-insertion)
+    - [ð§µ Request merging](#-request-merging)
+    - [ð¥ Invoke Queue](#-invoke-queue)
+    - [ð§º Shared Context](#-shared-context)
+    - [ð Channel Session Manager](#-channel-session-manager)
+    - [ð Audio Device](#-audio-device)
+    - [ð Quick Response](#-quick-response)
+    - [ð­ Custom Behavior](#-custom-behavior)
+    - [â Request Validation](#-request-validation)
+    - [ðï¸ Noise Filter](#%EF%B8%8F-noise-filter)
+    - [ð Migration Guide: From v0.6.x to v0.7.0](#-migration-guide-from-v06x-to-v070)
 
 
-## 🎓 Generative AI
+## ð Generative AI
 
 You can set model and system prompt when instantiate `AIAvatar`.
 
@@ -392,7 +411,7 @@ llm = ChatGPTService(
 ```
 
 
-## 🗣️　Voice
+## ð£ï¸ãVoice
 
 You can set speaker id and the base url for VOICEVOX server when instantiate `AIAvatar`.
 
@@ -612,9 +631,9 @@ alphabet2kana_preproc = AlphabetToKanaPreprocessor(
     openai_api_key=OPENAI_API_KEY,
     model="gpt-4o-mini",                      # Model to use (default: gpt-4.1-mini)
     alphabet_length=3,                        # Minimum alphabet length to convert (default: 3)
-    special_chars=".'-'−–",                   # Characters that connect words (default: ".'-'−–")
+    special_chars=".'-'ââ",                   # Characters that connect words (default: ".'-'ââ")
     use_kana_map=True,                        # Enable kana_map mode (default: True)
-    kana_map={"GitHub": "ギットハブ"},         # Pre-registered word-reading mappings (optional)
+    kana_map={"GitHub": "ã®ãããã"},         # Pre-registered word-reading mappings (optional)
     debug=True,                               # Enable debug logging (default: False)
 )
 
@@ -647,13 +666,13 @@ from aiavatar.sts.tts.preprocessor.patternmatch import PatternMatchPreprocessor
 
 # Create pattern match preprocessor
 pattern_preproc = PatternMatchPreprocessor(patterns=[
-    ("API", "エーピーアイ"),               # Fixed string replacement
-    ("URL", "ユーアールエル"),
+    ("API", "ã¨ã¼ãã¼ã¢ã¤"),               # Fixed string replacement
+    ("URL", "ã¦ã¼ã¢ã¼ã«ã¨ã«"),
     (r"\d+", lambda m: "number"),          # Regex replacement with function
 ])
 
 # Add common patterns
-pattern_preproc.add_number_dash_pattern()  # Number-dash patterns (e.g., 12-34 → イチニの サンヨン)
+pattern_preproc.add_number_dash_pattern()  # Number-dash patterns (e.g., 12-34 â ã¤ããã® ãµã³ã¨ã³)
 pattern_preproc.add_phonenumber_pattern()  # Phone number patterns
 
 # Add to TTS
@@ -681,15 +700,15 @@ class CustomPreprocessor(TTSPreprocessor):
         
         # Language-specific conversions
         if language == "ja-JP":
-            processed_text = processed_text.replace("OK", "オーケー")
+            processed_text = processed_text.replace("OK", "ãªã¼ã±ã¼")
         
         return processed_text
 
 # Use custom preprocessor
 custom_preproc = CustomPreprocessor(custom_dict={
-    "GitHub": "ギットハブ",
-    "Python": "パイソン",
-    "Docker": "ドッカー"
+    "GitHub": "ã®ãããã",
+    "Python": "ãã¤ã½ã³",
+    "Docker": "ããã«ã¼"
 })
 
 tts.preprocessors.append(custom_preproc)
@@ -728,7 +747,7 @@ async def process_llm_chunk(llm_stream_chunk: LLMResponse, session_id: str, user
 NOTE: To configure `tts_speed`, you can either set up a REST API endpoint to update it directly, or use control tags included in responses to update it.
 
 
-## 👂 Speech listener
+## ð Speech listener
 
 If you want to configure in detail, create instance of `SpeechRecognizer` with custom parameters and set it to `AIAvatar`. We support Azure, Google and OpenAI Speech-to-Text services.
 
@@ -853,7 +872,7 @@ async def stt_postprocess(session_id: str, text: str, audio_bytes: bytes, prepro
 ```
 
 
-## 🎙️ Speech Detector
+## ðï¸ Speech Detector
 
 AIAvatarKit includes Voice Activity Detection (VAD) components to automatically detect when speech starts and ends in audio streams. This enables seamless conversation flow without manual input controls.
 
@@ -1093,17 +1112,17 @@ vad = StandardSpeechDetector(
 ```
 
 
-## 🥰 Face expression
+## ð¥° Face expression
 
 To control facial expressions within conversations, set the facial expression names and values in `FaceController.faces` as shown below, and then include these expression keys in the response message by adding instructions to the prompt.
 
 ```python
 aiavatar_app.face_controller.faces = {
-    "neutral": "🙂",
-    "joy": "😀",
-    "angry": "😠",
-    "sorrow": "😞",
-    "fun": "🥳"
+    "neutral": "ð",
+    "joy": "ð",
+    "angry": "ð ",
+    "sorrow": "ð",
+    "fun": "ð¥³"
 }
 
 aiavatar_app.sts.llm.system_prompt = """# Face Expression
@@ -1124,15 +1143,15 @@ Example
 
 > **Note:** XML-style tags are also supported: `<face name="joy" />`, `<animation name="wave_hands" />`. Both bracket and XML formats can be used interchangeably.
 
-This allows emojis like 🥳 to be autonomously displayed in the terminal during conversations. To actually control the avatar's facial expressions in a metaverse platform, instead of displaying emojis like 🥳, you will need to use custom implementations tailored to the integration mechanisms of each platform. Please refer to our `VRChatFaceController` as an example.
+This allows emojis like ð¥³ to be autonomously displayed in the terminal during conversations. To actually control the avatar's facial expressions in a metaverse platform, instead of displaying emojis like ð¥³, you will need to use custom implementations tailored to the integration mechanisms of each platform. Please refer to our `VRChatFaceController` as an example.
 
 
-## 💃 Animation
+## ð Animation
 
-Now writing... ✍️
+Now writing... âï¸
 
 
-## 🥳 Character Management
+## ð¥³ Character Management
 
 `CharacterService` provides functionality for managing AI character settings and generating dynamic content such as schedules and diaries based on character personalities.
 
@@ -1336,7 +1355,7 @@ This single function call sets up:
 
 ### CharacterLoader (Lightweight Alternative)
 
-`CharacterLoader` is a lightweight alternative to `CharacterService` that loads character settings from local files instead of a database. No database or external API is required — just plain markdown and JSON files.
+`CharacterLoader` is a lightweight alternative to `CharacterService` that loads character settings from local files instead of a database. No database or external API is required â just plain markdown and JSON files.
 
 This is ideal when you want to quickly set up a character without infrastructure, or when you prefer to manage character definitions as files.
 
@@ -1359,12 +1378,12 @@ For richer character definitions, use directory mode with `split_initial_message
 
 ```
 my_character/
-├── character.md                # Character settings (required with split_initial_messages)
-├── response_instructions.md    # Response rules (optional, appended to system prompt)
-├── message_templates.json      # Template definitions for initial messages
-├── episode.md                  # Character's past experiences (optional)
-├── attribute.md                # Likes, dislikes, personality traits (optional)
-└── conversation_example.md     # Example dialogues for tone reference (optional)
+âââ character.md                # Character settings (required with split_initial_messages)
+âââ response_instructions.md    # Response rules (optional, appended to system prompt)
+âââ message_templates.json      # Template definitions for initial messages
+âââ episode.md                  # Character's past experiences (optional)
+âââ attribute.md                # Likes, dislikes, personality traits (optional)
+âââ conversation_example.md     # Example dialogues for tone reference (optional)
 ```
 
 ```python
@@ -1385,26 +1404,26 @@ The `message_templates.json` defines how initial messages and self-introduction 
 {
     "initial_message_defs": {
         "ja": {
-            "self_intro": "わかりました。{username}さんですね。",
-            "episode": "わかりました。",
-            "attribute": "わかりました。"
+            "self_intro": "ãããã¾ããã{username}ããã§ãã­ã",
+            "episode": "ãããã¾ããã",
+            "attribute": "ãããã¾ããã"
         }
     },
     "prefixes": {
         "ja": {
-            "episode": "以下はあなたの過去の経験です。\n\n",
-            "attribute": "以下はあなたの属性情報です。\n\n"
+            "episode": "ä»¥ä¸ã¯ããªãã®éå»ã®çµé¨ã§ãã\n\n",
+            "attribute": "ä»¥ä¸ã¯ããªãã®å±æ§æå ±ã§ãã\n\n"
         }
     },
     "self_intro_template": {
-        "ja": "$ユーザーの名前は{username}です。"
+        "ja": "$ã¦ã¼ã¶ã¼ã®ååã¯{username}ã§ãã"
     }
 }
 ```
 
 #### Hot reload
 
-All files are cached with mtime-based invalidation. Edit any file while the application is running, and changes will be reflected on the next request — no restart needed.
+All files are cached with mtime-based invalidation. Edit any file while the application is running, and changes will be reflected on the next request â no restart needed.
 
 #### Custom user name resolution
 
@@ -1439,11 +1458,11 @@ def format_messages(messages):
 | Hot reload | Supported (mtime-based) | Not supported |
 
 
-## 🧩 API
+## ð§© API
 
 You can host AIAvatarKit on a server to enable multiple clients to have independent context-aware conversations via RESTful API with streaming responses (Server-Sent Events) and WebSocket.
 
-### 💫 RESTful API (SSE)
+### ð« RESTful API (SSE)
 
 Below is the simplest example of a server program:
 
@@ -1501,7 +1520,7 @@ Below is the format for initiating a session:
     "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d",
     "user_id": "user_id",
     "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7",   // Set null or provided id in `start` response
-    "text": "こんにちは",       // If set, audio_data will be ignored         
+    "text": "ããã«ã¡ã¯",       // If set, audio_data will be ignored         
     "audio_data": "XXXX",     // Base64 encoded audio data
     "files": [
         {
@@ -1523,8 +1542,8 @@ The communication flow typically consists of:
     "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d",
     "user_id": "user01",
     "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7",
-    "text": "[face:joy]こんにちは！",   // Response text with info
-    "voice_text": "こんにちは！",       // Response text for voice synthesis
+    "text": "[face:joy]ããã«ã¡ã¯ï¼",   // Response text with info
+    "voice_text": "ããã«ã¡ã¯ï¼",       // Response text for voice synthesis
     "avatar_control_request": {
         "animation_name": null,       // Parsed animation name
         "animation_duration": null,   // Parsed duration for animation
@@ -1548,7 +1567,7 @@ curl -N -X POST http://127.0.0.1:8000/chat \
         "type": "start",
         "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d",
         "user_id": "user01",
-        "text": "こんにちは"
+        "text": "ããã«ã¡ã¯"
     }'
 
 ```
@@ -1556,13 +1575,13 @@ curl -N -X POST http://127.0.0.1:8000/chat \
 Sample response (streamed from the server):
 
 ```sh
-data: {"type": "start", "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d", "user_id": "user01", "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7", "text": null, "voice_text": null, "avatar_control_request": null, "audio_data": "XXXX", "metadata": {"request_text": "こんにちは"}}
+data: {"type": "start", "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d", "user_id": "user01", "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7", "text": null, "voice_text": null, "avatar_control_request": null, "audio_data": "XXXX", "metadata": {"request_text": "ããã«ã¡ã¯"}}
 
-data: {"type": "chunk", "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d", "user_id": "user01", "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7", "text": "[face:joy]こんにちは！", "voice_text": "こんにちは！", "avatar_control_request": {"animation_name": null, "animation_duration": null, "face_name": "joy", "face_duration": 4.0}, "audio_data": "XXXX", "metadata": {"is_first_chunk": true}}
+data: {"type": "chunk", "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d", "user_id": "user01", "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7", "text": "[face:joy]ããã«ã¡ã¯ï¼", "voice_text": "ããã«ã¡ã¯ï¼", "avatar_control_request": {"animation_name": null, "animation_duration": null, "face_name": "joy", "face_duration": 4.0}, "audio_data": "XXXX", "metadata": {"is_first_chunk": true}}
 
-data: {"type": "chunk", "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d", "user_id": "user01", "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7", "text": "今日はどんなことをお手伝いしましょうか？", "voice_text": "今日はどんなことをお手伝いしましょうか？", "avatar_control_request": {"animation_name": null, "animation_duration": null, "face_name": null, "face_duration": null}, "audio_data": "XXXX", "metadata": {"is_first_chunk": false}}
+data: {"type": "chunk", "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d", "user_id": "user01", "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7", "text": "ä»æ¥ã¯ã©ããªãã¨ããæä¼ããã¾ããããï¼", "voice_text": "ä»æ¥ã¯ã©ããªãã¨ããæä¼ããã¾ããããï¼", "avatar_control_request": {"animation_name": null, "animation_duration": null, "face_name": null, "face_duration": null}, "audio_data": "XXXX", "metadata": {"is_first_chunk": false}}
 
-data: {"type": "final", "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d", "user_id": "user01", "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7", "text": "[face:joy]こんにちは！今日はどんなことをお手伝いしましょうか？", "voice_text": "こんにちは！今日はどんなことをお手伝いしましょうか？", "avatar_control_request": null, "audio_data": "XXXX", "metadata": {}}
+data: {"type": "final", "session_id": "6d8ba9ac-a515-49be-8bf4-cdef021a169d", "user_id": "user01", "context_id": "c37ac363-5c65-4832-aa25-fd3bbbc1b1e7", "text": "[face:joy]ããã«ã¡ã¯ï¼ä»æ¥ã¯ã©ããªãã¨ããæä¼ããã¾ããããï¼", "voice_text": "ããã«ã¡ã¯ï¼ä»æ¥ã¯ã©ããªãã¨ããæä¼ããã¾ããããï¼", "avatar_control_request": null, "audio_data": "XXXX", "metadata": {}}
 ```
 
 To continue the conversation, include the `context_id` provided in the `start` response in your next request.
@@ -1572,7 +1591,7 @@ To continue the conversation, include the `context_id` provided in the `start` r
 **NOTE:** To protect API with API Key, set `api_key=API_KEY_YOU_MAKE` to AIAvatarHttpServer and send `Authorization: Bearer {API_KEY_YOU_MAKE}` as HTTP header from client.
 
 
-### 🔵 Dify-compatible API
+### ðµ Dify-compatible API
 
 `AIAvatarHttpServer` provides a Dify-compatible `/chat-messages` endpoint (SSE streaming only).
 This allows you to connect frontend applications that use Dify as their backend.
@@ -1581,7 +1600,7 @@ For more details, refer to the [Dify API Guide](https://docs.dify.ai/en/guides/a
 or the API documentation of your self-hosted Dify application.
 
 
-### 🔌 WebSocket
+### ð WebSocket
 
 Below is the simplest example of a server program:
 
@@ -1662,7 +1681,7 @@ The `session_data` object contains information about the WebSocket session:
 - Additional metadata passed during connection
 
 
-### 🟩 LINE Bot
+### ð© LINE Bot
 
 You can build a LINE Bot using the LINE Messaging API.
 
@@ -1798,7 +1817,7 @@ with open("output.wav", "wb") as f:
 ```
 
 
-## 🛡️ Guardrail
+## ð¡ï¸ Guardrail
 
 You can apply guardrails to both requests and responses.
 Guardrails are custom implementations created by developers, and can block or replace an incoming request, or replace an outgoing response when certain conditions are met.
@@ -1823,7 +1842,7 @@ class RequestGuardrail(Guardrail):
                 guardrail_name=self.name,
                 is_triggered=True,
                 action="replace",
-                text="こんにちは"   # Replaces the original request text with this value
+                text="ããã«ã¡ã¯"   # Replaces the original request text with this value
             )
         else:
             return GuardrailRespose(
@@ -1859,7 +1878,7 @@ This means the problematic output may be briefly visible to the user.
 When a response is received with `metadata.is_guardrail_triggered = true`, the client should handle this by replacing or modifying the output accordingly.
 
 
-## 🌎 Platform Guide
+## ð Platform Guide
 
 AIAvatarKit is capable of operating on any platform that allows applications to hook into audio input and output. The platforms that have been tested include:
 
@@ -1869,7 +1888,7 @@ AIAvatarKit is capable of operating on any platform that allows applications to 
 
 In addition to running on PCs to operate AI avatars on these platforms, you can also create a communication robot by connecting speakers, a microphone, and, if possible, a display to a Raspberry Pi.
 
-### 🐈 VRChat
+### ð VRChat
 
 * __2 Virtual audio devices (e.g. VB-CABLE) are required.__
 * __Multiple VRChat accounts are required to chat with your AIAvatar.__
@@ -1887,7 +1906,7 @@ $ python
 0: Headset Microphone (Oculus Virt
     :
 6: CABLE-B Output (VB-Audio Cable
-7: Microsoft サウンド マッパー - Output
+7: Microsoft ãµã¦ã³ã ãããã¼ - Output
 8: SONY TV (NVIDIA High Definition
     :
 13: CABLE-A Input (VB-Audio Cable A
@@ -1926,12 +1945,12 @@ That's all! Let's chat with the AIAvatar. Log in to VRChat on another machine (o
 AIAvatarKit controls the face expression by [Avatar OSC](https://docs.vrchat.com/docs/osc-avatar-parameters).
 
 LLM(ChatGPT/Claude/Gemini)
-↓ *response with face tag* `[face:joy]Hello!` or `<face name="joy" />Hello!`
+â *response with face tag* `[face:joy]Hello!` or `<face name="joy" />Hello!`
 AIAvatarKit(VRCFaceExpressionController)  
-↓ *osc* `FaceOSC=1`  
+â *osc* `FaceOSC=1`  
 VRChat(FX AnimatorController)  
-↓  
-😆
+â  
+ð
 
 So at first, setup your avatar the following steps:
 
@@ -1992,12 +2011,12 @@ aiavatar_app = AIAvatar(
 You can test it not only through the voice conversation but also via the [REST API](#-restful-apis).
 
 
-### 🍓 Raspberry Pi
+### ð Raspberry Pi
 
-Now writing... ✍️
+Now writing... âï¸
 
 
-## ⚙️ Administration
+## âï¸ Administration
 
 AIAvatarKit provides a built-in admin panel for monitoring, controlling, and evaluating your AI avatar from a web browser.
 
@@ -2020,12 +2039,12 @@ setup_admin_panel(
 
 The admin panel includes:
 
-- **Metrics** — Real-time performance metrics for the STS pipeline
-- **Logs** — Conversation logs with voice playback
-- **Control** — Send speech and conversation messages to the avatar
-- **Config** — Adjust pipeline, VAD, STT, LLM, TTS, and adapter settings at runtime
-- **Evaluation** — Run dialog evaluation scenarios
-- **Character** — Manage character info, weekly schedule, daily schedules, diaries, and users (requires `character_service`)
+- **Metrics** â Real-time performance metrics for the STS pipeline
+- **Logs** â Conversation logs with voice playback
+- **Control** â Send speech and conversation messages to the avatar
+- **Config** â Adjust pipeline, VAD, STT, LLM, TTS, and adapter settings at runtime
+- **Evaluation** â Run dialog evaluation scenarios
+- **Character** â Manage character info, weekly schedule, daily schedules, diaries, and users (requires `character_service`)
 
 To protect the admin panel with Basic authentication:
 
@@ -2055,7 +2074,7 @@ setup_admin_panel(
 
 All admin panel features are also available as REST API endpoints. See the interactive API documentation at `/docs` on your server for full details on request/response schemas.
 
-### 📈 Observability
+### ð Observability
 
 You can monitor the entire sequence - what requests are sent to the LLM, how they are interpreted, which tools are invoked, and what responses are generated from specific results or data - to support AIAvatar quality improvements and governance.
 
@@ -2082,11 +2101,11 @@ llm = ChatGPTService(
 ```
 
 
-## 🦜 AI Agent
+## ð¦ AI Agent
 
-AIAvatarKit is not just a framework for creating chatty AI characters — it is designed to support agentic characters that can interact with APIs and external data sources (RAG).
+AIAvatarKit is not just a framework for creating chatty AI characters â it is designed to support agentic characters that can interact with APIs and external data sources (RAG).
 
-### ⚡️ Tool Call
+### â¡ï¸ Tool Call
 
 Register tool with spec by `@aiavatar_app.sts.llm.tool`. The spec should be in the format for each LLM.
 
@@ -2136,11 +2155,11 @@ aiavatar_app.sts.llm.add_tool(WebScraperTool())
 ```
 
 
-### ⌛️ Tool Call with Streaming Progress
+### âï¸ Tool Call with Streaming Progress
 
-Sometimes you may want to provide feedback to the user when a tool takes time to execute. AIAvatarKit supports tools that return stream responses (via `AsyncGenerator`), which allows you to integrate advanced and costly operations — such as interactions with AI Agent frameworks — into real-time voice conversations without compromising the user experience.
+Sometimes you may want to provide feedback to the user when a tool takes time to execute. AIAvatarKit supports tools that return stream responses (via `AsyncGenerator`), which allows you to integrate advanced and costly operations â such as interactions with AI Agent frameworks â into real-time voice conversations without compromising the user experience.
 
-Here’s an example implementation. Intermediate progress is yielded with the second return value set to `False`, and the final result is yielded with `True`.
+Hereâs an example implementation. Intermediate progress is yielded with the second return value set to `False`, and the final result is yielded with `True`.
 
 ```python
 @service.tool(weather_tool_spec)
@@ -2178,11 +2197,11 @@ async def get_weather_stream(location: str):
 When you yield a string (str) value, the AI avatar will speak that text while continuing to process the request.
 
 
-### 🔄 Background Tool Execution
+### ð Background Tool Execution
 
 For tools that take a long time to complete (e.g., AI agent calls, complex API orchestrations), AIAvatarKit supports **background execution**. Instead of blocking the conversation, the avatar immediately acknowledges the request and notifies the user when the result is ready via a callback.
 
-To enable background execution, register an `on_completed` callback on the tool. This is the only requirement — the base `Tool` class handles task management, `task_id` generation, and metadata tracking automatically.
+To enable background execution, register an `on_completed` callback on the tool. This is the only requirement â the base `Tool` class handles task management, `task_id` generation, and metadata tracking automatically.
 
 ```python
 from aiavatar.sts.llm import Tool
@@ -2272,13 +2291,13 @@ async def on_completed(result, metadata):
     print(f"Background result: {result}")
 ```
 
-- If the tool completes within `background_timeout` seconds → result is returned directly (same as synchronous mode)
-- If the tool exceeds the timeout → switches to background mode, returns `immediate_message`, and calls `on_completed` when done
+- If the tool completes within `background_timeout` seconds â result is returned directly (same as synchronous mode)
+- If the tool exceeds the timeout â switches to background mode, returns `immediate_message`, and calls `on_completed` when done
 
 **Note**: `on_completed` (background execution) and `AsyncGenerator` (streaming progress) are mutually exclusive. A tool should use one pattern or the other.
 
 
-### 📋 Tool Response Formatter (Direct Response)
+### ð Tool Response Formatter (Direct Response)
 
 By default, after a tool executes, the result is passed back to the LLM to generate a human-friendly response (2nd LLM call). However, in some cases you may want to **bypass the LLM and speak the tool result directly**:
 
@@ -2308,10 +2327,10 @@ The formatter receives two arguments:
 
 The tool call and its result are still saved to conversation context, so follow-up questions like "What was the temperature again?" work naturally. The formatted text is stored as the assistant's response.
 
-**Note**: Tools without a `response_formatter` continue to work as before (2nd LLM call generates the response). You can mix both patterns — some tools with formatters and others without.
+**Note**: Tools without a `response_formatter` continue to work as before (2nd LLM call generates the response). You can mix both patterns â some tools with formatters and others without.
 
 
-### 📦 Structured Content (Client-side Data)
+### ð¦ Structured Content (Client-side Data)
 
 By default, tool results (`data`) are passed back to the LLM as context. If you also want to send **structured data directly to the client application** (e.g., for rendering UI components, displaying charts, or updating app state), use `structured_content` in `ToolCallResult`.
 
@@ -2322,12 +2341,12 @@ from aiavatar.sts.llm import ToolCallResult
 async def get_weather(location: str):
     weather = await weather_api(location)
     return ToolCallResult(
-        data={"summary": f"{weather['temperature']}°C, {weather['condition']}"},  # → passed to LLM
-        structured_content={"temperature": weather["temperature"], "condition": weather["condition"], "forecast": weather["forecast"]}  # → passed to client
+        data={"summary": f"{weather['temperature']}Â°C, {weather['condition']}"},  # â passed to LLM
+        structured_content={"temperature": weather["temperature"], "condition": weather["condition"], "forecast": weather["forecast"]}  # â passed to client
     )
 ```
 
-`structured_content` propagates through the entire response pipeline (`LLMResponse` → `STSResponse` → `AIAvatarResponse`) and is delivered to the client as a **top-level field** in the JSON response:
+`structured_content` propagates through the entire response pipeline (`LLMResponse` â `STSResponse` â `AIAvatarResponse`) and is delivered to the client as a **top-level field** in the JSON response:
 
 ```json
 {
@@ -2355,10 +2374,10 @@ async def search(query: str):
 **Note**: `structured_content` defaults to `None`. Existing tools that return plain `dict` or use shorthand return types are unaffected.
 
 
-### 🪄 Dynamic Tool Call
+### ðª Dynamic Tool Call
 
 AIAvatarKit supports **dynamic Tool Calls**.
-When many tools are loaded up-front, it becomes harder to make the model behave as intended and your system instructions explode in size. With AIAvatarKit’s **Dynamic Tool Call** mechanism you load **only the tools that are actually needed at the moment**, eliminating that complexity.
+When many tools are loaded up-front, it becomes harder to make the model behave as intended and your system instructions explode in size. With AIAvatarKitâs **Dynamic Tool Call** mechanism you load **only the tools that are actually needed at the moment**, eliminating that complexity.
 
 The overall flow is illustrated below.
 
@@ -2461,7 +2480,7 @@ llm.add_tool(weather_tool, is_dynamic=True)
 
 #### 3. Tweak the system prompt so the model knows how to use tools
 
-Append a concise “How to use external tools” section (example below).
+Append a concise âHow to use external toolsâ section (example below).
 Replace the example tools with those your application actually relies on for smoother behaviour.
 
 
@@ -2491,7 +2510,7 @@ Examples where external tools are needed:
 - Accessing real-world systems or data to provide better solutions
 ```
 
-With these three steps, your AI agent stays lean—loading only what it needs—while still having immediate access to a rich arsenal of capabilities whenever they’re truly required.
+With these three steps, your AI agent stays leanâloading only what it needsâwhile still having immediate access to a rich arsenal of capabilities whenever theyâre truly required.
 
 
 #### Custom Tool Repository
@@ -2512,7 +2531,7 @@ async def my_get_dynamic_tools(messages: list, metadata: dict) -> list:
     return [t.spec for t in tools]
 ```
 
-### 🔌 MCP
+### ð MCP
 
 AIAvatarKit supports tools provided as MCP.
 
@@ -2548,18 +2567,18 @@ mcp3 = StdioMCP(server_script="weather.py") # supports .py and .js
 mcp3.for_each_tool = llm.add_tool
 ```
 
-### 🛠️ Built-in Tools
+### ð ï¸ Built-in Tools
 
-You can use the following tools out of the box 📦.
+You can use the following tools out of the box ð¦.
 
-- 🔍 Web Search
+- ð Web Search
     - Gemini Search
     - OpenAI Search
     - Grok Search
-- 🌏 Web Scraper
-- 🖼️ Image Generation
-    - 🍌 Nano Banana
-    - 🐓 Selfie
+- ð Web Scraper
+- ð¼ï¸ Image Generation
+    - ð Nano Banana
+    - ð Selfie
 
 ```python
 # Web Search
@@ -2592,7 +2611,7 @@ llm.add_tool(selfie_tool)
 ```
 
 
-### 🦞 OpenClaw
+### ð¦ OpenClaw
 
 `OpenClawTool` integrates [OpenClaw](https://openclaw.ai), a versatile AI agent, as a tool for your avatar. When the LLM determines that the user's request requires autonomous task execution (web search, data analysis, code execution, etc.), it delegates the task to OpenClaw.
 
@@ -2607,7 +2626,7 @@ openclaw_tool = OpenClawTool(
 llm.add_tool(openclaw_tool)
 ```
 
-When `on_completed` is registered, OpenClaw runs asynchronously in the background — the avatar immediately acknowledges the request and notifies the user when the result is ready. The approach for delivering the result depends on your adapter.
+When `on_completed` is registered, OpenClaw runs asynchronously in the background â the avatar immediately acknowledges the request and notifies the user when the result is ready. The approach for delivering the result depends on your adapter.
 
 #### Push-based delivery (WebSocket / Local)
 
@@ -2681,7 +2700,7 @@ The client receives the `task_id` from the avatar's immediate response and polls
 Once the client retrieves the answer, it can send it back to the avatar as a new request, for example `f"$OpenClaw has returned a response. Please relay the following to the user:\n\n{answer}"`, to have the avatar speak the result aloud.
 
 
-## 🧪 Evaluation
+## ð§ª Evaluation
 
 AIAvatarKit includes a comprehensive evaluation framework for testing and assessing AI avatar conversations. The `DialogEvaluator` enables scenario-based conversation execution with automatic evaluation capabilities.
 
@@ -2753,19 +2772,19 @@ Goal: Provide helpful customer support
 Turn 1:
   Input: Hello, I need help with my order
   Actual Output: Hello! I'd be happy to help you with your order. Could you please provide your order number?
-  Result: ✓ PASS
+  Result: â PASS
   Reason: The response is polite, helpful, and appropriately asks for the order number.
 
 Turn 2:
   Input: My order number is 12345
   Actual Output: Thank you for providing order number 12345. Let me look that up for you.
-  Result: ✓ PASS
+  Result: â PASS
   Reason: Acknowledges the order number and shows willingness to help.
 
 Summary: 2/2 turns passed (100.0%)
 
 === Overall Scenario Evaluation ===
-Goal Achievement: ✓ SUCCESS
+Goal Achievement: â SUCCESS
 Reason: The AI successfully provided helpful customer support by responding politely and efficiently handling the order inquiry.
 ```
 
@@ -2864,12 +2883,12 @@ scenario = Scenario(
 ```
 
 
-## 🤿 Deep dive
+## ð¤¿ Deep dive
 
 Advanced usases.
 
 
-### 🐘 PostgreSQL
+### ð PostgreSQL
 
 You can use PostgreSQL instead of the default SQLite. We strongly recommend using PostgreSQL in production environments for its scalability and performance benefits from asynchronous processing.
 
@@ -2924,7 +2943,7 @@ ws_app = AIAvatarWebSocketServer(
 **NOTE**: `PerformanceRecorder` runs in a separate thread from the main thread, so it does not use the shared connection pool. Instead, it retrieves only the connection information from the PoolProvider and creates its own dedicated connection pool. It writes performance information serially as it receives it through a queue, so it basically uses only a single connection. We recommend not changing this unless you have a specific reason.
 
 
-### ⚠️ LLM Error Handling
+### â ï¸ LLM Error Handling
 
 You can handle errors that occur during LLM API calls by using the `on_error` decorator. This is useful for customizing avatar responses when content filters are triggered or when API errors occur.
 
@@ -2948,7 +2967,7 @@ async def on_error(llm_response: LLMResponse):
 **NOTE**: When an error occurs, the conversation context is not updated. This is intentional because including the programmatically overwritten response in the context may cause unexpected LLM behavior in subsequent conversations.
 
 
-### 🖍️ Custom Chat Logging
+### ðï¸ Custom Chat Logging
 
 Use the `print_chat` decorator to customize how user/AI conversation turns are logged.
 
@@ -2971,7 +2990,7 @@ def print_chat(role, context_id, user_id, text, files):
 **NOTE**: This example uses ANSI escape sequences optimized for console output. These escape codes will appear as noise in log files.
 
 
-### 👀 Vision
+### ð Vision
 
 AIAvatarKit captures and sends image to AI dynamically when the AI determine that vision is required to process the request. This gives "eyes" to your AIAvatar in metaverse platforms like VRChat.
 
@@ -3032,7 +3051,7 @@ async def get_image_url(source: str) -> str:
 > **Note:** XML-style tag is also supported: `<vision source="screenshot" />`
 
 
-### 💾 Long-term Memory
+### ð¾ Long-term Memory
 
 To recall information from past conversations across different contexts, a long-term memory service is used.
 
@@ -3068,20 +3087,20 @@ llm.add_tool(
 ```
 
 
-### 🐓 Wakeword
+### ð Wakeword
 
 Set `wakewords` when instantiating `AIAvatar`. Conversation will start when the AIAvatar recognizes one of the words in this list. You can also set `wakeword_timeout`, after which the AIAvatar will return to listening for the wakeword again.
 
 ```python
 aiavatar_app = AIAvatar(
     openai_api_key=OPENAI_API_KEY,
-    wakewords=["Hello", "こんにちは"],
+    wakewords=["Hello", "ããã«ã¡ã¯"],
     wakeword_timeout=60,
 )
 ```
 
 
-### 📋 System Prompt Parameters
+### ð System Prompt Parameters
 
 You can embed parameters into your system prompt dynamically.
 
@@ -3107,7 +3126,7 @@ aiavatar_app.sts.invoke(STSRequest(
 Placeholders in the system prompt, such as `{name}`, will be replaced with the corresponding values at runtime.
 
 
-### 🎛️ Inline LLM Parameters
+### ðï¸ Inline LLM Parameters
 
 When calling `LLMService.chat_stream` directly (outside the Speech-to-Speech pipeline), you can override model-specific parameters on a per-request basis using `inline_llm_params`.
 
@@ -3131,10 +3150,10 @@ The key-value pairs in `inline_llm_params` are merged into the underlying API ca
 | GeminiService | `model`, `config`, ... |
 | LiteLLMService | `model`, `temperature`, ... |
 
-For a practical example, see [Quick Response](#-quick-response) — `QuickResponder` uses `inline_llm_params` to disable tool calls and reasoning for fast first-response generation.
+For a practical example, see [Quick Response](#-quick-response) â `QuickResponder` uses `inline_llm_params` to disable tool calls and reasoning for fast first-response generation.
 
 
-### ⏰ Timestamp Insertion
+### â° Timestamp Insertion
 
 You can insert timestamps into requests at regular intervals. This keeps AIAvatar responses anchored to real-world time.
 
@@ -3160,7 +3179,7 @@ Hello!
 When `timestamp_interval_seconds` is set to 0, no timestamp is inserted (default).
 
 
-### 🧵 Request merging
+### ð§µ Request merging
 
 Request merging helps prevent conversation breakdown when speech recognition produces fragmented results. When enabled, consecutive requests within a specified time window are automatically merged into a single request, improving conversation continuity and user experience.
 
@@ -3194,13 +3213,13 @@ aiavatar_app.sts.merge_request_threshold = 2.0  # Merge requests within 2 second
 You can also customize the merge prefix message. Here's an example of setting the prefix in Japanese:
 
 ```python
-aiavatar_app.sts.merge_request_prefix = "$直前のユーザーの要求とあなたの応答はキャンセルされました。以下の要求に対して、あらためて応答しなおしてください:\n\n"
+aiavatar_app.sts.merge_request_prefix = "$ç´åã®ã¦ã¼ã¶ã¼ã®è¦æ±ã¨ããªãã®å¿ç­ã¯ã­ã£ã³ã»ã«ããã¾ãããä»¥ä¸ã®è¦æ±ã«å¯¾ãã¦ãããããã¦å¿ç­ããªããã¦ãã ãã:\n\n"
 ```
 
 NOTE: Files from the previous request are preserved in the merged request
 
 
-### 📥 Invoke Queue
+### ð¥ Invoke Queue
 
 AIAvatarKit provides three invoke modes for handling concurrent requests. By default, new requests interrupt any ongoing response. With queue mode enabled, you can control whether requests wait in line or still interrupt.
 
@@ -3266,7 +3285,7 @@ request = STSRequest(
 - **Cancelled responses**: When a queued request is cleared (by a non-waiting request), it receives a response with `type="cancelled"`.
 
 
-### 🧺 Shared Context
+### ð§º Shared Context
 
 Context is typically shared only between an individual user and the AI character. With AIAvatarKit, you can manage histories that define how broadly the context is shared, for example, making it common to every user.
 
@@ -3302,7 +3321,7 @@ llm = ChatGPTService(
 ```
 
 
-### 🔗 Channel Context Bridge
+### ð Channel Context Bridge
 
 `ChannelContextBridge` maps channel-specific user IDs (e.g. LINE user ID, Twilio phone number) to app-level user IDs and persists conversation context (`context_id`) per user across channels. This is essential when some channels (e.g. Twilio) cannot pass `context_id` from the client side.
 
@@ -3369,7 +3388,7 @@ bridge = PostgreSQLChannelContextBridge(
 ```
 
 
-### 🔈 Audio device
+### ð Audio device
 
 You can specify the audio devices to be used in components by device index.
 
@@ -3380,26 +3399,26 @@ $ python
 
 >>> from aiavatar import AudioDevice
 >>> AudioDevice().list_audio_devices()
-{'index': 0, 'name': '外部マイク', 'max_input_channels': 1, 'max_output_channels': 0, 'default_sample_rate': 44100.0}
-{'index': 1, 'name': '外部ヘッドフォン', 'max_input_channels': 0, 'max_output_channels': 2, 'default_sample_rate': 44100.0}
-{'index': 2, 'name': 'MacBook Airのマイク', 'max_input_channels': 3, 'max_output_channels': 0, 'default_sample_rate': 44100.0}
-{'index': 3, 'name': 'MacBook Airのスピーカー', 'max_input_channels': 0, 'max_output_channels': 2, 'default_sample_rate': 44100.0}
+{'index': 0, 'name': 'å¤é¨ãã¤ã¯', 'max_input_channels': 1, 'max_output_channels': 0, 'default_sample_rate': 44100.0}
+{'index': 1, 'name': 'å¤é¨ããããã©ã³', 'max_input_channels': 0, 'max_output_channels': 2, 'default_sample_rate': 44100.0}
+{'index': 2, 'name': 'MacBook Airã®ãã¤ã¯', 'max_input_channels': 3, 'max_output_channels': 0, 'default_sample_rate': 44100.0}
+{'index': 3, 'name': 'MacBook Airã®ã¹ãã¼ã«ã¼', 'max_input_channels': 0, 'max_output_channels': 2, 'default_sample_rate': 44100.0}
 ```
 
 Set indexes to AIAvatar.
 
 ```python
 aiavatar_app = AIAvatar(
-    input_device=2,     # MacBook Airのマイク
-    output_device=3,    # MacBook Airのスピーカー
+    input_device=2,     # MacBook Airã®ãã¤ã¯
+    output_device=3,    # MacBook Airã®ã¹ãã¼ã«ã¼
     openai_api_key=OPENAI_API_KEY
 )
 ```
 
 
-### 🐆 Quick Response
+### ð Quick Response
 
-To reduce the first response latency, `QuickResponder` generates a short acknowledgment phrase (e.g. "Sure!" or "なるほど。") and sends it to the user immediately, before the main LLM response is ready. This keeps the conversation feeling responsive while the full answer is being generated.
+To reduce the first response latency, `QuickResponder` generates a short acknowledgment phrase (e.g. "Sure!" or "ãªãã»ã©ã") and sends it to the user immediately, before the main LLM response is ready. This keeps the conversation feeling responsive while the full answer is being generated.
 
 ```python
 from aiavatar.sts import QuickResponder, DEFAULT_QUICK_RESPONSE_PROMPT_PREFIX_JA, DEFAULT_REQUEST_PREFIX_JA
@@ -3435,7 +3454,7 @@ async def on_before_llm(request: STSRequest):
 
 #### QuickResponderPro
 
-`QuickResponderPro` is a performance-tuned variant that bypasses `LLMService` and calls the OpenAI-compatible API directly with `stream=False`. It manages its own context through a dedicated `ContextManager`, cleans conversation history for few-shot learning, and supports a custom system prompt — giving you full control over how quick responses are generated.
+`QuickResponderPro` is a performance-tuned variant that bypasses `LLMService` and calls the OpenAI-compatible API directly with `stream=False`. It manages its own context through a dedicated `ContextManager`, cleans conversation history for few-shot learning, and supports a custom system prompt â giving you full control over how quick responses are generated.
 
 ```python
 from aiavatar.sts.quick_responder.pro import QuickResponderPro, DEFAULT_QRP_SYSTEM_PROMPT_JA
@@ -3464,7 +3483,7 @@ async def on_before_llm(request: STSRequest):
 3. Synthesizes the response with TTS (with caching)
 4. Rewrites `request.text` with a deduplication prefix so the main LLM continues naturally
 
-**Pre-generation during silence:** When using `SileroStreamSpeechDetector`, you can start generating the quick response during the segment silence period — before turn-end is confirmed. This overlaps LLM + TTS work with the remaining silence wait, noticeably reducing perceived latency.
+**Pre-generation during silence:** When using `SileroStreamSpeechDetector`, you can start generating the quick response during the segment silence period â before turn-end is confirmed. This overlaps LLM + TTS work with the remaining silence wait, noticeably reducing perceived latency.
 
 ```python
 @vad.on_speech_detecting
@@ -3479,9 +3498,9 @@ async def on_speech_detecting(text, vad_session):
 If the user resumes speaking, the pending task is automatically cancelled and a new one starts. If the user stays silent and turn-end is confirmed, `respond()` picks up the pre-generated result instead of generating from scratch.
 
 **History cleaning:** When reading back conversation history, `QuickResponderPro` automatically cleans it for the QR context:
-- **Quick response turns** (prompt_prefix) — kept as-is, serving as few-shot examples
-- **Main LLM turns** (request_prefix) — replaced with a short continuation message to avoid confusing duplicate utterances
-- **Assistant content** — `<think>`/`<answer>` tags and `[control:tags]` are stripped to plain text
+- **Quick response turns** (prompt_prefix) â kept as-is, serving as few-shot examples
+- **Main LLM turns** (request_prefix) â replaced with a short continuation message to avoid confusing duplicate utterances
+- **Assistant content** â `<think>`/`<answer>` tags and `[control:tags]` are stripped to plain text
 
 **Azure OpenAI / Custom client:** You can pass a pre-configured client instead of `api_key`/`base_url`:
 
@@ -3528,7 +3547,7 @@ quick_responder_pro = QuickResponderPro(
 > ```
 
 
-### 🎭 Custom Behavior
+### ð­ Custom Behavior
 
 You can invoke custom implementations `on_response(response_type)`. In the following example, show "thinking" face expression while processing request to enhance the interaction experience with the AI avatar.
 
@@ -3546,7 +3565,7 @@ async def on_chunk_response(response):
 ```
 
 
-### ✅ Request Validation
+### â Request Validation
 
 You can filter out unwanted requests before they reach the LLM by implementing a `validate_request` hook. Return a reason string to cancel the request, or `None` to proceed.
 
@@ -3578,7 +3597,7 @@ This is useful for:
 
 #### Early Validation with AzureStreamSpeechDetector
 
-When using `AzureStreamSpeechDetector`, you can validate recognized text even earlier—before the STS pipeline is invoked. This is more efficient for filtering out short or invalid utterances since it skips the entire pipeline processing.
+When using `AzureStreamSpeechDetector`, you can validate recognized text even earlierâbefore the STS pipeline is invoked. This is more efficient for filtering out short or invalid utterances since it skips the entire pipeline processing.
 
 ```python
 from aiavatar.sts.vad.azure_stream import AzureStreamSpeechDetector
@@ -3596,7 +3615,7 @@ def validate_recognized_text(text: str) -> str | None:
         return "Text too short"
 
     # Reject specific patterns (e.g., filler words)
-    if text in ["えーと", "あの", "うーん"]:
+    if text in ["ãã¼ã¨", "ãã®", "ãã¼ã"]:
         return "Filler word detected"
 
     return None  # Proceed with the request
@@ -3605,7 +3624,7 @@ def validate_recognized_text(text: str) -> str | None:
 Note: This decorator uses a synchronous function (not `async`) because it runs within the Azure Speech SDK's callback thread.
 
 
-### 🎚️ Noise Filter
+### ðï¸ Noise Filter
 
 AIAvatarKit automatically adjusts the noise filter for listeners when you instantiate an AIAvatar object. To manually set the noise filter level for voice detection, set `auto_noise_filter_threshold` to `False` and specify the `volume_threshold_db` in decibels (dB).
 
@@ -3618,16 +3637,16 @@ aiavatar_app = AIAvatar(
 ```
 
 
-### 🔄 Migration Guide: From v0.6.x to v0.7.0
+### ð Migration Guide: From v0.6.x to v0.7.0
 
 In version **v0.7.0**, the internal Speech-to-Speech pipeline previously provided by the external `LiteSTS` library has been fully integrated into AIAvatarKit.
 
 ### What Changed?
 
-- The functionality remains the same — **no API behavior changes**.
+- The functionality remains the same â **no API behavior changes**.
 - However, **import paths have been updated**.
 
-### 🔧 Required Changes
+### ð§ Required Changes
 
 All imports from `litests` should now be updated to `aiavatar.sts`.
 
