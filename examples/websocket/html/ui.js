@@ -6,7 +6,7 @@
  *   // Then wire up page-specific logic (onResponseReceived, lipsync, etc.)
  */
 class AvatarUI {
-    constructor({ aiavatar, userId, camera, onStop, toolLabels }) {
+    constructor({ aiavatar, userId, camera, onStop, toolLabels, voiceDetectMode, voiceHoldDuration }) {
         this.aiavatar = aiavatar;
         this.sessionId = crypto.randomUUID();
         this.userId = userId || localStorage.getItem("userId") || crypto.randomUUID();
@@ -20,6 +20,12 @@ class AvatarUI {
         this.cameraEnabled = false;
         this.isServerProcessing = false;
         this.isBargeInBlocked = false;
+
+        // Voice detection: "rms" (client-side) or "voiced" (server event)
+        this.voiceDetectMode = voiceDetectMode || "rms";
+        this.voiceHoldDuration = voiceHoldDuration || 1000; // ms
+        this.isUserSpeaking = false;
+        this._voiceHoldTimer = null;
 
         // Input level averaging
         this.rmsSum = 0;
@@ -60,25 +66,50 @@ class AvatarUI {
         });
     }
 
-    // --- Microphone frame color & input level ---
+    // --- Voice detection (isUserSpeaking) ---
+
+    _setUserSpeaking() {
+        this.isUserSpeaking = true;
+        if (this._voiceHoldTimer) clearTimeout(this._voiceHoldTimer);
+        this._voiceHoldTimer = setTimeout(() => {
+            this.isUserSpeaking = false;
+        }, this.voiceHoldDuration);
+    }
+
+    // --- Microphone glow ---
+
+    setMicGlow(active) {
+        if (active) {
+            this.avatarFrame.classList.add("mic-active");
+        } else {
+            this.avatarFrame.classList.remove("mic-active");
+        }
+    }
+
+    // --- Microphone input level & voice detection ---
 
     _setupMicrophoneCallback() {
         this.aiavatar.onMicrophoneDataSend = (rms) => {
+            // Glow: always RMS-driven (frame-by-frame)
             if (rms > 0.01) {
-                this.avatarFrame.classList.add("mic-active");
+                this.setMicGlow(true);
             } else {
-                this.avatarFrame.classList.remove("mic-active");
+                this.setMicGlow(false);
             }
 
+            // Voice detection: mode-dependent
+            if (this.voiceDetectMode === "rms" && rms > 0.01) {
+                this._setUserSpeaking();
+            }
+
+            // dB display (always, regardless of mode)
             this.rmsSum += rms;
             this.rmsCount++;
-
             const currentTime = Date.now();
             if (currentTime - this.lastUpdateTime >= 500) {
                 const avgRms = this.rmsSum / this.rmsCount;
                 const dbLevel = avgRms > 0 ? 20 * Math.log10(avgRms) : -80;
                 this.inputLevelElement.textContent = `${dbLevel.toFixed(1)} dB`;
-
                 this.rmsSum = 0;
                 this.rmsCount = 0;
                 this.lastUpdateTime = currentTime;
@@ -234,6 +265,11 @@ class AvatarUI {
             }
         }
 
+        // Voiced mode: voice detection via server event
+        if (response.type === "voiced" && this.voiceDetectMode === "voiced") {
+            this._setUserSpeaking();
+        }
+
         // Track server processing state
         if (response.type === "accepted") {
             this.isServerProcessing = true;
@@ -246,7 +282,9 @@ class AvatarUI {
 
         // Vision / camera capture
         if (response.type === "vision" && response.metadata !== null) {
-            if (response.metadata.source === "camera" && this.cameraEnabled) {
+            if (this.onVisionRequested) {
+                this.onVisionRequested(response.metadata.source);
+            } else if (response.metadata.source === "camera" && this.cameraEnabled) {
                 this.camera.capture();
             }
         }

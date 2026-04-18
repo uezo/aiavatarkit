@@ -266,6 +266,31 @@
             width: 100%;
         }
 
+        /* ── Narrow screen (mobile portrait) ── */
+        @media (max-width: 480px) {
+            .message-speaker {
+                font-size: var(--vn-speaker-font-size-sp, 10px);
+                padding: 4px 10px;
+                left: 6px;
+            }
+            .vn-menu {
+                right: 4px;
+                gap: 1px;
+            }
+            .vn-menu-btn {
+                font-size: 9px;
+                width: 58px;
+                padding: 4px 0;
+            }
+            .vn-vol-wrap {
+                width: 58px;
+            }
+            .message-text {
+                padding: 14px 14px;
+                font-size: var(--vn-text-font-size-sp, 14px);
+            }
+        }
+
         .volume-popup {
             position: absolute;
             bottom: calc(100% + 6px);
@@ -444,6 +469,19 @@
             height: 100%;
             z-index: 1;
         }
+
+        /* ── Vision stream preview (top-left) ── */
+        #visionPreview {
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            max-width: 25vw;
+            border-radius: 8px;
+            border: 1px solid rgba(180, 200, 255, 0.18);
+            z-index: 200;
+            display: none;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
     </style>
     <!-- Optional theme: place a theme.css in the same directory to override styles -->
     <link rel="stylesheet" href="vrm-themes/theme-girly.css">
@@ -458,6 +496,9 @@
         <canvas id="vrmCanvas"></canvas>
         <div class="vrm-placeholder" id="vrmPlaceholder">Drop or load a VRM file</div>
     </div>
+
+    <!-- Vision stream preview -->
+    <video id="visionPreview" playsinline muted></video>
 
     <!-- Mic activity glow -->
     <div class="mic-glow" id="micGlow"></div>
@@ -475,6 +516,7 @@
             <div class="vn-menu">
                 <button class="vn-menu-btn" id="chatBtn">START</button>
                 <button class="vn-menu-btn" id="bargeInBtn">BARGE-IN</button>
+                <button class="vn-menu-btn" id="visionBtn">VISION</button>
                 <div class="vn-vol-wrap" id="volumeControl">
                     <button class="vn-menu-btn" id="volumeBtn">VOL</button>
                     <div class="volume-popup" id="volumePopup">
@@ -496,14 +538,12 @@
         <span>Input: </span>
         <span id="inputLevel">0.0 dB</span>
     </div>
-    <video id="cameraVideo" style="display: none;" playsinline></video>
-    <canvas id="cameraCanvas" style="display: none;"></canvas>
     <input type="checkbox" id="interruptToggle" style="display:none;">
     <input type="checkbox" id="cameraToggle" style="display:none;">
 
     <script src="aiavatar.js"></script>
-    <script src="camera.js"></script>
-    <script src="lipsync.js"></script>
+    <script src="vision-stream.js"></script>
+<script src="lipsync.js"></script>
     <script src="ui.js"></script>
     <script src="vrm-idle.js"></script>
 
@@ -1589,26 +1629,10 @@
         aiavatar.onResetFace = () => idle.clearVisemes();
         aiavatar.onPlaybackEnd = () => idle.clearVisemes();
 
-        // Camera (vision)
-        const cam = new Camera({
-            videoElement: document.getElementById('cameraVideo'),
-            canvasElement: document.getElementById('cameraCanvas'),
-            onCapture: (imageDataUrl) => {
-                aiavatar.ws.send(JSON.stringify({
-                    type: "invoke",
-                    session_id: ui.sessionId,
-                    user_id: ui.userId,
-                    files: [{ url: imageDataUrl }],
-                    allow_merge: false,
-                    wait_in_queue: true
-                }));
-            }
-        });
-
         // Shared UI
         const ui = new AvatarUI({
             aiavatar,
-            camera: cam,
+            // voiceDetectMode: "voiced",
             toolLabels: {
                 "send_query_to_openclaw": "Asking OpenClaw🦞",
             }
@@ -1727,18 +1751,94 @@
         }, 1000);
 
         // ============================================================
+        // Vision Stream
+        // ============================================================
+        const VISION_SERVER_URL = "../vision";
+        const VISION_STREAM_ENABLED = true;  // Set false to disable periodic sending (camera stays active for on-demand capture)
+        const visionPreview = document.getElementById('visionPreview');
+        const visionBtn = document.getElementById('visionBtn');
+        let visionClient = null;
+        let visionActive = false;
+
+        visionPreview.addEventListener('click', () => {
+            if (visionClient) visionClient.switchCamera();
+        });
+
+        visionBtn.addEventListener('click', async () => {
+            visionActive = !visionActive;
+            visionBtn.classList.toggle('active', visionActive);
+
+            if (visionActive) {
+                visionPreview.style.display = 'block';
+                visionClient = new VisionStreamClient({
+                    serverUrl: VISION_SERVER_URL,
+                    contextId: aiavatar.chatContextId || null,
+                    userId: ui.userId,
+                    interval: 3,
+                    maxLongEdge: 1536,
+                    jpegQuality: 0.7,
+                    videoElement: visionPreview,
+                    pauseWhen: () => !VISION_STREAM_ENABLED || ui.isUserSpeaking,
+                    onResult: (text, attentionLevel, imageUrl) => {
+                        console.log(`[Vision] (${attentionLevel}) ${text}`);
+                        if (attentionLevel >= 3) {
+                            aiavatar.ws.send(JSON.stringify({
+                                type: "invoke",
+                                session_id: ui.sessionId,
+                                user_id: ui.userId,
+                                // text: "$Noteworthy visual information has been received. Rather than simply describing what you see, respond in a way that is appropriate to the current conversational context.",
+                                text: "$注目すべき視覚情報が入力されました。見えたものの解説ではなく、これまでの文脈の中でこの画像が見えたときに相応しい反応をしてください",
+                                files: [{ url: imageUrl }],
+                                allow_merge: false,
+                                wait_in_queue: true
+                            }));
+                            return 10000; // cooldown milliseconds
+                        }
+                    },
+                    onError: (seq, err) => {
+                        console.error(`[Vision] Error:`, err);
+                    },
+                });
+                await visionClient.start();
+            } else {
+                if (visionClient) {
+                    visionClient.stop();
+                    visionClient = null;
+                }
+                visionPreview.style.display = 'none';
+            }
+        });
+
+        // Response handling for vision
+        ui.onVisionRequested = async (source) => {
+            if (visionActive) {
+                const imageDataUrl = await visionClient.capture();
+                if (!imageDataUrl) return;
+                const imageMessage = {
+                    type: "invoke",
+                    session_id: ui.sessionId,
+                    user_id: ui.userId,
+                    // text: "$Here is visual information needed for your response. Rather than simply describing what you see, respond in a way that is appropriate to the current conversational context.",
+                    text: "$応答に必要な視覚情報を提供します。単に見えたものの説明だけではなく、これまでの文脈の中でこの画像が見えたときに相応しい反応をしてください",
+                    files: [{url: imageDataUrl}],
+                    allow_merge: false,
+                    wait_in_queue: true
+                };
+                aiavatar.ws.send(JSON.stringify(imageMessage));
+            }
+        };
+
+        // ============================================================
         // Galge-style control wiring
         // ============================================================
         const micGlow = document.getElementById('micGlow');
         const chatBtn = document.getElementById('chatBtn');
         const bargeInBtn = document.getElementById('bargeInBtn');
 
-        // Override mic activity visual: use bottom glow instead of frame color
-        const origMicCallback = aiavatar.onMicrophoneDataSend;
-        aiavatar.onMicrophoneDataSend = (rms) => {
-            origMicCallback?.(rms);
+        // Override mic glow: use bottom glow bar instead of frame color
+        ui.setMicGlow = (active) => {
             if (!showMicGlow) return;
-            if (rms > 0.01) {
+            if (active) {
                 micGlow.classList.add('active');
             } else {
                 micGlow.classList.remove('active');
@@ -1797,6 +1897,10 @@
                 aiavatar.updateFace("neutral", 0);
             } else if (response.type === "tool_call") {
                 console.log(response.metadata);
+            }
+            // Update vision client context
+            if (visionClient && response.context_id) {
+                visionClient.contextId = response.context_id;
             }
             // Update connection info
             if (response.type === "connected") {
