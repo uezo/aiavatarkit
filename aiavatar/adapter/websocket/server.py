@@ -275,6 +275,8 @@ class AIAvatarWebSocketServer(Adapter):
                 channel=request.channel,
                 metadata=request.metadata
             )):
+                if r.type == "start":
+                    self.sts.vad.set_session_data(request.session_id, "context_id", r.context_id)
                 await self.sts.handle_response(r)
 
         elif request.type == "data":
