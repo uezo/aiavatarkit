@@ -13,7 +13,7 @@ class ContextManager(ABC):
         self._on_merge_context: Optional[Callable[[str, str, "ContextManager"], Awaitable[None]]] = None
 
     @abstractmethod
-    async def get_histories(self, context_id: Union[str, List[str]], limit: int = 100) -> List[Dict]:
+    async def get_histories(self, context_id: Union[str, List[str]], limit: int = 100, include_timestamp: bool = False) -> List[Dict]:
         pass
 
     @abstractmethod
@@ -76,7 +76,7 @@ class SQLiteContextManager(ContextManager):
         finally:
             conn.close()
 
-    async def get_histories(self, context_id: Union[str, List[str]], limit: int = 100) -> List[Dict]:
+    async def get_histories(self, context_id: Union[str, List[str]], limit: int = 100, include_timestamp: bool = False) -> List[Dict]:
         conn = sqlite3.connect(self.db_path)
         try:
             if not context_id:
@@ -101,8 +101,9 @@ class SQLiteContextManager(ContextManager):
 
             params.append(limit)
 
+            columns = "serialized_data, created_at" if include_timestamp else "serialized_data"
             sql = f"""
-            SELECT serialized_data
+            SELECT {columns}
             FROM chat_histories
             WHERE {' AND '.join(where_clauses)}
             ORDER BY id DESC
@@ -115,7 +116,14 @@ class SQLiteContextManager(ContextManager):
 
             # Reverse the list so that the newest item is at the end (larger index)
             rows.reverse()
-            results = [json.loads(row[0]) for row in rows]
+            if include_timestamp:
+                results = []
+                for row in rows:
+                    data = json.loads(row[0])
+                    data["created_at"] = row[1]
+                    results.append(data)
+            else:
+                results = [json.loads(row[0]) for row in rows]
             return results
 
         except Exception as ex:

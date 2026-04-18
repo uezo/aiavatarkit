@@ -124,6 +124,29 @@ async def test_get_histories_timeout(context_manager):
 
 
 @pytest.mark.asyncio
+async def test_get_histories_with_timestamp(context_manager):
+    context_id = f"test_timestamp_{uuid4()}"
+    data_list = [
+        {"message": "Hello", "role": "user"},
+        {"message": "Hi there", "role": "assistant"}
+    ]
+    await context_manager.add_histories(context_id, data_list)
+
+    # Without timestamp
+    histories = await context_manager.get_histories(context_id)
+    assert len(histories) == 2
+    assert "created_at" not in histories[0]
+
+    # With timestamp
+    histories_ts = await context_manager.get_histories(context_id, include_timestamp=True)
+    assert len(histories_ts) == 2
+    assert "created_at" in histories_ts[0]
+    assert "created_at" in histories_ts[1]
+    assert histories_ts[0]["message"] == "Hello"
+    assert histories_ts[1]["message"] == "Hi there"
+
+
+@pytest.mark.asyncio
 async def test_merge_context(context_manager):
     ctx_from = f"ctx_from_{uuid4()}"
     ctx_to = f"ctx_to_{uuid4()}"
