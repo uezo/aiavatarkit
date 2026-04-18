@@ -106,7 +106,7 @@ class PostgreSQLContextManager(ContextManager):
             except Exception:
                 logger.exception("Error at init_db")
 
-    async def get_histories(self, context_id: Union[str, List[str]], limit: int = 100) -> List[Dict]:
+    async def get_histories(self, context_id: Union[str, List[str]], limit: int = 100, include_timestamp: bool = False) -> List[Dict]:
         pool = await self.get_pool()
         async with pool.acquire() as conn:
             try:
@@ -136,8 +136,9 @@ class PostgreSQLContextManager(ContextManager):
 
                 params.append(limit)
 
+                columns = "serialized_data, created_at" if include_timestamp else "serialized_data"
                 sql = f"""
-                SELECT serialized_data
+                SELECT {columns}
                 FROM chat_histories
                 WHERE {' AND '.join(where_clauses)}
                 ORDER BY id DESC
@@ -152,6 +153,8 @@ class PostgreSQLContextManager(ContextManager):
                     data = row["serialized_data"]
                     if isinstance(data, str):
                         data = json.loads(data)
+                    if include_timestamp:
+                        data["created_at"] = row["created_at"].isoformat() if row["created_at"] else None
                     results.append(data)
                 return results
 
