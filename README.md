@@ -159,7 +159,7 @@ You can also access the Admin Panel at http://127.0.0.1:8000/admin.
     - [🪄 Dynamic Tool Call](#-dynamic-tool-call)
     - [🔌 MCP](#-mcp)
     - [🛠️ Built-in Tools](#️-built-in-tools)
-    - [🦞 OpenClaw](#-openclaw)
+    - [🦞 OpenClaw / Hermes](#-openclaw--hermes)
 
 - [🛡️ Guardrail](#%EF%B8%8F-guardrail)
 
@@ -186,6 +186,7 @@ You can also access the Admin Panel at http://127.0.0.1:8000/admin.
     - [📥 Invoke Queue](#-invoke-queue)
     - [🧺 Shared Context](#-shared-context)
     - [🔗 Channel Session Manager](#-channel-session-manager)
+    - [📡 Channel-aware Processing](#-channel-aware-processing)
     - [🔈 Audio Device](#-audio-device)
     - [🐆 Quick Response](#-quick-response)
     - [🎭 Custom Behavior](#-custom-behavior)
@@ -568,6 +569,26 @@ def aws_polly_request_maker(text, style_info=None, language=None):
 tts = create_instant_synthesizer(
     request_maker=aws_polly_request_maker,
     response_parser=convert_pcm_to_wave,
+)
+
+# COEIROINK
+tts = create_instant_synthesizer(
+    method="POST",
+    url="http://127.0.0.1:50032/v1/synthesis",
+    headers={"Content-Type": "application/json"},
+    json={
+        "speakerUuid": "3c37646f-3881-5374-2a83-149267990abc",  # Tsukuyomi-chan
+        "styleId": 0,
+        "text": "{text}",
+        "volumeScale": 1.0,
+        "pitchScale": 0.0,
+        "intonationScale": 1.0,
+        "prePhonemeLength": 0.0,
+        "postPhonemeLength": 0.0,
+        "outputSamplingRate": 16000,
+        "speedScale": 1.0,
+    },
+    cache_dir="ttscache/coeiroink/tsukuyomi-chan",
 )
 ```
 
@@ -2592,19 +2613,45 @@ llm.add_tool(selfie_tool)
 ```
 
 
-### 🦞 OpenClaw
+### 🦞 OpenClaw / Hermes
 
-`OpenClawTool` integrates [OpenClaw](https://openclaw.ai), a versatile AI agent, as a tool for your avatar. When the LLM determines that the user's request requires autonomous task execution (web search, data analysis, code execution, etc.), it delegates the task to OpenClaw.
+`OpenClawTool` integrates [OpenClaw](https://openclaw.ai) or [Hermes](https://github.com/nousresearch/hermes-agent), versatile AI agents, as a tool for your avatar. When the LLM determines that the user's request requires autonomous task execution (web search, data analysis, code execution, etc.), it delegates the task to the agent.
 
 ```python
 from aiavatar.sts.llm.tools.openclaw_tool import OpenClawTool
+
+# OpenClaw
 openclaw_tool = OpenClawTool(
     openclaw_api_key=OPENCLAW_API_KEY,
     openclaw_base_url=OPENCLAW_BASE_URL,
-    openclaw_session_key="agent:main:main",
+    openclaw_session_key="agent:main:main",  # Set if you want to use a fixed session
     debug=True
 )
+
+# Hermes
+openclaw_tool = OpenClawTool(
+    openclaw_api_key=HERMES_API_KEY,
+    openclaw_base_url=HERMES_BASE_URL,
+    openclaw_session_key_key="X-Hermes-Session-Id",
+    debug=True
+)
+
 llm.add_tool(openclaw_tool)
+```
+
+When `stream=True` is set, you can monitor the agent's intermediate steps (tool usage, code execution, etc.) via the `on_stream_chunk` handler:
+
+```python
+openclaw_tool = OpenClawTool(
+    openclaw_api_key=OPENCLAW_API_KEY,
+    openclaw_base_url=OPENCLAW_BASE_URL,
+    stream=True
+)
+
+@openclaw_tool.on_stream_chunk
+async def handle_chunk(chunk):
+    if chunk.tool:
+        print(f"[{chunk.emoji}] {chunk.tool}: {chunk.label}")
 ```
 
 When `on_completed` is registered, OpenClaw runs asynchronously in the background — the avatar immediately acknowledges the request and notifies the user when the result is ready. The approach for delivering the result depends on your adapter.
@@ -3366,6 +3413,58 @@ bridge = PostgreSQLChannelContextBridge(
     password="your_password",
     timeout=3600,
 )
+```
+
+
+### 📡 Channel-aware Processing
+
+When your AI avatar serves multiple channels (WebSocket, phone, SMS, LINE, etc.), you can make the pipeline aware of which channel each request comes from.
+
+#### Channel Tag Insertion
+
+Enable `insert_channel_tag` to automatically prepend a `<channel>` tag to the user's message before sending it to the LLM. This lets the LLM adjust its response style based on the channel.
+
+```python
+# Twilio adapter (channel defaults to "phone")
+app = AIAvatarTwilioServer(
+    channel="phone",
+    insert_channel_tag=True,
+)
+```
+
+With `insert_channel_tag=True`, the LLM receives input like:
+
+```
+<channel name='phone' />Hello, how are you?
+```
+
+You can instruct the LLM in the system prompt to behave differently per channel:
+
+```
+When <channel name='sms' />, keep responses short and text-friendly.
+When <channel name='phone' />, use natural conversational language.
+```
+
+For voice-based adapters (WebSocket, Twilio), the channel is stored in VAD session data and automatically set on each request. For text-based adapters (LINE Bot), the channel is set directly on the request.
+
+#### Skip TTS for Text Channels
+
+The Twilio adapter skips TTS for SMS by default (`skip_tts_channels=["sms"]`), since text messages don't need speech synthesis.
+
+```python
+# Default: skips TTS for SMS
+app = AIAvatarTwilioServer()
+
+# Customize which channels skip TTS
+app = AIAvatarTwilioServer(
+    skip_tts_channels=["sms", "chat"],
+)
+```
+
+In an omni-channel setup, you can also configure this on the pipeline directly:
+
+```python
+app.sts.skip_tts_channels = ["sms", "linebot"]
 ```
 
 
