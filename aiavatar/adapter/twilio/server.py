@@ -2,10 +2,12 @@ import asyncio
 import audioop
 import base64
 from datetime import datetime
+import io
 import json
 import logging
 from typing import List, Dict, Callable, Awaitable, Optional
 from uuid import uuid4
+import wave
 from fastapi import APIRouter, Request, WebSocket, Response
 from pydantic import BaseModel
 from twilio.rest import Client
@@ -518,6 +520,11 @@ class AIAvatarTwilioServer(Adapter):
             if not text:
                 return
             audio_data = await self.sts.tts.synthesize(text)
+
+        # Strip WAV header if present to get raw PCM samples
+        if len(audio_data) >= 44 and audio_data[:4] == b"RIFF" and audio_data[8:12] == b"WAVE":
+            with wave.open(io.BytesIO(audio_data), "rb") as wav_file:
+                audio_data = wav_file.readframes(wav_file.getnframes())
 
         # Convert from tts_sample_rate linear16 to 8kHz mu-law
         if self.debug:
