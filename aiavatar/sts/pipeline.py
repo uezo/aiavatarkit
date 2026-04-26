@@ -70,10 +70,16 @@ class STSPipeline:
         invoke_queue_idle_timeout: float = 10.0,
         invoke_timeout: float = 60.0,
         use_invoke_queue: bool = False,
+        insert_channel_tag: bool = False,
+        skip_tts_channels: List[str] = None,
         debug: bool = False
     ):
         self.debug = debug
         self.use_invoke_queue = use_invoke_queue
+
+        # Channel
+        self.insert_channel_tag = insert_channel_tag
+        self.skip_tts_channels = skip_tts_channels or []
 
         # Database connection pool
         if db_pool_provider:
@@ -110,6 +116,7 @@ class STSPipeline:
                 session_id=session_id,
                 user_id=self.vad.get_session_data(session_id, "user_id"),
                 context_id=self.vad.get_session_data(session_id, "context_id"),
+                channel=self.vad.get_session_data(session_id, "channel"),
                 text=text,
                 audio_data=data,
                 audio_duration=recorded_duration,
@@ -357,6 +364,11 @@ class STSPipeline:
                     logger.info(f"Recognized text from request: {recognized_text}")
             else:
                 recognized_text = ""    # Request without both text and audio (e.g. image only)
+
+            # Insert channel tag
+            if self.insert_channel_tag and request.channel and recognized_text:
+                recognized_text = f"<channel name='{request.channel}' />{recognized_text}"
+
             request.text = recognized_text
 
             if self._validate_request:
@@ -491,6 +503,9 @@ class STSPipeline:
                                 await handler(request)
                     performance.llm_time = time() - start_time
 
+                    if not llm_stream_chunk.text:
+                        continue
+
                     # Parse language
                     if match := LANGUAGE_PATTERN.search(llm_stream_chunk.text):
                         language = match.group(1) or match.group(2)
@@ -502,11 +517,14 @@ class STSPipeline:
                         request.user_id,
                     )
 
-                    audio_chunk = await self.tts.synthesize(
-                        text=llm_stream_chunk.voice_text,
-                        style_info={"styled_text": llm_stream_chunk.text, "info": parsed_info or {}},
-                        language=language
-                    )
+                    if request.channel in self.skip_tts_channels:
+                        audio_chunk = None
+                    else:
+                        audio_chunk = await self.tts.synthesize(
+                            text=llm_stream_chunk.voice_text,
+                            style_info={"styled_text": llm_stream_chunk.text, "info": parsed_info or {}},
+                            language=language
+                        )
 
                     # TTS performance
                     if audio_chunk:

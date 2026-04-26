@@ -91,6 +91,8 @@ class AIAvatarLineBotServer(Adapter):
 
         # API server auth
         api_key: str = None,
+        # Channel
+        insert_channel_tag: bool = False,
         # Debug
         debug: bool = False
     ):
@@ -117,6 +119,7 @@ class AIAvatarLineBotServer(Adapter):
             db_connection_str=db_connection_str,
             session_state_manager=session_state_manager,
             performance_recorder=performance_recorder,
+            insert_channel_tag=insert_channel_tag,
             debug=debug
         )
 
@@ -246,7 +249,9 @@ class AIAvatarLineBotServer(Adapter):
             user_id=user_id,
             context_id=context_id,
             text=text,
-            files=files
+            files=files,
+            channel="linebot",
+            metadata={}
         )
 
         if self._preprocess_request:

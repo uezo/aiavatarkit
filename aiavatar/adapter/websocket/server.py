@@ -88,6 +88,8 @@ class AIAvatarWebSocketServer(Adapter):
         send_voiced: bool = False,
         # API server auth
         api_key: str = None,
+        # Channel
+        insert_channel_tag: bool = False,
         # Debug
         debug: bool = False,
     ):
@@ -132,6 +134,7 @@ class AIAvatarWebSocketServer(Adapter):
             invoke_queue_idle_timeout=invoke_queue_idle_timeout,
             invoke_timeout=invoke_timeout,
             use_invoke_queue=use_invoke_queue,
+            insert_channel_tag=insert_channel_tag,
             debug=debug
         )
 

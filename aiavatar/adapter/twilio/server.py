@@ -132,6 +132,7 @@ class AIAvatarTwilioServer(Adapter):
         auth_token: str = None,
         phone_number: str = None,
         webhook_base_url: str = None,
+        channel: str = "phone",
 
         # SMS
         enable_sms: bool = False,
@@ -146,6 +147,10 @@ class AIAvatarTwilioServer(Adapter):
         # Max turn control
         max_turn_count: int = 0,
         max_turn_prompt_prefix: str = None,
+
+        # Channel
+        insert_channel_tag: bool = False,
+        skip_tts_channels: List[str] = ["sms"],
 
         # Debug
         debug: bool = False,
@@ -191,6 +196,8 @@ class AIAvatarTwilioServer(Adapter):
             invoke_queue_idle_timeout=invoke_queue_idle_timeout,
             invoke_timeout=invoke_timeout,
             use_invoke_queue=use_invoke_queue,
+            insert_channel_tag=insert_channel_tag,
+            skip_tts_channels=skip_tts_channels,
             debug=debug
         )
 
@@ -206,6 +213,9 @@ class AIAvatarTwilioServer(Adapter):
 
         # Audio
         self.tts_sample_rate = tts_sample_rate
+
+        # Channel
+        self.channel = channel
 
         # Twilio
         self.phone_number = phone_number
@@ -365,6 +375,7 @@ class AIAvatarTwilioServer(Adapter):
             user_id = session_data.caller
 
             self.sts.vad.set_session_data(session_data.call_sid, "user_id", user_id, True)
+            self.sts.vad.set_session_data(session_data.call_sid, "channel", self.channel)
 
             logger.info(f"WebSocket connected for stream_sid: {stream_sid} / call_sid: {call_sid} / user_id: {user_id}")
 
