@@ -56,7 +56,6 @@ class STSPipeline:
         merge_request_prefix: str = "$Previous user's request and your response have been canceled. Please respond again to the following request:\n\n",
         # Japanese version
         # merge_request_prefix: str = "$直前のユーザーの要求とあなたの応答はキャンセルされました。以下の要求に対して、あらためて応答しなおしてください:\n\n"
-        min_request_text_length: int = 0,
         timestamp_interval_seconds: float = 0.0,
         timestamp_prefix: str = "$Current date and time: ",
         timestamp_timezone: str = "UTC",
@@ -484,6 +483,10 @@ class STSPipeline:
                             logger.info(f"Break llm_stream for new transaction: {active_txn} {request.text} (current: {transaction_id})")
                         break
 
+                    # LLM error
+                    if llm_stream_chunk.error_info:
+                        raise Exception(f"LLM error: {llm_stream_chunk.error_info}")
+
                     # LLM performance
                     if performance.llm_first_chunk_time == 0:
                         performance.llm_first_chunk_time = time() - start_time
@@ -502,9 +505,6 @@ class STSPipeline:
                             for handler in self._on_before_tts_handlers:
                                 await handler(request)
                     performance.llm_time = time() - start_time
-
-                    if not llm_stream_chunk.text:
-                        continue
 
                     # Parse language
                     if match := LANGUAGE_PATTERN.search(llm_stream_chunk.text):
