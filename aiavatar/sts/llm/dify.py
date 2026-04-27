@@ -93,7 +93,7 @@ class DifyService(LLMService):
         await self.context_manager.add_histories(context_id, [{}], "dify")
 
 
-    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
+    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None, session_id: str = None, channel: str = None) -> AsyncGenerator[LLMResponse, None]:
         headers = {
             "Authorization": f"Bearer {self.api_key}"
         }

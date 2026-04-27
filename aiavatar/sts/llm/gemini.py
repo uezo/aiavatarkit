@@ -225,7 +225,7 @@ class GeminiService(LLMService):
 
         return tools
 
-    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
+    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None, session_id: str = None, channel: str = None) -> AsyncGenerator[LLMResponse, None]:
         if self.thinking_level:
             thinking_config = types.ThinkingConfig(
                 thinking_level=self.thinking_level
@@ -346,7 +346,7 @@ class GeminiService(LLMService):
                         tool_names = [t["functionDeclarations"][0]["name"] for t in filtered_tools]
                         logger.info(f"Execute tool: {tc.name} / tools: {tool_names}")
 
-                    async for tr in self.execute_tool(tc.name, tc.arguments, {"context_id": context_id, "user_id": user_id}):
+                    async for tr in self.execute_tool(tc.name, tc.arguments, {"context_id": context_id, "user_id": user_id, "session_id": session_id, "channel": channel}):
                         tc.result = tr
                         if tr.text:
                             yield LLMResponse(context_id=context_id, text=tr.text)
@@ -379,6 +379,6 @@ class GeminiService(LLMService):
             if not has_direct_response and (len(messages) > messages_length or try_dynamic_tools):
                 # Generate human-friendly message that explains tool result
                 async for llm_response in self.get_llm_stream_response(
-                    context_id, user_id, messages, system_prompt_params=system_prompt_params, tools=filtered_tools
+                    context_id, user_id, messages, system_prompt_params=system_prompt_params, tools=filtered_tools, session_id=session_id, channel=channel
                 ):
                     yield llm_response
