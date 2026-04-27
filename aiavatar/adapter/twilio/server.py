@@ -57,15 +57,20 @@ class TwilioSMSMessage:
 
 
 class MakeCallRequest(BaseModel):
-    to: str
+    to: Optional[str] = None
+    user_id: Optional[str] = None
+    text: Optional[str] = None
     call_reason: Optional[str] = None
+
 
 class MakeCallResponse(BaseModel):
     call_sid: str
 
+
 class SendSMSRequest(BaseModel):
     to: str
     body: str
+
 
 class SendSMSResponse(BaseModel):
     message_sid: str
@@ -212,6 +217,7 @@ class AIAvatarTwilioServer(Adapter):
         self._on_disconnect: Callable[[TwilioSessionData], Awaitable[None]] = None
         self._on_dtmf: Callable[[str, str], Awaitable[None]] = None
         self._on_sms_received: Callable[[TwilioSMSMessage], Awaitable[None]] = None
+        self._resolve_phone_number: Callable[[str], Awaitable[Optional[str]]] = None
 
         # Audio
         self.tts_sample_rate = tts_sample_rate
@@ -354,6 +360,11 @@ class AIAvatarTwilioServer(Adapter):
         self._on_sms_received = func
         return func
 
+    def resolve_phone_number(self, func: Callable[[str], Awaitable[Optional[str]]]):
+        """Register a callback to resolve user_id to phone number. func(user_id) -> phone_number"""
+        self._resolve_phone_number = func
+        return func
+
     def get_session_by_user_id(self, user_id: str) -> Optional[TwilioSessionData]:
         for session_id, session_data in reversed(self.sessions.items()):
             if self.sts.vad.get_session_data(session_id, "user_id") == user_id:
@@ -392,6 +403,18 @@ class AIAvatarTwilioServer(Adapter):
 
             if self._on_connect:
                 asyncio.create_task(self._on_connect(request, session_data))
+
+            # Auto-invoke pipeline for outbound calls with text
+            outbound_text = session_data.data.get("text")
+            if outbound_text:
+                sts_request = STSRequest(
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    context_id=request.context_id,
+                    text=outbound_text,
+                    channel=self.channel,
+                )
+                asyncio.create_task(self.invoke(sts_request))
 
         elif event_type == "media":
             if not session_data or session_data.muted:
@@ -569,8 +592,22 @@ class AIAvatarTwilioServer(Adapter):
                 "streamSid": session_data.stream_sid,
             })
 
-    # Outbound call
-    def make_call(self, to: str, from_: str = None, call_reason: str = None) -> str:
+    # Invoke pipeline
+    async def invoke(self, request: STSRequest):
+        try:
+            async for response in self.sts.invoke(request):
+                await self.sts.handle_response(response)
+                if response.context_id:
+                    self.sts.vad.set_session_data(request.session_id, "context_id", response.context_id)
+        except Exception as ex:
+            logger.exception(f"Error invoking pipeline: {ex}")
+
+    async def make_call(self, to: str = None, from_: str = None, user_id: str = None, text: str = None, call_reason: str = None) -> str:
+        # Resolve and validation
+        if not to and user_id and self._resolve_phone_number:
+            to = await self._resolve_phone_number(user_id)
+        if not to:
+            raise ValueError("Could not resolve phone number. Provide 'to' directly or register a resolve_phone_number callback.")
         from_number = from_ or self.phone_number
         if not from_number:
             raise ValueError("phone_number is required for making calls. Set it in the constructor or pass from_ parameter.")
@@ -578,9 +615,23 @@ class AIAvatarTwilioServer(Adapter):
             raise ValueError("twilio_client is not configured. Set account_sid and auth_token in the constructor.")
         if not self.webhook_base_url:
             raise ValueError("webhook_base_url is required for making calls. Set it in the constructor or call get_router first.")
-        call = self.twilio_client.calls.create(to=to, from_=from_number, url=self.webhook_base_url + "/voice")
+
+        # Make call
+        call = self.twilio_client.calls.create(
+            to=to,
+            from_=from_number,
+            url=self.webhook_base_url + "/voice"
+        )
+
+        # Set outbound temporary data
+        outbound_data = {}
+        if text:
+            outbound_data["text"] = text
         if call_reason:
-            self._outbound_call_data[call.sid] = {"call_reason": call_reason}
+            outbound_data["call_reason"] = call_reason
+        if outbound_data:
+            self._outbound_call_data[call.sid] = outbound_data
+
         return call.sid
 
     # Response (SMS)
@@ -609,7 +660,7 @@ class AIAvatarTwilioServer(Adapter):
 
         # Phone
         @router.post("/voice")
-        async def incoming_call(request: Request):
+        async def voice_webhook_endpoint(request: Request):
             form_data = await request.form()
             direction = form_data.get("Direction", "inbound")
             call_sid = form_data.get("CallSid", "")
@@ -688,7 +739,12 @@ class AIAvatarTwilioServer(Adapter):
 
         @router.post("/call/make", response_model=MakeCallResponse)
         async def make_outbound_call(request_body: MakeCallRequest):
-            call_sid = self.make_call(to=request_body.to, call_reason=request_body.call_reason)
+            call_sid = await self.make_call(
+                to=request_body.to,
+                user_id=request_body.user_id,
+                text=request_body.text,
+                call_reason=request_body.call_reason
+            )
             return MakeCallResponse(call_sid=call_sid)
 
         # SMS
