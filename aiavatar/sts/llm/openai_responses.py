@@ -134,7 +134,7 @@ class OpenAIResponsesService(LLMService):
             tool_to_add.is_dynamic = is_dynamic
         self.tools[tool_to_add.name] = tool_to_add
 
-    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[Dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
+    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[Dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None, session_id: str = None, channel: str = None) -> AsyncGenerator[LLMResponse, None]:
         # Build tools list
         all_tools = [t.spec for _, t in self.tools.items()]
 
@@ -231,7 +231,7 @@ class OpenAIResponsesService(LLMService):
                 yield LLMResponse(context_id=context_id, tool_call=ToolCall(id=tc.id, name=tc.name, arguments=tc.arguments, result=None))
 
                 tool_result = None
-                async for tr in self.execute_tool(tc.name, json.loads(tc.arguments), {"context_id": context_id, "user_id": user_id}):
+                async for tr in self.execute_tool(tc.name, json.loads(tc.arguments), {"context_id": context_id, "user_id": user_id, "session_id": session_id, "channel": channel}):
                     tc.result = tr
                     if tr.text:
                         yield LLMResponse(context_id=context_id, text=tr.text)
@@ -261,6 +261,6 @@ class OpenAIResponsesService(LLMService):
             if not has_direct_response and tool_outputs:
                 # Send tool results back via recursive call with previous_response_id
                 async for llm_response in self.get_llm_stream_response(
-                    context_id, user_id, tool_outputs, system_prompt_params=system_prompt_params
+                    context_id, user_id, tool_outputs, system_prompt_params=system_prompt_params, session_id=session_id, channel=channel
                 ):
                     yield llm_response

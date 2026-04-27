@@ -469,7 +469,15 @@ class STSPipeline:
                     metadata={"is_quick_response": True, "is_first_chunk": True}
                 )
 
-            llm_stream = self.llm.chat_stream(request.context_id, request.user_id, request.text, request.files, request.system_prompt_params)
+            llm_stream = self.llm.chat_stream(
+                context_id=request.context_id,
+                user_id=request.user_id,
+                text=request.text,
+                files=request.files,
+                system_prompt_params=request.system_prompt_params,
+                session_id=request.session_id,
+                channel=request.channel
+            )
 
             # TTS
             async def synthesize_stream() -> AsyncGenerator[Tuple[bytes, LLMResponse], None]:

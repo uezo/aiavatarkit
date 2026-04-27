@@ -171,7 +171,7 @@ class ClaudeService(LLMService):
 
         return tools
 
-    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None) -> AsyncGenerator[LLMResponse, None]:
+    async def get_llm_stream_response(self, context_id: str, user_id: str, messages: List[dict], system_prompt_params: Dict[str, any] = None, tools: List[Dict[str, any]] = None, inline_llm_params: Dict[str, any] = None, session_id: str = None, channel: str = None) -> AsyncGenerator[LLMResponse, None]:
         # Select tools to use
         tool_instruction = ""
         if tools:
@@ -269,7 +269,7 @@ class ClaudeService(LLMService):
                     if not filtered_tools:
                         tool_result = {"message": "No tools found"}
                 else:
-                    async for tr in self.execute_tool(tc.name, arguments_json, {"context_id": context_id, "user_id": user_id}):
+                    async for tr in self.execute_tool(tc.name, arguments_json, {"context_id": context_id, "user_id": user_id, "session_id": session_id, "channel": channel}):
                         tc.result = tr
                         if tr.text:
                             yield LLMResponse(context_id=context_id, text=tr.text)
@@ -319,6 +319,6 @@ class ClaudeService(LLMService):
             if not has_direct_response and (len(messages) > messages_length or try_dynamic_tools):
                 # Generate human-friendly message that explains tool result
                 async for llm_response in self.get_llm_stream_response(
-                    context_id, user_id, messages, system_prompt_params=system_prompt_params, tools=filtered_tools
+                    context_id, user_id, messages, system_prompt_params=system_prompt_params, tools=filtered_tools, session_id=session_id, channel=channel
                 ):
                     yield llm_response
