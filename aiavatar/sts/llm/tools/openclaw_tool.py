@@ -1,5 +1,6 @@
 import logging
-from typing import Callable
+from typing import Callable, Dict, List
+from uuid import uuid4
 import openai
 from .. import Tool
 
@@ -33,6 +34,7 @@ class OpenClawTool(Tool):
         self.stream = stream
         self.debug = debug
         self._on_stream_chunk: Callable = None
+        self._running_tasks: Dict[str, dict] = {}
 
         super().__init__(
             name or "send_query_to_openclaw",
@@ -60,7 +62,67 @@ class OpenClawTool(Tool):
         self._on_stream_chunk = func
         return func
 
-    async def _call_openclaw_api(self, query: str, context_id: str) -> str:
+    # Running tasks management
+
+    def add_running_task(self, request: str, metadata: dict, progress: str = None) -> str:
+        task_id = str(uuid4())
+        self._running_tasks[task_id] = {
+            "context_id": metadata.get("context_id"),
+            "user_id": metadata.get("user_id"),
+            "session_id": metadata.get("session_id"),
+            "channel": metadata.get("channel"),
+            "request": request,
+            "progress": progress or "",
+        }
+        return task_id
+
+    def get_running_tasks(self, context_id: str = None, user_id: str = None) -> List[dict]:
+        return [
+            {"request": t["request"], "progress": t["progress"]}
+            for t in self._running_tasks.values()
+            if (context_id and t["context_id"] == context_id)
+            or (user_id and t["user_id"] == user_id)
+        ]
+
+    def remove_running_task(self, task_id: str):
+        self._running_tasks.pop(task_id, None)
+
+    def add_progress(self, task_id: str, progress: str):
+        if task_id in self._running_tasks:
+            self._running_tasks[task_id]["progress"] += progress
+            if self.debug:
+                logger.info(f"OpenClaw progress: {progress}")
+
+    def create_check_tool(self, name: str = "check_running_openclaw_tasks", description: str = None) -> Tool:
+        openclaw_tool = self
+
+        async def check(metadata: dict = None):
+            tasks = openclaw_tool.get_running_tasks(
+                context_id=metadata.get("context_id"),
+                user_id=metadata.get("user_id"),
+            )
+            if tasks:
+                return {"running_tasks": tasks}
+            else:
+                return {"running_tasks": [], "message": "No running tasks."}
+
+        return Tool(
+            name=name,
+            spec={
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description or "Check the progress of running background tasks.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                    },
+                }
+            },
+            func=check,
+        )
+
+    async def _call_openclaw_api(self, query: str, context_id: str, task_id: str = None) -> str:
         if self.debug:
             logger.info(f"Request to OpenClaw: {query}")
 
@@ -75,6 +137,17 @@ class OpenClawTool(Tool):
             )
             chunks = []
             async for chunk in stream:
+                if task_id and hasattr(chunk, "tool"):
+                    progress_line = ""
+                    if tool := chunk.tool:
+                        emoji = chunk.emoji or ""
+                        progress_line = f"- {emoji} {tool}"
+                        if label := chunk.label:
+                            progress_line += f": {label}"
+                        progress_line += "\n"
+                    if progress_line:
+                        self.add_progress(task_id, progress_line)
+
                 if self._on_stream_chunk:
                     await self._on_stream_chunk(chunk)
                 delta = chunk.choices[0].delta if chunk.choices else None
@@ -97,10 +170,13 @@ class OpenClawTool(Tool):
         return answer
 
     async def invoke_openclaw(self, query: str, metadata: dict = None):
+        context_id = metadata.get("context_id", "")
+        task_id = self.add_running_task(request=query, metadata=metadata, progress="Start processing...\n")
         try:
-            context_id = metadata["context_id"]
-            answer = await self._call_openclaw_api(query, context_id)
+            answer = await self._call_openclaw_api(query, context_id, task_id)
             return {"answer": answer}
         except Exception:
             logger.exception("Error at invoke_openclaw")
             return {"answer": "Error"}
+        finally:
+            self.remove_running_task(task_id)
