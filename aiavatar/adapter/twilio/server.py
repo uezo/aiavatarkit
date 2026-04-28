@@ -387,9 +387,6 @@ class AIAvatarTwilioServer(Adapter):
 
             user_id = session_data.caller
 
-            self.sts.vad.set_session_data(session_data.call_sid, "user_id", user_id, True)
-            self.sts.vad.set_session_data(session_data.call_sid, "channel", self.channel)
-
             logger.info(f"WebSocket connected for stream_sid: {stream_sid} / call_sid: {call_sid} / user_id: {user_id}")
 
             # Callback for session start (base class)
@@ -400,6 +397,9 @@ class AIAvatarTwilioServer(Adapter):
             )
             for on_session_start in self._on_session_start_handlers:
                 await on_session_start(request, session_data)
+
+            self.sts.vad.set_session_data(session_data.call_sid, "user_id", request.user_id, True)
+            self.sts.vad.set_session_data(session_data.call_sid, "channel", self.channel)
 
             if self._on_connect:
                 asyncio.create_task(self._on_connect(request, session_data))
