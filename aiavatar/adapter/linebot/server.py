@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+import base64
+from datetime import datetime
 import logging
 from pathlib import Path
 from typing import Dict, Tuple, Optional, Awaitable, Callable
@@ -247,7 +248,12 @@ class AIAvatarLineBotServer(Adapter):
         files = None
         if image_bytes:
             image_id = await self.save_image(user_id=user_id, image_bytes=image_bytes)
-            files = [{"url": f"{self.image_download_url_base}/image/{image_id}"}]
+            if not self.image_download_url_base:
+                # Use data URL instead of download URL
+                image_url = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('utf-8')}"
+            else:
+                image_url = f"{self.image_download_url_base}/image/{image_id}"
+            files = [{"url": image_url}]
 
         request = STSRequest(
             session_id=str(uuid4()),
