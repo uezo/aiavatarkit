@@ -7,14 +7,33 @@ from .. import Tool
 logger = logging.getLogger(__name__)
 
 
+class OpenClawConfig:
+    def __init__(
+        self,
+        *,
+        openclaw_api_key: str = None,
+        openclaw_base_url: str = None,
+        openclaw_session_key: str = None,
+        openclaw_session_key_key: str = None,
+        openclaw_model: str = None
+    ):
+        self.openclaw_api_key = openclaw_api_key
+        self.openclaw_base_url = openclaw_base_url
+        self.openclaw_session_key = openclaw_session_key
+        self.openclaw_session_key_key = openclaw_session_key_key
+        self.openclaw_model = openclaw_model
+
+
 class OpenClawTool(Tool):
     def __init__(
         self,
         *,
-        openclaw_api_key: str,
+        openclaw_api_key: str = None,
         openclaw_base_url: str = None,
         openclaw_session_key: str = None,
         openclaw_session_key_key: str = "x-openclaw-session-key",   # set "X-Hermes-Session-Id" for Hermes
+        openclaw_model: str = "openclaw",   # set "hermes-agent" for Hermes
+        openclaw_configs: Dict[str, OpenClawConfig] = None,
         stream: bool = False,
         immediate_message: str = "Accepted. You will be notified when the response is ready.",
         timeout: int = 30000,
@@ -24,13 +43,13 @@ class OpenClawTool(Tool):
         is_dynamic=False,
         debug: bool = False,
     ):
-        self.openai_client = openai.AsyncClient(
-            api_key=openclaw_api_key,
-            base_url=openclaw_base_url,
-            timeout=timeout
-        )
+        self.openclaw_api_key = openclaw_api_key
+        self.openclaw_base_url = openclaw_base_url
         self.openclaw_session_key = openclaw_session_key
         self.openclaw_session_key_key = openclaw_session_key_key
+        self.openclaw_model = openclaw_model
+        self.openclaw_configs = openclaw_configs or {}
+        self.timeout = timeout
         self.stream = stream
         self.debug = debug
         self._on_stream_chunk: Callable = None
@@ -122,48 +141,76 @@ class OpenClawTool(Tool):
             func=check,
         )
 
-    async def _call_openclaw_api(self, query: str, context_id: str, task_id: str = None) -> str:
+    def get_openclaw_config(self, user_id: str) -> OpenClawConfig:
+        config = OpenClawConfig()
+        user_config = self.openclaw_configs.get(user_id) or config
+        config.openclaw_api_key = user_config.openclaw_api_key or self.openclaw_api_key
+        config.openclaw_base_url = user_config.openclaw_base_url or self.openclaw_base_url
+        config.openclaw_session_key = user_config.openclaw_session_key or self.openclaw_session_key
+        config.openclaw_session_key_key = user_config.openclaw_session_key_key or self.openclaw_session_key_key
+        config.openclaw_model = user_config.openclaw_model or self.openclaw_model
+        return config
+
+    def update_openclaw_config(self, user_id: str, config: OpenClawConfig):
+        self.delete_openclaw_config(user_id)
+        self.openclaw_configs[user_id] = config
+
+    def delete_openclaw_config(self, user_id: str):
+        if user_id in self.openclaw_configs:
+            del self.openclaw_configs[user_id]
+
+    async def _call_openclaw_api(self, query: str, context_id: str, user_id: str, task_id: str) -> str:
         if self.debug:
-            logger.info(f"Request to OpenClaw: {query}")
+            logger.info(f"Request to OpenClaw (from {user_id}): {query}")
 
-        if self.stream:
-            stream = await self.openai_client.chat.completions.create(
-                messages=[{"role": "user", "content": query}],
-                model="hermes-agent",
-                stream=True,
-                extra_headers={
-                    self.openclaw_session_key_key: context_id or self.openclaw_session_key
-                }
-            )
-            chunks = []
-            async for chunk in stream:
-                if task_id and hasattr(chunk, "tool"):
-                    progress_line = ""
-                    if tool := chunk.tool:
-                        emoji = chunk.emoji or ""
-                        progress_line = f"- {emoji} {tool}"
-                        if label := chunk.label:
-                            progress_line += f": {label}"
-                        progress_line += "\n"
-                    if progress_line:
-                        self.add_progress(task_id, progress_line)
+        config = self.get_openclaw_config(user_id)
+        client = openai.AsyncClient(
+            api_key=config.openclaw_api_key,
+            base_url=config.openclaw_base_url,
+            timeout=self.timeout
+        )
 
-                if self._on_stream_chunk:
-                    await self._on_stream_chunk(chunk)
-                delta = chunk.choices[0].delta if chunk.choices else None
-                if delta and delta.content:
-                    chunks.append(delta.content)
-            answer = "".join(chunks)
+        try:
+            if self.stream:
+                stream = await client.chat.completions.create(
+                    messages=[{"role": "user", "content": query}],
+                    model=config.openclaw_model,
+                    stream=True,
+                    extra_headers={
+                        config.openclaw_session_key_key: context_id or config.openclaw_session_key
+                    }
+                )
+                chunks = []
+                async for chunk in stream:
+                    if task_id and hasattr(chunk, "tool"):
+                        progress_line = ""
+                        if tool := chunk.tool:
+                            emoji = chunk.emoji or ""
+                            progress_line = f"- {emoji} {tool}"
+                            if label := chunk.label:
+                                progress_line += f": {label}"
+                            progress_line += "\n"
+                        if progress_line:
+                            self.add_progress(task_id, progress_line)
 
-        else:
-            resp = await self.openai_client.chat.completions.create(
-                messages=[{"role": "user", "content": query}],
-                model="openclaw",
-                extra_headers={
-                    self.openclaw_session_key_key: context_id or self.openclaw_session_key
-                }
-            )
-            answer = resp.choices[0].message.content
+                    if self._on_stream_chunk:
+                        await self._on_stream_chunk(task_id, chunk)
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    if delta and delta.content:
+                        chunks.append(delta.content)
+                answer = "".join(chunks)
+
+            else:
+                resp = await client.chat.completions.create(
+                    messages=[{"role": "user", "content": query}],
+                    model=config.openclaw_model,
+                    extra_headers={
+                        config.openclaw_session_key_key: context_id or config.openclaw_session_key
+                    }
+                )
+                answer = resp.choices[0].message.content
+        finally:
+            await client.close()
 
         if self.debug:
             logger.info(f"Response from OpenClaw: {answer}")
@@ -171,9 +218,16 @@ class OpenClawTool(Tool):
 
     async def invoke_openclaw(self, query: str, metadata: dict = None):
         context_id = metadata.get("context_id", "")
+        user_id = metadata.get("user_id", "")
+
+        config = self.get_openclaw_config(user_id)
+        if not config.openclaw_base_url:
+            logger.warning(f"OpenClaw base_url is not configured for user: {user_id}")
+            return {"answer": "OpenClaw is not configured for this user. Please set up your OpenClaw connection first."}
+
         task_id = self.add_running_task(request=query, metadata=metadata, progress="Start processing...\n")
         try:
-            answer = await self._call_openclaw_api(query, context_id, task_id)
+            answer = await self._call_openclaw_api(query, context_id, user_id, task_id)
             return {"answer": answer}
         except Exception:
             logger.exception("Error at invoke_openclaw")
