@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import numpy as np
+import os
 import struct
 import threading
 import torch
@@ -137,13 +138,21 @@ class SileroSpeechDetector(SpeechDetector):
             for i in range(self.model_pool_size):
                 if model_path:
                     model = torch.jit.load(model_path)
-                    # For pre-loaded models, we need to get utils separately
-                    _, utils = torch.hub.load(
-                        repo_or_dir="snakers4/silero-vad",
-                        model="silero_vad",
-                        force_reload=False,
-                        onnx=False
-                    )
+                    # Load utils from local hub cache to avoid network access and "Using cache" log
+                    hub_cache = os.path.join(torch.hub.get_dir(), "snakers4_silero-vad_master")
+                    if os.path.isdir(hub_cache):
+                        _, utils = torch.hub.load(
+                            repo_or_dir=hub_cache,
+                            model="silero_vad",
+                            source="local",
+                        )
+                    else:
+                        _, utils = torch.hub.load(
+                            repo_or_dir="snakers4/silero-vad",
+                            model="silero_vad",
+                            force_reload=False,
+                            onnx=False
+                        )
                 else:
                     # Load default Silero VAD model
                     model, utils = torch.hub.load(
