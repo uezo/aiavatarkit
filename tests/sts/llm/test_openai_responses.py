@@ -62,9 +62,9 @@ async def test_openai_responses_service_simple():
     # Check server-side context management (response_id should be stored)
     assert context_id in service.response_ids, "response_id not stored for context."
 
-    # Check context marker was saved
+    # Check context was saved locally
     histories = await service.context_manager.get_histories(context_id)
-    assert len(histories) > 0, "No context marker was saved."
+    assert len(histories) > 0, "No local context was saved."
 
     await service.openai_client.close()
 
