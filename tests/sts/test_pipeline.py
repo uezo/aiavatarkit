@@ -1131,3 +1131,103 @@ async def test_invoke_queued_multiple_sessions():
     assert session_id_2 in sts._request_queues or session_id_2 not in sts._request_queues
 
     await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_insert_channel_tag_with_text():
+    """Test that channel tag is inserted before text when insert_channel_tag=True"""
+    session_id = f"test_insert_channel_tag_with_text_{str(uuid4())}"
+
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o-mini",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        insert_channel_tag=True,
+        performance_recorder=SQLitePerformanceRecorder(),
+        debug=True
+    )
+
+    request = STSRequest(
+        session_id=session_id,
+        user_id="test_user",
+        text="Hello",
+        channel="linebot"
+    )
+
+    async for response in sts.invoke(request):
+        pass
+
+    assert request.text == "<channel name='linebot' />Hello"
+
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_insert_channel_tag_without_text():
+    """Test that channel tag is set as text when image-only request (no text)"""
+    session_id = f"test_insert_channel_tag_without_text_{str(uuid4())}"
+
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o-mini",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        insert_channel_tag=True,
+        performance_recorder=SQLitePerformanceRecorder(),
+        debug=True
+    )
+
+    request = STSRequest(
+        session_id=session_id,
+        user_id="test_user",
+        text="",
+        files=[{"url": "data:image/png;base64,iVBORw0KGgo="}],
+        channel="linebot"
+    )
+
+    async for response in sts.invoke(request):
+        pass
+
+    assert request.text == "<channel name='linebot' />"
+
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_insert_channel_tag_disabled():
+    """Test that channel tag is not inserted when insert_channel_tag=False"""
+    session_id = f"test_insert_channel_tag_disabled_{str(uuid4())}"
+
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o-mini",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        insert_channel_tag=False,
+        performance_recorder=SQLitePerformanceRecorder(),
+        debug=True
+    )
+
+    request = STSRequest(
+        session_id=session_id,
+        user_id="test_user",
+        text="Hello",
+        channel="linebot"
+    )
+
+    async for response in sts.invoke(request):
+        pass
+
+    assert request.text == "Hello"
+
+    await sts.shutdown()
