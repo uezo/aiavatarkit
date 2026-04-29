@@ -365,10 +365,11 @@ class STSPipeline:
                 recognized_text = ""    # Request without both text and audio (e.g. image only)
 
             # Insert channel tag
-            if self.insert_channel_tag and request.channel and recognized_text:
-                recognized_text = f"<channel name='{request.channel}' />{recognized_text}"
-
-            request.text = recognized_text
+            if self.insert_channel_tag and request.channel:
+                channel_tag = f"<channel name='{request.channel}' />"
+                request.text = f"{channel_tag}{recognized_text}" if recognized_text else channel_tag
+            else:
+                request.text = recognized_text
 
             if self._validate_request:
                 if reason := await self._validate_request(request):
