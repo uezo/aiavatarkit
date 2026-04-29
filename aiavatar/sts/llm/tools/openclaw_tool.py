@@ -229,8 +229,8 @@ class OpenClawTool(Tool):
         try:
             answer = await self._call_openclaw_api(query, context_id, user_id, task_id)
             return {"answer": answer}
-        except Exception:
+        except Exception as ex:
             logger.exception("Error at invoke_openclaw")
-            return {"answer": "Error"}
+            return {"answer": f"Error: {ex}"}
         finally:
             self.remove_running_task(task_id)
