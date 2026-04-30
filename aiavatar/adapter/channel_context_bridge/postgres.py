@@ -264,3 +264,15 @@ class PostgreSQLChannelContextBridge(ChannelContextBridge):
             except Exception as ex:
                 logger.error(f"Error at upsert_context: {ex}")
                 raise
+
+    async def delete_context(self, user_id: str):
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            try:
+                await conn.execute(
+                    "DELETE FROM user_contexts WHERE user_id = $1",
+                    user_id
+                )
+            except Exception as ex:
+                logger.error(f"Error at delete_context: {ex}")
+                raise

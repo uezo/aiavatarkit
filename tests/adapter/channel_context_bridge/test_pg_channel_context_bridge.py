@@ -137,6 +137,26 @@ async def test_upsert_context_updates(bridge, unique_id):
     assert ctx.context_id == "ctx_new"
 
 
+@pytest.mark.asyncio
+async def test_delete_context(bridge, unique_id):
+    await bridge.upsert_context(UserContext(
+        user_id=unique_id, context_id="ctx_to_delete"
+    ))
+    ctx = await bridge.get_context(unique_id)
+    assert ctx is not None
+
+    await bridge.delete_context(unique_id)
+
+    ctx = await bridge.get_context(unique_id)
+    assert ctx is None
+
+
+@pytest.mark.asyncio
+async def test_delete_context_nonexistent(bridge, unique_id):
+    """Deleting a non-existent context should not raise."""
+    await bridge.delete_context(unique_id)
+
+
 # --- link_channel_user tests ---
 
 @pytest.mark.asyncio
