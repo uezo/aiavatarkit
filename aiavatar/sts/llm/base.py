@@ -87,6 +87,7 @@ class Tool:
         self.immediate_message = immediate_message
         self.background_timeout = background_timeout
         self._response_formatter: Callable = None
+        self._response_formatter_continue_chain: bool = False
 
     def on_completed(self, func: Callable):
         self._on_completed = func
@@ -96,9 +97,19 @@ class Tool:
         self._on_submitted = func
         return func
 
-    def response_formatter(self, func: Callable):
-        self._response_formatter = func
-        return func
+    def response_formatter(self, func_or_none=None, *, continue_chain: bool = False):
+        if callable(func_or_none):
+            # Called as @tool.response_formatter (no parentheses)
+            self._response_formatter = func_or_none
+            self._response_formatter_continue_chain = False
+            return func_or_none
+        else:
+            # Called as @tool.response_formatter(continue_chain=True)
+            def decorator(func: Callable):
+                self._response_formatter = func
+                self._response_formatter_continue_chain = continue_chain
+                return func
+            return decorator
 
     def parse_spec(self, spec: Dict[str, Any]) -> Tuple[str, str, Dict[str, Any]]:
         if spec.get("type") == "function" and "function" in spec:

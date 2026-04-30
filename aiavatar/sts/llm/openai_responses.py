@@ -265,9 +265,16 @@ class OpenAIResponsesService(LLMService):
                         "output": json.dumps(tool_result),
                     })
 
-            if not has_direct_response and tool_outputs:
+            if tool_outputs:
                 # Send tool results back via recursive call with previous_response_id
+                suppress_text = has_direct_response
                 async for llm_response in self.get_llm_stream_response(
                     context_id, user_id, tool_outputs, system_prompt_params=system_prompt_params, session_id=session_id, channel=channel
                 ):
-                    yield llm_response
+                    if llm_response.tool_call:
+                        # Chained tool call detected: stop suppressing so the
+                        # subsequent tool's LLM response is yielded normally
+                        suppress_text = False
+                        yield llm_response
+                    elif llm_response.error_info or not suppress_text:
+                        yield llm_response

@@ -302,6 +302,72 @@ async def test_claude_service_tool_calls():
 
 
 @pytest.mark.asyncio
+async def test_claude_service_chained_tool_calls_mixed():
+    """
+    Test chained tool calls where a direct-response tool (response_formatter with
+    continue_chain=True) is called first, and its result triggers the LLM to call
+    a second tool (normal LLM response).
+    """
+    service = ClaudeService(
+        anthropic_api_key=CLAUDE_API_KEY,
+        system_prompt=(
+            "You have two tools: get_balance and get_campaign_info.\n"
+            "When the user asks about campaigns:\n"
+            "1. FIRST call get_balance\n"
+            "2. If balance >= 1000000, call get_campaign_info\n"
+            "3. Tell the user about the campaign based on get_campaign_info result\n"
+            "Always follow this exact order. Never skip steps."
+        ),
+        model=MODEL,
+        temperature=0.0
+    )
+    context_id = f"test_chained_mixed_{uuid4()}"
+
+    balance_spec = {
+        "name": "get_balance",
+        "description": "Get the user's account balance. Always call this first.",
+        "input_schema": {"type": "object", "properties": {}}
+    }
+
+    @service.tool(balance_spec)
+    async def get_balance() -> Dict[str, Any]:
+        return {"balance": 1500000, "currency": "JPY"}
+
+    @service.tools["get_balance"].response_formatter(continue_chain=True)
+    def format_balance(result, arguments):
+        return f"残高: {result['balance']:,}{result['currency']}\n"
+
+    campaign_spec = {
+        "name": "get_campaign_info",
+        "description": "Get campaign information for eligible users with balance >= 1,000,000 JPY. Call this after get_balance.",
+        "input_schema": {"type": "object", "properties": {}}
+    }
+
+    @service.tool(campaign_spec)
+    async def get_campaign_info() -> Dict[str, Any]:
+        return {"campaign_name": "Premium Gold Campaign", "bonus_rate": "5%"}
+
+    collected_text = []
+    tools_called = []
+
+    async for resp in service.chat_stream(context_id, "test_user", "キャンペーンはありますか？"):
+        if resp.error_info:
+            pytest.fail(f"Error during chained tool call: {resp.error_info}")
+        if resp.text:
+            collected_text.append(resp.text)
+        if resp.tool_call and resp.tool_call.name:
+            tools_called.append(resp.tool_call.name)
+
+    full_text = "".join(collected_text)
+
+    assert "get_balance" in tools_called, f"get_balance was not called. Called: {tools_called}"
+    assert "残高" in full_text, f"Direct response from get_balance not found: {full_text}"
+    assert "get_campaign_info" in tools_called, f"get_campaign_info was not called (chain broken). Called: {tools_called}"
+    assert "Premium Gold Campaign" in full_text or "5%" in full_text, \
+        f"LLM response about campaign not found (suppressed?): {full_text}"
+
+
+@pytest.mark.asyncio
 async def test_claude_service_tool_calls_iter():
     """
     Test ClaudeService with a registered tool that returns iteration.

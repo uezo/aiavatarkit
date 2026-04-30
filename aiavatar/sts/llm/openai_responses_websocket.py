@@ -258,6 +258,7 @@ class OpenAIResponsesWebSocketService(LLMService):
         try:
             async with self._ws_pool.connection() as ws:
                 current_input = messages
+                suppress_output = False
 
                 while True:
                     # Build response.create message
@@ -288,7 +289,8 @@ class OpenAIResponsesWebSocketService(LLMService):
                         event_type = event.get("type")
 
                         if event_type == "response.output_text.delta":
-                            yield LLMResponse(context_id=context_id, text=event.get("delta", ""))
+                            if not suppress_output:
+                                yield LLMResponse(context_id=context_id, text=event.get("delta", ""))
 
                         elif event_type == "response.output_item.added":
                             item = event.get("item", {})
@@ -324,6 +326,11 @@ class OpenAIResponsesWebSocketService(LLMService):
                     # No tool calls — done
                     if not tool_calls:
                         break
+
+                    # If suppressing output but new tool calls arrived (chained tools),
+                    # reset suppression so the next round's response is yielded normally
+                    if suppress_output:
+                        suppress_output = False
 
                     # Execute tool calls
                     await self._on_before_tool_calls(tool_calls)
@@ -362,11 +369,16 @@ class OpenAIResponsesWebSocketService(LLMService):
                                 "output": json.dumps(tool_result),
                             })
 
-                    if has_direct_response or not tool_outputs:
+                    if not tool_outputs:
                         break
 
                     # Continue on the same connection with tool outputs
                     current_input = tool_outputs
+
+                    # When using direct response, still send tool outputs to keep
+                    # API conversation history consistent, but suppress the response text
+                    if has_direct_response:
+                        suppress_output = True
 
         except websockets.ConnectionClosed as ex:
             logger.warning(f"WebSocket connection closed: {ex}")

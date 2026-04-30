@@ -212,6 +212,119 @@ async def test_openai_responses_service_tool_calls_response_formatter():
     full_text = "".join(collected_text)
     assert "Formatter: 1+1の計算結果は2です。" in full_text, f"Direct response not found in text: {full_text}"
 
+    # Verify response_ids is valid after direct response (tool output must be sent to API)
+    assert context_id in service.response_ids, "response_id should be set after response_formatter call."
+
+    # Verify conversation can continue without "No tool output found" error
+    collected_text2 = []
+    async for resp in service.chat_stream(context_id, "test_user", "ありがとう"):
+        if resp.error_info:
+            pytest.fail(f"Error after response_formatter call (response_ids corrupted): {resp.error_info}")
+        if resp.text:
+            collected_text2.append(resp.text)
+
+    assert len("".join(collected_text2)) > 0, "No response after response_formatter call."
+
+    await service.openai_client.close()
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_service_chained_tool_calls_mixed():
+    """
+    Test chained tool calls where a direct-response tool (response_formatter) is called first,
+    and its result triggers the LLM to call a second tool (normal LLM response).
+    Verifies that suppress_output resets correctly so the chained tool's LLM response is yielded.
+    This test actually calls OpenAI Responses API, so it may cost tokens.
+    """
+    service = OpenAIResponsesService(
+        openai_api_key=OPENAI_API_KEY,
+        system_prompt=(
+            "You have two tools: get_balance and get_campaign_info.\n"
+            "When the user asks about campaigns:\n"
+            "1. FIRST call get_balance\n"
+            "2. If balance >= 1000000, call get_campaign_info\n"
+            "3. Tell the user about the campaign based on get_campaign_info result\n"
+            "Always follow this exact order. Never skip steps."
+        ),
+        model=MODEL,
+        temperature=0.0
+    )
+    context_id = f"test_chained_mixed_{uuid4()}"
+
+    # Tool 1: get_balance (with response_formatter = direct response)
+    balance_spec = {
+        "type": "function",
+        "function": {
+            "name": "get_balance",
+            "description": "Get the user's account balance. Always call this first.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            }
+        }
+    }
+
+    @service.tool(balance_spec)
+    async def get_balance() -> Dict[str, Any]:
+        return {"balance": 1500000, "currency": "JPY"}
+
+    @service.tools["get_balance"].response_formatter(continue_chain=True)
+    def format_balance(result, arguments):
+        return f"残高: {result['balance']:,}{result['currency']}\n"
+
+    # Tool 2: get_campaign_info (normal LLM response, no response_formatter)
+    campaign_spec = {
+        "type": "function",
+        "function": {
+            "name": "get_campaign_info",
+            "description": "Get campaign information for eligible users with balance >= 1,000,000 JPY. Call this after get_balance.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            }
+        }
+    }
+
+    @service.tool(campaign_spec)
+    async def get_campaign_info() -> Dict[str, Any]:
+        return {"campaign_name": "Premium Gold Campaign", "bonus_rate": "5%"}
+
+    collected_text = []
+    tools_called = []
+
+    async for resp in service.chat_stream(context_id, "test_user", "キャンペーンはありますか？"):
+        if resp.error_info:
+            pytest.fail(f"Error during chained tool call: {resp.error_info}")
+        if resp.text:
+            collected_text.append(resp.text)
+        if resp.tool_call and resp.tool_call.name:
+            tools_called.append(resp.tool_call.name)
+
+    full_text = "".join(collected_text)
+
+    # Verify get_balance was called (direct response tool)
+    assert "get_balance" in tools_called, f"get_balance was not called. Called: {tools_called}"
+
+    # Verify the direct response text from response_formatter appeared
+    assert "残高" in full_text, f"Direct response from get_balance not found in text: {full_text}"
+
+    # Verify get_campaign_info was called (chained tool, normal LLM response)
+    assert "get_campaign_info" in tools_called, f"get_campaign_info was not called (chain broken). Called: {tools_called}"
+
+    # Verify the LLM generated a response using the campaign info (not suppressed)
+    assert "Premium Gold Campaign" in full_text or "5%" in full_text, \
+        f"LLM response about campaign not found (suppressed?): {full_text}"
+
+    # Verify conversation can continue
+    collected_text2 = []
+    async for resp in service.chat_stream(context_id, "test_user", "ありがとう"):
+        if resp.error_info:
+            pytest.fail(f"Error after chained tool calls: {resp.error_info}")
+        if resp.text:
+            collected_text2.append(resp.text)
+
+    assert len("".join(collected_text2)) > 0, "No response after chained tool calls."
+
     await service.openai_client.close()
 
 
