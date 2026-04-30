@@ -164,6 +164,26 @@ async def test_get_context_timeout(bridge):
 
 
 @pytest.mark.asyncio
+async def test_delete_context(bridge):
+    await bridge.upsert_context(UserContext(
+        user_id="user_del", context_id="ctx_to_delete"
+    ))
+    ctx = await bridge.get_context("user_del")
+    assert ctx is not None
+
+    await bridge.delete_context("user_del")
+
+    ctx = await bridge.get_context("user_del")
+    assert ctx is None
+
+
+@pytest.mark.asyncio
+async def test_delete_context_nonexistent(bridge):
+    """Deleting a non-existent context should not raise."""
+    await bridge.delete_context("nonexistent_user")
+
+
+@pytest.mark.asyncio
 async def test_context_independent_of_channel_user(bridge):
     """Context is per user_id, not per channel."""
     await bridge.upsert_channel_user(ChannelUser(

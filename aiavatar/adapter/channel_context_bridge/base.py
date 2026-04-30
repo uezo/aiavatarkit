@@ -51,6 +51,10 @@ class ChannelContextBridge(ABC):
     async def upsert_context(self, context: UserContext):
         pass
 
+    @abstractmethod
+    async def delete_context(self, user_id: str):
+        pass
+
     # Composite operations
     async def link_channel_user(self, channel_id: str, channel_user_id: str, user_id: str) -> Optional[UserContext]:
         """Link a channel user to an app user and return their context."""
@@ -288,6 +292,20 @@ class SQLiteChannelContextBridge(ChannelContextBridge):
                 )
         except:
             logger.exception("Error at upsert_context.")
+            raise
+        finally:
+            conn.close()
+
+    async def delete_context(self, user_id: str):
+        conn = sqlite3.connect(self.db_path)
+        try:
+            with conn:
+                conn.execute(
+                    "DELETE FROM user_contexts WHERE user_id = ?",
+                    (user_id,)
+                )
+        except:
+            logger.exception("Error at delete_context.")
             raise
         finally:
             conn.close()
