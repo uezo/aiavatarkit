@@ -61,6 +61,7 @@ class MakeCallRequest(BaseModel):
     user_id: Optional[str] = None
     text: Optional[str] = None
     call_reason: Optional[str] = None
+    block_barge_in: bool = False
 
 
 class MakeCallResponse(BaseModel):
@@ -413,6 +414,7 @@ class AIAvatarTwilioServer(Adapter):
                     context_id=request.context_id,
                     text=outbound_text,
                     channel=self.channel,
+                    block_barge_in=session_data.data.get("block_barge_in", False),
                 )
                 asyncio.create_task(self.invoke(sts_request))
 
@@ -602,7 +604,7 @@ class AIAvatarTwilioServer(Adapter):
         except Exception as ex:
             logger.exception(f"Error invoking pipeline: {ex}")
 
-    async def make_call(self, to: str = None, from_: str = None, user_id: str = None, text: str = None, call_reason: str = None) -> str:
+    async def make_call(self, to: str = None, from_: str = None, user_id: str = None, text: str = None, call_reason: str = None, block_barge_in: bool = False) -> str:
         # Resolve and validation
         if not to and user_id and self._resolve_phone_number:
             to = await self._resolve_phone_number(user_id)
@@ -629,6 +631,8 @@ class AIAvatarTwilioServer(Adapter):
             outbound_data["text"] = text
         if call_reason:
             outbound_data["call_reason"] = call_reason
+        if block_barge_in:
+            outbound_data["block_barge_in"] = True
         if outbound_data:
             self._outbound_call_data[call.sid] = outbound_data
 
@@ -743,7 +747,8 @@ class AIAvatarTwilioServer(Adapter):
                 to=request_body.to,
                 user_id=request_body.user_id,
                 text=request_body.text,
-                call_reason=request_body.call_reason
+                call_reason=request_body.call_reason,
+                block_barge_in=request_body.block_barge_in
             )
             return MakeCallResponse(call_sid=call_sid)
 
