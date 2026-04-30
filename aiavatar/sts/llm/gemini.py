@@ -332,6 +332,7 @@ class GeminiService(LLMService):
             # Execute tools
             messages_length = len(messages)
             has_direct_response = False
+            continue_chain = False
             for tc in tool_calls:
                 if self.debug:
                     logger.info(f"ToolCall: {tc.name}")
@@ -366,6 +367,8 @@ class GeminiService(LLMService):
                         direct_text = tool_obj._response_formatter(tool_result, tc.arguments)
                         yield LLMResponse(context_id=context_id, text=direct_text, structured_content=tc.result.structured_content if tc.result else None)
                         has_direct_response = True
+                        if tool_obj._response_formatter_continue_chain:
+                            continue_chain = True
 
                     messages.append(types.Content(
                         role="model",
@@ -376,9 +379,15 @@ class GeminiService(LLMService):
                         parts=[types.Part.from_function_response(name=tc.name, response=tool_result)]
                     ))
 
-            if not has_direct_response and (len(messages) > messages_length or try_dynamic_tools):
-                # Generate human-friendly message that explains tool result
-                async for llm_response in self.get_llm_stream_response(
-                    context_id, user_id, messages, system_prompt_params=system_prompt_params, tools=filtered_tools, session_id=session_id, channel=channel
-                ):
-                    yield llm_response
+            if len(messages) > messages_length or try_dynamic_tools:
+                if not has_direct_response or continue_chain:
+                    # Send tool results back to LLM for follow-up response or chained tool calls
+                    suppress_text = has_direct_response
+                    async for llm_response in self.get_llm_stream_response(
+                        context_id, user_id, messages, system_prompt_params=system_prompt_params, tools=filtered_tools, session_id=session_id, channel=channel
+                    ):
+                        if llm_response.tool_call:
+                            suppress_text = False
+                            yield llm_response
+                        elif llm_response.error_info or not suppress_text:
+                            yield llm_response
