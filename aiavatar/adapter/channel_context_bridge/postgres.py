@@ -136,10 +136,11 @@ class PostgreSQLChannelContextBridge(ChannelContextBridge):
                     )
 
                 if auto_create:
+                    user_id = self._create_user_id(channel_id, channel_user_id) if self._create_user_id else channel_user_id
                     channel_user = ChannelUser(
                         channel_id=channel_id,
                         channel_user_id=channel_user_id,
-                        user_id=channel_user_id,
+                        user_id=user_id,
                     )
                     await self.upsert_channel_user(channel_user)
                     return channel_user

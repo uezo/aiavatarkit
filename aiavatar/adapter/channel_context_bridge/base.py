@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import logging
 import json
 import sqlite3
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,23 @@ class UserContext(BaseModel):
 
 
 class ChannelContextBridge(ABC):
+    _create_user_id: Optional[Callable[[str, str], str]] = None
+
+    def create_user_id(self, func: Callable[[str, str], str]):
+        """Decorator to register a custom user_id generator for auto_create.
+
+        The function receives (channel_id, channel_user_id) and returns a user_id.
+        If not set, channel_user_id is used as user_id (default behavior).
+
+        Usage::
+
+            @bridge.create_user_id
+            def create_user_id(channel_id, channel_user_id):
+                return str(uuid4())
+        """
+        self._create_user_id = func
+        return func
+
     # Channel User operations
 
     @abstractmethod
@@ -160,10 +177,11 @@ class SQLiteChannelContextBridge(ChannelContextBridge):
                 )
 
             if auto_create:
+                user_id = self._create_user_id(channel_id, channel_user_id) if self._create_user_id else channel_user_id
                 channel_user = ChannelUser(
                     channel_id=channel_id,
                     channel_user_id=channel_user_id,
-                    user_id=channel_user_id,
+                    user_id=user_id,
                 )
                 await self.upsert_channel_user(channel_user)
                 return channel_user
