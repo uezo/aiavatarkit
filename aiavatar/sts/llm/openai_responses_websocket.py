@@ -255,6 +255,7 @@ class OpenAIResponsesWebSocketService(LLMService):
         # System prompt
         system_prompt = await self._get_system_prompt(context_id, user_id, system_prompt_params)
 
+        deferred_tool_calls = []
         try:
             async with self._ws_pool.connection() as ws:
                 current_input = messages
@@ -369,6 +370,8 @@ class OpenAIResponsesWebSocketService(LLMService):
                                 "output": json.dumps(tool_result),
                             })
 
+                    deferred_tool_calls.extend(tool_calls)
+
                     if not tool_outputs:
                         break
 
@@ -387,3 +390,7 @@ class OpenAIResponsesWebSocketService(LLMService):
         except Exception as ex:
             logger.warning(f"Error from OpenAI Responses API (WebSocket): {ex}")
             yield LLMResponse(context_id=context_id, error_info={"exception": ex, "response_json": None})
+
+        finally:
+            # Start deferred background callbacks regardless of API errors
+            self._start_deferred_callbacks(deferred_tool_calls)

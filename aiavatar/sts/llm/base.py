@@ -13,12 +13,13 @@ logger = logging.getLogger(__name__)
 
 
 class ToolCallResult:
-    def __init__(self, data: dict = None, is_final: bool = True, text: str = None, task_id: str = None, structured_content: dict = None):
+    def __init__(self, data: dict = None, is_final: bool = True, text: str = None, task_id: str = None, structured_content: dict = None, deferred_callback: callable = None):
         self.data = data or {}
         self.is_final = is_final
         self.text = text
         self.task_id = task_id
         self.structured_content = structured_content
+        self.deferred_callback = deferred_callback
 
 
 class ToolCall:
@@ -400,6 +401,21 @@ The list of tools is as follows:
         clean_text = clean_text.strip()
         return clean_text
 
+    def _start_deferred_callbacks(self, tool_calls: list):
+        """Start deferred background callbacks after tool output response completes.
+
+        This must be called after the LLM has processed tool outputs and the
+        response is fully received, to avoid race conditions where _on_completed
+        fires before the response chain (e.g. previous_response_id) is updated.
+        """
+        for tc in tool_calls:
+            if tc.result and tc.result.deferred_callback:
+                tool = self.tools.get(tc.name)
+                bg_task = asyncio.create_task(tc.result.deferred_callback())
+                if tool:
+                    tool._background_tasks.add(bg_task)
+                    bg_task.add_done_callback(tool._background_tasks.discard)
+
     async def execute_tool(self, name: str, arguments: dict, metadata: dict) -> AsyncGenerator[ToolCallResult, None]:
         tool = self.tools[name]
         if "metadata" in inspect.signature(tool.func).parameters:
@@ -436,7 +452,8 @@ The list of tools is as follows:
                         yield ToolCallResult(data=result)
                     return
 
-            # Immediate background or timed-out: register callback and return
+            # Immediate background or timed-out: defer callback to avoid race condition
+            # The caller must invoke deferred_callback after tool output response completes
             async def _wait_and_callback():
                 try:
                     result = await task
@@ -445,13 +462,10 @@ The list of tools is as follows:
                     logger.exception(f"Error in background tool execution: {name}")
                     await tool._on_completed(None, _metadata)
 
-            bg_task = asyncio.create_task(_wait_and_callback())
-            tool._background_tasks.add(bg_task)
-            bg_task.add_done_callback(tool._background_tasks.discard)
-
             yield ToolCallResult(
                 data={"message": tool.immediate_message},
-                task_id=task_id
+                task_id=task_id,
+                deferred_callback=_wait_and_callback
             )
             return
 
