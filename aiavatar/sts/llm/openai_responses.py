@@ -5,6 +5,7 @@ from typing import AsyncGenerator, Dict, List, Union
 import openai as openai_module
 from . import LLMService, LLMResponse, ToolCall, Tool
 from .context_manager import ContextManager
+from .response_id_store import ResponseIdStore, SQLiteResponseIdStore
 
 logger = getLogger(__name__)
 
@@ -27,6 +28,7 @@ class OpenAIResponsesService(LLMService):
         split_on_control_tags: bool = True,
         voice_text_tag: Union[str, List[str]] = None,
         context_manager: ContextManager = None,
+        response_id_store: ResponseIdStore = None,
         shared_context_ids: List[str] = None,
         db_connection_str: str = "aiavatar.db",
         debug: bool = False
@@ -48,7 +50,14 @@ class OpenAIResponsesService(LLMService):
         )
         self.reasoning_effort = reasoning_effort
         self.extra_body = extra_body
-        self.response_ids: Dict[str, str] = {}
+        if response_id_store:
+            self.response_id_store = response_id_store
+        else:
+            if db_connection_str.startswith("postgresql://"):
+                from .response_id_store.postgres import PostgreSQLResponseIdStore
+                self.response_id_store = PostgreSQLResponseIdStore(connection_str=db_connection_str)
+            else:
+                self.response_id_store = SQLiteResponseIdStore(db_path=db_connection_str)
         self._edit_response_params = None
 
         self.openai_client = openai_module.AsyncClient(
@@ -73,7 +82,7 @@ class OpenAIResponsesService(LLMService):
         messages = []
 
         # Add initial messages for the first call only (no server-side history yet)
-        if not self.response_ids.get(context_id):
+        if not await self.response_id_store.get(context_id):
             initial_msgs = await self._get_initial_messages(context_id, user_id, system_prompt_params)
             if initial_msgs:
                 messages.extend(initial_msgs)
@@ -157,7 +166,7 @@ class OpenAIResponsesService(LLMService):
             response_params["instructions"] = system_prompt
 
         # Previous response for conversation continuity
-        if previous_response_id := self.response_ids.get(context_id):
+        if previous_response_id := await self.response_id_store.get(context_id):
             response_params["previous_response_id"] = previous_response_id
 
         # Temperature and reasoning effort
@@ -224,7 +233,7 @@ class OpenAIResponsesService(LLMService):
                     tool_calls[idx].arguments += event.delta
 
             elif event.type == "response.completed":
-                self.response_ids[context_id] = event.response.id
+                await self.response_id_store.set(context_id, event.response.id)
 
         # Execute tool calls
         if tool_calls:

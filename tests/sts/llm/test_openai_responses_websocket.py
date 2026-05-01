@@ -64,7 +64,7 @@ async def test_openai_responses_ws_service_simple():
     assert "[face:Angry]" not in full_voice, "Control tag was not removed from voice_text."
 
     # Check server-side context management (response_id should be stored)
-    assert context_id in service.response_ids, "response_id not stored for context."
+    assert await service.response_id_store.get(context_id) is not None, "response_id not stored for context."
 
     # Check context was saved locally
     histories = await service.context_manager.get_histories(context_id)
@@ -93,7 +93,7 @@ async def test_openai_responses_ws_service_context_continuity():
         if resp.error_info:
             pytest.fail(f"Error in first call: {resp.error_info}")
 
-    first_response_id = service.response_ids.get(context_id)
+    first_response_id = await service.response_id_store.get(context_id)
     assert first_response_id is not None, "response_id should be set after first call."
 
     # Second call: ask about what was said before
@@ -108,7 +108,7 @@ async def test_openai_responses_ws_service_context_continuity():
     assert "マンゴー" in full_text, f"Context was not maintained. Response: {full_text}"
 
     # response_id should have been updated
-    second_response_id = service.response_ids.get(context_id)
+    second_response_id = await service.response_id_store.get(context_id)
     assert second_response_id != first_response_id, "response_id should be updated after second call."
 
     await service._ws_pool.close()
@@ -224,7 +224,7 @@ async def test_openai_responses_ws_service_tool_calls_response_formatter():
     assert "Formatter: 1+1の計算結果は2です。" in full_text, f"Direct response not found in text: {full_text}"
 
     # Verify response_ids is valid after direct response (tool output must be sent to API)
-    assert context_id in service.response_ids, "response_id should be set after response_formatter call."
+    assert await service.response_id_store.get(context_id) is not None, "response_id should be set after response_formatter call."
 
     # Verify conversation can continue without "No tool output found" error
     collected_text2 = []
@@ -373,9 +373,11 @@ async def test_openai_responses_ws_service_context_isolation():
     assert not errors, f"Errors during setup: {errors}"
 
     # Verify each context has its own response_id
-    assert context_a in service.response_ids, f"response_id not set for context_a. response_ids={service.response_ids}"
-    assert context_b in service.response_ids, f"response_id not set for context_b. response_ids={service.response_ids}"
-    assert service.response_ids[context_a] != service.response_ids[context_b], \
+    response_id_a = await service.response_id_store.get(context_a)
+    response_id_b = await service.response_id_store.get(context_b)
+    assert response_id_a is not None, "response_id not set for context_a."
+    assert response_id_b is not None, "response_id not set for context_b."
+    assert response_id_a != response_id_b, \
         "Different contexts should have different response_ids."
 
     # Second round: ask each context about the stored information concurrently

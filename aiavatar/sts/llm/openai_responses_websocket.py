@@ -8,6 +8,7 @@ from typing import AsyncGenerator, Dict, List, Union
 import websockets
 from . import LLMService, LLMResponse, ToolCall, Tool
 from .context_manager import ContextManager
+from .response_id_store import ResponseIdStore, SQLiteResponseIdStore
 
 logger = getLogger(__name__)
 
@@ -109,6 +110,7 @@ class OpenAIResponsesWebSocketService(LLMService):
         max_connections: int = 100,  # Max concurrent WebSocket connections (= max parallel requests)
         max_connection_age: float = 3300,
         context_manager: ContextManager = None,
+        response_id_store: ResponseIdStore = None,
         shared_context_ids: List[str] = None,
         db_connection_str: str = "aiavatar.db",
         debug: bool = False
@@ -129,7 +131,14 @@ class OpenAIResponsesWebSocketService(LLMService):
         )
         self.reasoning_effort = reasoning_effort
         self.extra_body = extra_body
-        self.response_ids: Dict[str, str] = {}
+        if response_id_store:
+            self.response_id_store = response_id_store
+        else:
+            if db_connection_str.startswith("postgresql://"):
+                from .response_id_store.postgres import PostgreSQLResponseIdStore
+                self.response_id_store = PostgreSQLResponseIdStore(connection_str=db_connection_str)
+            else:
+                self.response_id_store = SQLiteResponseIdStore(db_path=db_connection_str)
         self._edit_response_params = None
 
         base = ws_url or "wss://api.openai.com"
@@ -158,7 +167,7 @@ class OpenAIResponsesWebSocketService(LLMService):
         messages = []
 
         # Add initial messages for the first call only (no server-side history yet)
-        if not self.response_ids.get(context_id):
+        if not await self.response_id_store.get(context_id):
             initial_msgs = await self._get_initial_messages(context_id, user_id, system_prompt_params)
             if initial_msgs:
                 messages.extend(initial_msgs)
@@ -226,7 +235,7 @@ class OpenAIResponsesWebSocketService(LLMService):
             tool_to_add.is_dynamic = is_dynamic
         self.tools[tool_to_add.name] = tool_to_add
 
-    def _build_response_create(self, context_id: str, input_data: list, system_prompt: str = None) -> dict:
+    async def _build_response_create(self, context_id: str, input_data: list, system_prompt: str = None) -> dict:
         """Build a response.create message for WebSocket."""
         message = {
             "type": "response.create",
@@ -237,7 +246,7 @@ class OpenAIResponsesWebSocketService(LLMService):
         if system_prompt:
             message["instructions"] = system_prompt
 
-        if previous_response_id := self.response_ids.get(context_id):
+        if previous_response_id := await self.response_id_store.get(context_id):
             message["previous_response_id"] = previous_response_id
 
         # Temperature and reasoning effort
@@ -263,7 +272,7 @@ class OpenAIResponsesWebSocketService(LLMService):
 
                 while True:
                     # Build response.create message
-                    ws_message = self._build_response_create(context_id, current_input, system_prompt)
+                    ws_message = await self._build_response_create(context_id, current_input, system_prompt)
 
                     if self.extra_body:
                         ws_message["extra_body"] = self.extra_body
@@ -308,7 +317,7 @@ class OpenAIResponsesWebSocketService(LLMService):
                         elif event_type == "response.completed":
                             resp = event.get("response", {})
                             if resp_id := resp.get("id"):
-                                self.response_ids[context_id] = resp_id
+                                await self.response_id_store.set(context_id, resp_id)
                             break
 
                         elif event_type == "response.failed":
