@@ -228,53 +228,58 @@ class OpenAIResponsesService(LLMService):
 
         # Execute tool calls
         if tool_calls:
-            await self._on_before_tool_calls(tool_calls)
+            try:
+                await self._on_before_tool_calls(tool_calls)
 
-            tool_outputs = []
-            has_direct_response = False
-            for tc in tool_calls:
-                if self.debug:
-                    logger.info(f"ToolCall: {tc.name}")
-                yield LLMResponse(context_id=context_id, tool_call=ToolCall(id=tc.id, name=tc.name, arguments=tc.arguments, result=None))
+                tool_outputs = []
+                has_direct_response = False
+                for tc in tool_calls:
+                    if self.debug:
+                        logger.info(f"ToolCall: {tc.name}")
+                    yield LLMResponse(context_id=context_id, tool_call=ToolCall(id=tc.id, name=tc.name, arguments=tc.arguments, result=None))
 
-                tool_result = None
-                async for tr in self.execute_tool(tc.name, json.loads(tc.arguments), {"context_id": context_id, "user_id": user_id, "session_id": session_id, "channel": channel}):
-                    tc.result = tr
-                    if tr.text:
-                        yield LLMResponse(context_id=context_id, text=tr.text)
-                    else:
-                        yield LLMResponse(context_id=context_id, tool_call=tc, structured_content=tr.structured_content)
-                        if tr.is_final:
-                            tool_result = tr.data
-                            break
+                    tool_result = None
+                    async for tr in self.execute_tool(tc.name, json.loads(tc.arguments), {"context_id": context_id, "user_id": user_id, "session_id": session_id, "channel": channel}):
+                        tc.result = tr
+                        if tr.text:
+                            yield LLMResponse(context_id=context_id, text=tr.text)
+                        else:
+                            yield LLMResponse(context_id=context_id, tool_call=tc, structured_content=tr.structured_content)
+                            if tr.is_final:
+                                tool_result = tr.data
+                                break
 
-                if self.debug:
-                    logger.info(f"ToolCall result: {tool_result}")
+                    if self.debug:
+                        logger.info(f"ToolCall result: {tool_result}")
 
-                if tool_result:
-                    # Use response_formatter for direct response if available
-                    tool_obj = self.tools.get(tc.name)
-                    if tool_obj and tool_obj._response_formatter:
-                        direct_text = tool_obj._response_formatter(tool_result, json.loads(tc.arguments))
-                        yield LLMResponse(context_id=context_id, text=direct_text, structured_content=tc.result.structured_content if tc.result else None)
-                        has_direct_response = True
+                    if tool_result:
+                        # Use response_formatter for direct response if available
+                        tool_obj = self.tools.get(tc.name)
+                        if tool_obj and tool_obj._response_formatter:
+                            direct_text = tool_obj._response_formatter(tool_result, json.loads(tc.arguments))
+                            yield LLMResponse(context_id=context_id, text=direct_text, structured_content=tc.result.structured_content if tc.result else None)
+                            has_direct_response = True
 
-                    tool_outputs.append({
-                        "type": "function_call_output",
-                        "call_id": tc.id,
-                        "output": json.dumps(tool_result),
-                    })
+                        tool_outputs.append({
+                            "type": "function_call_output",
+                            "call_id": tc.id,
+                            "output": json.dumps(tool_result),
+                        })
 
-            if tool_outputs:
-                # Send tool results back via recursive call with previous_response_id
-                suppress_text = has_direct_response
-                async for llm_response in self.get_llm_stream_response(
-                    context_id, user_id, tool_outputs, system_prompt_params=system_prompt_params, session_id=session_id, channel=channel
-                ):
-                    if llm_response.tool_call:
-                        # Chained tool call detected: stop suppressing so the
-                        # subsequent tool's LLM response is yielded normally
-                        suppress_text = False
-                        yield llm_response
-                    elif llm_response.error_info or not suppress_text:
-                        yield llm_response
+                if tool_outputs:
+                    # Send tool results back via recursive call with previous_response_id
+                    suppress_text = has_direct_response
+                    async for llm_response in self.get_llm_stream_response(
+                        context_id, user_id, tool_outputs, system_prompt_params=system_prompt_params, session_id=session_id, channel=channel
+                    ):
+                        if llm_response.tool_call:
+                            # Chained tool call detected: stop suppressing so the
+                            # subsequent tool's LLM response is yielded normally
+                            suppress_text = False
+                            yield llm_response
+                        elif llm_response.error_info or not suppress_text:
+                            yield llm_response
+
+            finally:
+                # Start deferred background callbacks regardless of errors
+                self._start_deferred_callbacks(tool_calls)

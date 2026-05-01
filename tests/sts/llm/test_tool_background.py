@@ -95,9 +95,14 @@ async def test_immediate_background():
     assert results[0].data == {"message": tool.immediate_message}
     assert results[0].task_id is not None
     assert results[0].is_final is True
+    assert results[0].deferred_callback is not None
 
-    # on_completed not called yet
+    # on_completed not called yet (deferred)
     assert len(completed) == 0
+
+    # Simulate caller starting deferred callbacks after response completes
+    tc = ToolCall(id="1", name="test_tool", arguments='{"query": "hello"}', result=results[0])
+    svc._start_deferred_callbacks([tc])
 
     # Wait for background task
     await asyncio.sleep(0.15)
@@ -200,9 +205,14 @@ async def test_timeout_falls_back_to_background():
     assert len(results) == 1
     assert results[0].data == {"message": tool.immediate_message}
     assert results[0].task_id is not None
+    assert results[0].deferred_callback is not None
 
-    # on_completed not called yet
+    # on_completed not called yet (deferred)
     assert len(completed) == 0
+
+    # Simulate caller starting deferred callbacks after response completes
+    tc = ToolCall(id="1", name="test_tool", arguments='{"query": "slow"}', result=results[0])
+    svc._start_deferred_callbacks([tc])
 
     # Wait for background to finish
     await asyncio.sleep(5)
@@ -233,6 +243,11 @@ async def test_background_error_calls_on_completed_with_none():
         results.append(tr)
 
     assert results[0].task_id is not None
+    assert results[0].deferred_callback is not None
+
+    # Simulate caller starting deferred callbacks after response completes
+    tc = ToolCall(id="1", name="test_tool", arguments='{"query": "fail"}', result=results[0])
+    svc._start_deferred_callbacks([tc])
 
     await asyncio.sleep(0.1)
 
@@ -284,8 +299,17 @@ async def test_background_tasks_cleaned_up():
 
     svc = make_service_with_tool(tool)
 
-    async for _ in svc.execute_tool("test_tool", {"query": "hi"}, {"context_id": "c1", "user_id": "u1"}):
-        pass
+    results = []
+    async for tr in svc.execute_tool("test_tool", {"query": "hi"}, {"context_id": "c1", "user_id": "u1"}):
+        results.append(tr)
+
+    # Task should NOT be started yet (deferred)
+    assert len(tool._background_tasks) == 0
+    assert results[0].deferred_callback is not None
+
+    # Simulate caller starting deferred callbacks after response completes
+    tc = ToolCall(id="1", name="test_tool", arguments='{"query": "hi"}', result=results[0])
+    svc._start_deferred_callbacks([tc])
 
     # Task should be in the set while running
     assert len(tool._background_tasks) == 1

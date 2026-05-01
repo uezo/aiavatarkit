@@ -324,70 +324,75 @@ class GeminiService(LLMService):
                         try_dynamic_tools = True
 
         if tool_calls:
-            # Do something before tool calls (e.g. say to user that it will take a long time)
-            await self._on_before_tool_calls(tool_calls)
+            try:
+                # Do something before tool calls (e.g. say to user that it will take a long time)
+                await self._on_before_tool_calls(tool_calls)
 
-            # NOTE: Gemini 2.0 Flash doesn't return multiple tools at once for now (2025-01-07), but it's not explicitly documented.
-            #       Multiple tools will be called sequentially: user -(llm)-> function_call -> function_response -(llm)-> function_call -> function_response -(llm)-> assistant
-            # Execute tools
-            messages_length = len(messages)
-            has_direct_response = False
-            continue_chain = False
-            for tc in tool_calls:
-                if self.debug:
-                    logger.info(f"ToolCall: {tc.name}")
-                yield LLMResponse(context_id=context_id, tool_call=ToolCall(id=tc.id, name=tc.name, arguments=tc.arguments, result=None))
-
-                tool_result = None
-                if tc.name == self.dynamic_tool_name:
-                    if not filtered_tools:
-                        tool_result = {"message": "No tools found"}
-                else:
+                # NOTE: Gemini 2.0 Flash doesn't return multiple tools at once for now (2025-01-07), but it's not explicitly documented.
+                #       Multiple tools will be called sequentially: user -(llm)-> function_call -> function_response -(llm)-> function_call -> function_response -(llm)-> assistant
+                # Execute tools
+                messages_length = len(messages)
+                has_direct_response = False
+                continue_chain = False
+                for tc in tool_calls:
                     if self.debug:
-                        tool_names = [t["functionDeclarations"][0]["name"] for t in filtered_tools]
-                        logger.info(f"Execute tool: {tc.name} / tools: {tool_names}")
+                        logger.info(f"ToolCall: {tc.name}")
+                    yield LLMResponse(context_id=context_id, tool_call=ToolCall(id=tc.id, name=tc.name, arguments=tc.arguments, result=None))
 
-                    async for tr in self.execute_tool(tc.name, tc.arguments, {"context_id": context_id, "user_id": user_id, "session_id": session_id, "channel": channel}):
-                        tc.result = tr
-                        if tr.text:
-                            yield LLMResponse(context_id=context_id, text=tr.text)
-                        else:
-                            yield LLMResponse(context_id=context_id, tool_call=tc, structured_content=tr.structured_content)
-                            if tr.is_final:
-                                tool_result = tr.data
-                                break
+                    tool_result = None
+                    if tc.name == self.dynamic_tool_name:
+                        if not filtered_tools:
+                            tool_result = {"message": "No tools found"}
+                    else:
+                        if self.debug:
+                            tool_names = [t["functionDeclarations"][0]["name"] for t in filtered_tools]
+                            logger.info(f"Execute tool: {tc.name} / tools: {tool_names}")
 
-                if self.debug:
-                    logger.info(f"ToolCall result: {tool_result}")
+                        async for tr in self.execute_tool(tc.name, tc.arguments, {"context_id": context_id, "user_id": user_id, "session_id": session_id, "channel": channel}):
+                            tc.result = tr
+                            if tr.text:
+                                yield LLMResponse(context_id=context_id, text=tr.text)
+                            else:
+                                yield LLMResponse(context_id=context_id, tool_call=tc, structured_content=tr.structured_content)
+                                if tr.is_final:
+                                    tool_result = tr.data
+                                    break
 
-                if tool_result:
-                    # Use response_formatter for direct response if available
-                    tool_obj = self.tools.get(tc.name)
-                    if tool_obj and tool_obj._response_formatter:
-                        direct_text = tool_obj._response_formatter(tool_result, tc.arguments)
-                        yield LLMResponse(context_id=context_id, text=direct_text, structured_content=tc.result.structured_content if tc.result else None)
-                        has_direct_response = True
-                        if tool_obj._response_formatter_continue_chain:
-                            continue_chain = True
+                    if self.debug:
+                        logger.info(f"ToolCall result: {tool_result}")
 
-                    messages.append(types.Content(
-                        role="model",
-                        parts=model_response_parts
-                    ))
-                    messages.append(types.Content(
-                        role="user",
-                        parts=[types.Part.from_function_response(name=tc.name, response=tool_result)]
-                    ))
+                    if tool_result:
+                        # Use response_formatter for direct response if available
+                        tool_obj = self.tools.get(tc.name)
+                        if tool_obj and tool_obj._response_formatter:
+                            direct_text = tool_obj._response_formatter(tool_result, tc.arguments)
+                            yield LLMResponse(context_id=context_id, text=direct_text, structured_content=tc.result.structured_content if tc.result else None)
+                            has_direct_response = True
+                            if tool_obj._response_formatter_continue_chain:
+                                continue_chain = True
 
-            if len(messages) > messages_length or try_dynamic_tools:
-                if not has_direct_response or continue_chain:
-                    # Send tool results back to LLM for follow-up response or chained tool calls
-                    suppress_text = has_direct_response
-                    async for llm_response in self.get_llm_stream_response(
-                        context_id, user_id, messages, system_prompt_params=system_prompt_params, tools=filtered_tools, session_id=session_id, channel=channel
-                    ):
-                        if llm_response.tool_call:
-                            suppress_text = False
-                            yield llm_response
-                        elif llm_response.error_info or not suppress_text:
-                            yield llm_response
+                        messages.append(types.Content(
+                            role="model",
+                            parts=model_response_parts
+                        ))
+                        messages.append(types.Content(
+                            role="user",
+                            parts=[types.Part.from_function_response(name=tc.name, response=tool_result)]
+                        ))
+
+                if len(messages) > messages_length or try_dynamic_tools:
+                    if not has_direct_response or continue_chain:
+                        # Send tool results back to LLM for follow-up response or chained tool calls
+                        suppress_text = has_direct_response
+                        async for llm_response in self.get_llm_stream_response(
+                            context_id, user_id, messages, system_prompt_params=system_prompt_params, tools=filtered_tools, session_id=session_id, channel=channel
+                        ):
+                            if llm_response.tool_call:
+                                suppress_text = False
+                                yield llm_response
+                            elif llm_response.error_info or not suppress_text:
+                                yield llm_response
+
+            finally:
+                # Start deferred background callbacks regardless of errors
+                self._start_deferred_callbacks(tool_calls)
