@@ -432,6 +432,10 @@ The list of tools is as follows:
             if tool._on_submitted:
                 await tool._on_submitted(task_id, _metadata)
 
+            # Pass enriched metadata (with task_id, submitted_at) to the tool function
+            if "metadata" in arguments:
+                arguments["metadata"] = _metadata
+
             tool_result = tool.func(**arguments)
             if inspect.isawaitable(tool_result):
                 task = asyncio.ensure_future(tool_result)
@@ -463,7 +467,7 @@ The list of tools is as follows:
                     await tool._on_completed(None, _metadata)
 
             yield ToolCallResult(
-                data={"message": tool.immediate_message},
+                data={"message": tool.immediate_message, "task_id": task_id},
                 task_id=task_id,
                 deferred_callback=_wait_and_callback
             )

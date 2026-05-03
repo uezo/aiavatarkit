@@ -65,7 +65,8 @@ class OpenClawTool(Tool):
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "query": {"type": "string"}
+                            "query": {"type": "string", "description": "The user's request or task description to send to OpenClaw for processing."},
+                            "report_channel": {"type": "string", "description": "The channel where the task results should be reported back."},
                         },
                         "required": ["query"]
                     },
@@ -84,12 +85,16 @@ class OpenClawTool(Tool):
     # Running tasks management
 
     def add_running_task(self, request: str, metadata: dict, progress: str = None) -> str:
-        task_id = str(uuid4())
+        task_id = metadata.get("task_id")
+        logger.info(f"add_running_task: task_id={task_id}")
+
+        task_id = metadata.get("task_id") or str(uuid4())
         self._running_tasks[task_id] = {
             "context_id": metadata.get("context_id"),
             "user_id": metadata.get("user_id"),
             "session_id": metadata.get("session_id"),
             "channel": metadata.get("channel"),
+            "report_channel": None,
             "request": request,
             "progress": progress or "",
         }
@@ -111,6 +116,43 @@ class OpenClawTool(Tool):
             self._running_tasks[task_id]["progress"] += progress
             if self.debug:
                 logger.info(f"OpenClaw progress: {progress}")
+
+    def set_report_channel(self, task_id: str, channel: str):
+
+        logger.info(f"set_report_channel: task_id={task_id}")
+
+        if running_task := self._running_tasks.get(task_id):
+            running_task["report_channel"] = channel
+
+    def create_set_report_channel_tool(self, name: str = "set_openclaw_report_channel", description: str = None) -> Tool:
+        openclaw_tool = self
+
+        async def set_channel(task_id: str, report_channel: str, metadata: dict = None):
+            if openclaw_tool._running_tasks.get(task_id):
+                openclaw_tool.set_report_channel(task_id, report_channel)
+                return {"message": f"Report channel for task {task_id} has been set to '{report_channel}'."}
+            else:
+                return {"message": f"Task {task_id} not found in running tasks."}
+
+        return Tool(
+            name=name,
+            spec={
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description or "Set the report channel for a running OpenClaw background task. Use this to change where the task results will be reported.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type": "string", "description": "The ID of the running task."},
+                            "report_channel": {"type": "string", "description": "The channel where the task results should be reported."},
+                        },
+                        "required": ["task_id", "report_channel"]
+                    },
+                }
+            },
+            func=set_channel,
+        )
 
     def create_check_tool(self, name: str = "check_running_openclaw_tasks", description: str = None) -> Tool:
         openclaw_tool = self
@@ -216,21 +258,23 @@ class OpenClawTool(Tool):
             logger.info(f"Response from OpenClaw: {answer}")
         return answer
 
-    async def invoke_openclaw(self, query: str, metadata: dict = None):
+    async def invoke_openclaw(self, query: str, report_channel: str = None, metadata: dict = None):
         context_id = metadata.get("context_id", "")
         user_id = metadata.get("user_id", "")
 
         config = self.get_openclaw_config(user_id)
         if not config.openclaw_base_url:
             logger.warning(f"OpenClaw base_url is not configured for user: {user_id}")
-            return {"answer": "OpenClaw is not configured for this user. Please set up your OpenClaw connection first."}
+            return {"answer": "OpenClaw is not configured for this user. Please set up your OpenClaw connection first.", "report_channel": report_channel}
 
         task_id = self.add_running_task(request=query, metadata=metadata, progress="Start processing...\n")
         try:
             answer = await self._call_openclaw_api(query, context_id, user_id, task_id)
-            return {"answer": answer}
+            report_channel = self._running_tasks[task_id].get("report_channel") or report_channel
+            return {"answer": answer, "report_channel": report_channel}
         except Exception as ex:
             logger.exception("Error at invoke_openclaw")
-            return {"answer": f"Error: {ex}"}
+            report_channel = self._running_tasks.get(task_id, {}).get("report_channel") or report_channel
+            return {"answer": f"Error: {ex}", "report_channel": report_channel}
         finally:
             self.remove_running_task(task_id)

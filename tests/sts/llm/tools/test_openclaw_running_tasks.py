@@ -104,9 +104,9 @@ async def test_invoke_openclaw_registers_and_removes_task():
     with patch.object(tool, "_call_openclaw_api", new_callable=AsyncMock) as mock_api:
         mock_api.return_value = "sunny"
 
-        result = await tool.invoke_openclaw("weather?", {"context_id": "ctx1", "user_id": "user1"})
+        result = await tool.invoke_openclaw("weather?", metadata={"context_id": "ctx1", "user_id": "user1"})
 
-    assert result == {"answer": "sunny"}
+    assert result == {"answer": "sunny", "report_channel": None}
     # Task should be removed after completion
     assert tool.get_running_tasks(context_id="ctx1") == []
 
@@ -122,7 +122,7 @@ async def test_invoke_openclaw_task_visible_during_execution():
         return "result"
 
     with patch.object(tool, "_call_openclaw_api", side_effect=mock_api):
-        await tool.invoke_openclaw("do something", {"context_id": "ctx1", "user_id": "user1"})
+        await tool.invoke_openclaw("do something", metadata={"context_id": "ctx1", "user_id": "user1"})
 
     # Task was visible during execution
     assert len(captured_tasks) == 1
@@ -140,9 +140,9 @@ async def test_invoke_openclaw_removes_task_on_error():
     with patch.object(tool, "_call_openclaw_api", new_callable=AsyncMock) as mock_api:
         mock_api.side_effect = RuntimeError("API error")
 
-        result = await tool.invoke_openclaw("fail", {"context_id": "ctx1", "user_id": "user1"})
+        result = await tool.invoke_openclaw("fail", metadata={"context_id": "ctx1", "user_id": "user1"})
 
-    assert result == {"answer": "Error: API error"}
+    assert result == {"answer": "Error: API error", "report_channel": None}
     # Task should be removed even on error
     assert tool.get_running_tasks(context_id="ctx1") == []
 
@@ -420,9 +420,10 @@ async def test_invoke_openclaw_rejects_unconfigured_user():
         stream=False,
     )
 
-    result = await tool.invoke_openclaw("hello", {"context_id": "ctx1", "user_id": "unknown_user"})
+    result = await tool.invoke_openclaw("hello", metadata={"context_id": "ctx1", "user_id": "unknown_user"})
 
     assert "not configured" in result["answer"].lower()
+    assert result["report_channel"] is None
     # No running task should remain
     assert tool.get_running_tasks(user_id="unknown_user") == []
 
@@ -444,7 +445,7 @@ async def test_invoke_openclaw_allows_configured_user():
 
     with patch.object(tool, "_call_openclaw_api", new_callable=AsyncMock) as mock_api:
         mock_api.return_value = "success"
-        result = await tool.invoke_openclaw("hello", {"context_id": "ctx1", "user_id": "user1"})
+        result = await tool.invoke_openclaw("hello", metadata={"context_id": "ctx1", "user_id": "user1"})
 
-    assert result == {"answer": "success"}
+    assert result == {"answer": "success", "report_channel": None}
     mock_api.assert_awaited_once()
