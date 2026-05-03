@@ -90,9 +90,10 @@ async def test_immediate_background():
     async for tr in svc.execute_tool("test_tool", {"query": "hello"}, {"context_id": "c1", "user_id": "u1"}):
         results.append(tr)
 
-    # Should return immediately with immediate_message
+    # Should return immediately with immediate_message and task_id
     assert len(results) == 1
-    assert results[0].data == {"message": tool.immediate_message}
+    assert results[0].data["message"] == tool.immediate_message
+    assert results[0].data["task_id"] == results[0].task_id
     assert results[0].task_id is not None
     assert results[0].is_final is True
     assert results[0].deferred_callback is not None
@@ -203,7 +204,8 @@ async def test_timeout_falls_back_to_background():
 
     # Should return immediate_message (timed out)
     assert len(results) == 1
-    assert results[0].data == {"message": tool.immediate_message}
+    assert results[0].data["message"] == tool.immediate_message
+    assert results[0].data["task_id"] == results[0].task_id
     assert results[0].task_id is not None
     assert results[0].deferred_callback is not None
 
@@ -281,6 +283,9 @@ async def test_metadata_passed_to_func():
     assert len(received_metadata) == 1
     assert received_metadata[0]["context_id"] == "c1"
     assert received_metadata[0]["user_id"] == "u1"
+    # Enriched metadata includes task_id and submitted_at for background tools
+    assert "task_id" in received_metadata[0]
+    assert "submitted_at" in received_metadata[0]
 
 
 # --- Background tasks are cleaned up ---
@@ -339,7 +344,7 @@ async def test_custom_immediate_message():
     async for tr in svc.execute_tool("test_tool", {"query": "hi"}, {"context_id": "c1", "user_id": "u1"}):
         results.append(tr)
 
-    assert results[0].data == {"message": "Working on it..."}
+    assert results[0].data["message"] == "Working on it..."
 
 
 # --- Async generator (streaming, no on_completed) ---
