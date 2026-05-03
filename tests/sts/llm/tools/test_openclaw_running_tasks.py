@@ -142,7 +142,7 @@ async def test_invoke_openclaw_removes_task_on_error():
 
         result = await tool.invoke_openclaw("fail", {"context_id": "ctx1", "user_id": "user1"})
 
-    assert result == {"answer": "Error"}
+    assert result == {"answer": "Error: API error"}
     # Task should be removed even on error
     assert tool.get_running_tasks(context_id="ctx1") == []
 
