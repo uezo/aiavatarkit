@@ -97,23 +97,21 @@ class AIAvatarClient {
             this.scriptNode = this.audioContext.createScriptProcessor(256, 1, 1);
             this.scriptNode.onaudioprocess = (event) => {
                 const inputData = event.inputBuffer.getChannelData(0);
-                let sum = 0;
-                for (let i = 0; i < inputData.length; i++) {
-                    sum += inputData[i] * inputData[i];
-                }
-                const rms = Math.sqrt(sum / inputData.length);
-
-                const pcmBuffer = this.float32To16BitPCMBuffer(inputData);
-                const base64Data = this.arrayBufferToBase64(pcmBuffer);
                 if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                     if (!this._userMuted && !this.isMicrophoneMuted()) {
+                        let sum = 0;
+                        for (let i = 0; i < inputData.length; i++) {
+                            sum += inputData[i] * inputData[i];
+                        }
+                        const rms = Math.sqrt(sum / inputData.length);
                         this.onMicrophoneDataSend(rms);
-                        const dataMessage = {
-                            type: "data",
-                            session_id: sessionId,
-                            audio_data: base64Data
-                        };
-                        this.ws.send(JSON.stringify(dataMessage));
+                        const pcmBuffer = this.float32To16BitPCMBuffer(inputData);
+                        const base64Data = this.arrayBufferToBase64(pcmBuffer);
+                        this.ws.send(JSON.stringify({ type: "data", session_id: sessionId, audio_data: base64Data }));
+                    } else {
+                        const silentBuffer = new ArrayBuffer(inputData.length * 2);
+                        const base64Data = this.arrayBufferToBase64(silentBuffer);
+                        this.ws.send(JSON.stringify({ type: "data", session_id: sessionId, audio_data: base64Data }));
                     }
                 }
             };
