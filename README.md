@@ -911,6 +911,14 @@ vad = SileroSpeechDetector(
 )
 ```
 
+To use a local Silero VAD model file instead of downloading from the hub, set `model_path`:
+
+```python
+vad = SileroSpeechDetector(
+    model_path="path/to/silero_vad.jit"
+)
+```
+
 
 ### Silero Stream Speech Detector
 
@@ -1711,6 +1719,7 @@ router = aiavatar_app.get_api_router()
 app.include_router(router)
 ```
 
+Note: `image_download_url_base` is optional. If omitted, images from users are embedded as base64 data URLs directly in the LLM context, eliminating the need for the LLM to fetch images from an external URL.
 
 By default, the LINE Messaging API user ID is used as the AIAvatarKit user ID. To map channel user IDs to your own app-level user IDs, use `ChannelContextBridge`. See [Channel Context Bridge](#-channel-context-bridge) for details.
 
@@ -2233,11 +2242,11 @@ tool = Tool("run_heavy_task", heavy_task_spec, run_heavy_task)
 @tool.on_completed
 async def on_completed(result, metadata):
     # result: return value from the tool function (or None on error)
-    # metadata: dict containing task_id, user_id, context_id, submitted_at, arguments, etc.
+    # metadata: dict containing task_id, user_id, context_id, session_id, channel, submitted_at, arguments, etc.
     answer = result["answer"]
     user_id = metadata["user_id"]
     context_id = metadata["context_id"]
-    session_id = aiavatar_app.get_session_by_user_id(user_id).id
+    session_id = metadata["session_id"]
 
     async for resp in aiavatar_app.sts.invoke(
         STSRequest(
@@ -2329,7 +2338,26 @@ The formatter receives two arguments:
 
 The tool call and its result are still saved to conversation context, so follow-up questions like "What was the temperature again?" work naturally. The formatted text is stored as the assistant's response.
 
-**Note**: Tools without a `response_formatter` continue to work as before (2nd LLM call generates the response). You can mix both patterns — some tools with formatters and others without.
+**Note**: Tools without a `response_formatter` continue to work as before (2nd LLM call generates the response). You can mix both patterns: some tools with formatters and others without.
+
+#### Continuing Tool Chains with `continue_chain`
+
+By default, `response_formatter` terminates the tool chain. No further LLM call is made, which maximizes speed. However, if the LLM calls multiple tools in sequence (e.g., check balance first, then fetch campaign info), a direct-response tool would break the chain and prevent subsequent tools from being called.
+
+Use `continue_chain=True` to allow the chain to continue after the direct response:
+
+```python
+@llm.tools["get_balance"].response_formatter(continue_chain=True)
+def format_balance(result, arguments):
+    return f"Your balance is {result['balance']:,} {result['currency']}."
+```
+
+| Decorator | Behavior |
+|-----------|----------|
+| `@tool.response_formatter` | Direct response, **chain stops** (default, fastest) |
+| `@tool.response_formatter(continue_chain=True)` | Direct response, **chain continues** (LLM can call more tools) |
+
+When `continue_chain=True`, the formatted text is spoken immediately, and the tool result is also sent back to the LLM so it can decide whether to call additional tools. The LLM's text response for this round is suppressed to avoid duplication, but any subsequent tool calls and their responses proceed normally.
 
 
 ### 📦 Structured Content (Client-side Data)
@@ -2666,7 +2694,7 @@ async def on_completed(result, metadata):
     answer = result["answer"]
     user_id = metadata["user_id"]
     context_id = metadata["context_id"]
-    session_id = aiavatar_app.get_session_by_user_id(user_id).id
+    session_id = metadata["session_id"]
 
     async for resp in aiavatar_app.sts.invoke(
         STSRequest(
@@ -2726,6 +2754,102 @@ async def get_task_result(task_id: str):
 The client receives the `task_id` from the avatar's immediate response and polls `GET /tasks/{task_id}` until it gets a result (`status: "completed"`) or a timeout (`status: "timeout"`). A `204` response means the task is still in progress.
 
 Once the client retrieves the answer, it can send it back to the avatar as a new request, for example `f"$OpenClaw has returned a response. Please relay the following to the user:\n\n{answer}"`, to have the avatar speak the result aloud.
+
+#### Progress tracking
+
+When OpenClaw runs asynchronously, users may ask "How's it going?" before the task completes. The built-in progress tracking lets the avatar answer with real-time status.
+
+`OpenClawTool` automatically tracks running tasks and, when `stream=True`, updates progress with the agent's intermediate steps (tool calls, labels, etc.) as they stream in.
+
+Register the check tool alongside the main tool:
+
+```python
+openclaw_tool = OpenClawTool(
+    openclaw_api_key=OPENCLAW_API_KEY,
+    openclaw_base_url=OPENCLAW_BASE_URL,
+    stream=True,  # Enables detailed progress from streaming chunks
+)
+
+llm.add_tool(openclaw_tool)
+llm.add_tool(openclaw_tool.create_check_tool())
+```
+
+That's it. When the user asks about progress, the LLM calls `check_running_openclaw_tasks` and gets the current status:
+
+```json
+{
+  "running_tasks": [
+    {
+      "request": "Search for the latest news about AI",
+      "progress": "Start processing...\n- 🔍 web_search: searching for AI news\n- 📄 read_page: reading article\n"
+    }
+  ]
+}
+```
+
+You can customize the tool name and description:
+
+```python
+openclaw_tool.create_check_tool(
+    name="check_agent_status",
+    description="Check what the AI agent is currently working on."
+)
+```
+
+#### Report channel routing
+
+By default, task results are delivered back to the same channel (WebSocket, phone, LINE, etc.) that initiated the request. You can override this by specifying a `report_channel` — either at invocation time via the tool parameter, or dynamically while the task is running.
+
+The LLM can set the channel at invocation:
+
+```python
+# LLM calls: send_query_to_openclaw(query="...", report_channel="linebot")
+```
+
+Or change it mid-flight using the set report channel tool:
+
+```python
+llm.add_tool(openclaw_tool.create_set_report_channel_tool())
+```
+
+This allows the LLM to call `set_openclaw_report_channel(task_id="...", report_channel="sms")` while the task is running, redirecting where the result will be reported.
+
+#### Per-user configuration
+
+In multi-user environments, each user can connect to their own OpenClaw or Hermes instance with independent credentials. Users without a configuration will receive an error message instead of calling the API.
+
+```python
+from aiavatar.sts.llm.tools.openclaw_tool import OpenClawTool, OpenClawConfig
+
+openclaw_tool = OpenClawTool(
+    openclaw_configs={
+        "user_id_1": OpenClawConfig(
+            openclaw_api_key=USER1_API_KEY,
+            openclaw_base_url=USER1_BASE_URL,
+        ),
+        "user_id_2": OpenClawConfig(
+            openclaw_api_key=USER2_API_KEY,
+            openclaw_base_url=USER2_HERMES_URL,
+            openclaw_session_key_key="X-Hermes-Session-Id",
+            openclaw_model="hermes-agent",
+        ),
+    },
+    stream=True,
+)
+```
+
+Per-user configs are merged with the tool-level defaults. Only the fields you specify are overridden. You can also manage configs at runtime:
+
+```python
+# Add or update
+openclaw_tool.update_openclaw_config("user_id_3", OpenClawConfig(
+    openclaw_api_key="new-key",
+    openclaw_base_url="https://my-hermes.example.com",
+))
+
+# Remove (reverts to tool defaults)
+openclaw_tool.delete_openclaw_config("user_id_3")
+```
 
 
 ## 🧪 Evaluation
@@ -3397,6 +3521,18 @@ async def on_response(response, _):
             context_id=response.context_id,
         ))
 ```
+
+**Auto-create behavior**: When `get_channel_user()` is called with `auto_create=True` and no matching record exists, a new channel user is automatically created. By default, the channel user ID is used as the app-level user ID (e.g. a LINE user ID becomes the app-level user ID). To generate a custom user ID instead, use the `create_user_id` decorator:
+
+```python
+from uuid import uuid4
+
+@bridge.create_user_id
+def create_user_id(channel_id, channel_user_id):
+    return str(uuid4())
+```
+
+The function receives `(channel_id, channel_user_id)` and returns the app-level user ID to assign.
 
 **Cross-channel context sharing**: When the same `user_id` is linked across multiple channels, they share the same `context_id`, maintaining conversation continuity. Use `link_channel_user()` to map different channel user IDs to a single app-level user.
 
