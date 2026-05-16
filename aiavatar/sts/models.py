@@ -31,6 +31,7 @@ class STSResponse:
     session_id: str = None
     user_id: str = None
     context_id: str = None
+    transaction_id: str = None
     text: str = None
     voice_text: str = None
     language: str = None

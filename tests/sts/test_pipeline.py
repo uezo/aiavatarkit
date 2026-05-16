@@ -1231,3 +1231,90 @@ async def test_insert_channel_tag_disabled():
     assert request.text == "Hello"
 
     await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_transaction_id_in_responses():
+    """Test that all responses from a single invoke have a consistent non-None transaction_id"""
+    session_id = f"test_transaction_id_{str(uuid4())}"
+
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o-mini",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        performance_recorder=SQLitePerformanceRecorder(),
+        debug=True
+    )
+
+    responses = []
+    async for response in sts.invoke(STSRequest(
+        session_id=session_id,
+        user_id="test_user",
+        context_id="test_context",
+        text="Hello"
+    )):
+        responses.append(response)
+
+    # All responses should have a non-None transaction_id
+    for response in responses:
+        assert response.transaction_id is not None, f"Response type={response.type} has no transaction_id"
+
+    # All responses should share the same transaction_id
+    transaction_ids = set(r.transaction_id for r in responses)
+    assert len(transaction_ids) == 1, f"Expected 1 unique transaction_id, got {len(transaction_ids)}: {transaction_ids}"
+
+    # Should have at least start and final
+    types = [r.type for r in responses]
+    assert "start" in types
+    assert "final" in types
+
+    await sts.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_transaction_id_differs_between_invokes():
+    """Test that different invocations produce different transaction_ids"""
+    session_id = f"test_transaction_id_differs_{str(uuid4())}"
+
+    sts = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=ChatGPTService(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o-mini",
+        ),
+        tts=SpeechSynthesizerDummy(),
+        performance_recorder=SQLitePerformanceRecorder(),
+        debug=True
+    )
+
+    # First invoke
+    responses_1 = []
+    async for response in sts.invoke(STSRequest(
+        session_id=session_id,
+        user_id="test_user",
+        context_id="test_context",
+        text="Hello"
+    )):
+        responses_1.append(response)
+
+    # Second invoke
+    responses_2 = []
+    async for response in sts.invoke(STSRequest(
+        session_id=session_id,
+        user_id="test_user",
+        context_id="test_context",
+        text="World"
+    )):
+        responses_2.append(response)
+
+    # Each invoke should have its own transaction_id
+    txn_id_1 = responses_1[0].transaction_id
+    txn_id_2 = responses_2[0].transaction_id
+    assert txn_id_1 != txn_id_2, "Different invocations should produce different transaction_ids"
+
+    await sts.shutdown()

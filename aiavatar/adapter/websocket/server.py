@@ -28,6 +28,8 @@ class WebSocketSessionData:
     def __init__(self):
         self.id = None
         self.data = {}
+        self.send_lock = asyncio.Lock()
+        self.active_transaction_id: Optional[str] = None
 
 
 class AIAvatarWebSocketServer(Adapter):
@@ -240,7 +242,7 @@ class AIAvatarWebSocketServer(Adapter):
             session_data.data["metadata"] = request.metadata
             self.sessions[session_data.id] = session_data
 
-            await self.handle_response(AIAvatarResponse(
+            await self.handle_response(STSResponse(
                 type="connected",
                 session_id=request.session_id,
                 user_id=request.user_id,
@@ -270,7 +272,7 @@ class AIAvatarWebSocketServer(Adapter):
                 user_id=request.user_id,
                 context_id=context_id,
                 text=request.text,
-                audio_data=request.audio_data,
+                audio_data=base64.b64decode(request.audio_data) if request.audio_data else None,
                 files=request.files,
                 system_prompt_params=request.system_prompt_params,
                 allow_merge=request.allow_merge,
@@ -308,11 +310,43 @@ class AIAvatarWebSocketServer(Adapter):
 
     # Response
     async def send_response(self, aiavatar_response: AIAvatarResponse):
-        await self.websockets[aiavatar_response.session_id].send_text(
-            aiavatar_response.model_dump_json()
-        )
+        session_data = self.sessions.get(aiavatar_response.session_id)
+        if not session_data:
+            return
+        async with session_data.send_lock:
+            if aiavatar_response.session_id in self.websockets:
+                await self.websockets[aiavatar_response.session_id].send_text(
+                    aiavatar_response.model_dump_json()
+                )
 
     async def handle_response(self, response: STSResponse):
+        session_data = self.sessions.get(response.session_id)
+
+        # On accepted: finalize old transaction and update active_transaction_id
+        if response.type == "accepted" and response.transaction_id and session_data:
+            if session_data.active_transaction_id and session_data.active_transaction_id != response.transaction_id:
+                # Send final for the old transaction
+                await self.send_response(AIAvatarResponse(
+                    type="final",
+                    session_id=response.session_id,
+                    user_id=response.user_id,
+                    context_id=response.context_id,
+                    text="",
+                    voice_text="",
+                    metadata={"interrupted": True}
+                ))
+            session_data.active_transaction_id = response.transaction_id
+
+        # Skip stale transaction responses
+        if response.transaction_id and session_data:
+            if response.transaction_id != session_data.active_transaction_id:
+                if self.debug:
+                    logger.info(
+                        "Skip stale response: type=%s, transaction=%s, active=%s",
+                        response.type, response.transaction_id, session_data.active_transaction_id
+                    )
+                return
+
         aiavatar_response = AIAvatarResponse(
             type=response.type,
             session_id=response.session_id,
@@ -364,6 +398,14 @@ class AIAvatarWebSocketServer(Adapter):
 
                     # Send audio data in chunks
                     for i in range(0, len(audio_data), self.response_audio_chunk_size):
+                        # Break if transaction is no longer active
+                        if session_data and response.transaction_id != session_data.active_transaction_id:
+                            if self.debug:
+                                logger.info(
+                                    "Break audio chunk loop: transaction=%s, active=%s",
+                                    response.transaction_id, session_data.active_transaction_id
+                                )
+                            break
                         # Encode chunk as base64
                         b64_chunk = base64.b64encode(audio_data[i:i + self.response_audio_chunk_size]).decode("utf-8")
                         chunk_response = AIAvatarResponse(
