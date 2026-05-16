@@ -316,17 +316,18 @@ class STSPipeline:
             if not request.session_id:
                 raise ValueError("session_id is required but not provided")
 
+            start_time = time()
+            transaction_id = str(uuid4())
+
             # Notify client that request is accepted (fire and forget to avoid blocking pipeline latency)
             asyncio.create_task(self.handle_response(STSResponse(
                 type="accepted",
                 session_id=request.session_id,
+                transaction_id=transaction_id,
                 metadata={"block_barge_in": request.block_barge_in}
             )))
             for handler in self._on_accepted_handlers:
                 await handler(request)
-
-            start_time = time()
-            transaction_id = str(uuid4())
 
             performance = PerformanceRecord(
                 transaction_id=transaction_id,
@@ -356,6 +357,7 @@ class STSPipeline:
                         session_id=request.session_id,
                         user_id=request.user_id,
                         context_id=request.context_id,
+                        transaction_id=transaction_id,
                         metadata={"reason": "No speech recognized."}
                     )
                     return
@@ -380,6 +382,7 @@ class STSPipeline:
                         session_id=request.session_id,
                         user_id=request.user_id,
                         context_id=request.context_id,
+                        transaction_id=transaction_id,
                         metadata={"reason": reason}
                     )
                     return
@@ -448,6 +451,7 @@ class STSPipeline:
                 session_id=request.session_id,
                 user_id=request.user_id,
                 context_id=request.context_id,
+                transaction_id=transaction_id,
                 metadata={"request_text": request.text, "recognized_text": recognized_text}
             )
 
@@ -464,6 +468,7 @@ class STSPipeline:
                     session_id=request.session_id,
                     user_id=request.user_id,
                     context_id=request.context_id,
+                    transaction_id=transaction_id,
                     text=request.quick_response_text,
                     voice_text=request.quick_response_voice_text,
                     audio_data=request.quick_response_audio,
@@ -571,6 +576,7 @@ class STSPipeline:
                         session_id=request.session_id,
                         user_id=request.user_id,
                         context_id=llm_stream_chunk.context_id,
+                        transaction_id=transaction_id,
                         tool_call=llm_stream_chunk.tool_call,
                         structured_content=llm_stream_chunk.structured_content
                     )
@@ -586,6 +592,7 @@ class STSPipeline:
                     session_id=request.session_id,
                     user_id=request.user_id,
                     context_id=llm_stream_chunk.context_id,
+                    transaction_id=transaction_id,
                     text=llm_stream_chunk.text,
                     voice_text=llm_stream_chunk.voice_text,
                     language=language,
@@ -605,6 +612,7 @@ class STSPipeline:
                 session_id=request.session_id,
                 user_id=request.user_id,
                 context_id=request.context_id,
+                transaction_id=transaction_id,
                 text=(request.quick_response_text or "") + response_text,
                 voice_text=(request.quick_response_voice_text or "") + (performance.response_voice_text or "")
             )
@@ -637,6 +645,7 @@ class STSPipeline:
                 session_id=request.session_id,
                 user_id=request.user_id,
                 context_id=request.context_id,
+                transaction_id=transaction_id,
                 metadata={"error": "Error in processing Speech-to-Speech pipeline"}
             )
 
