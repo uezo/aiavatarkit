@@ -11,6 +11,8 @@ class OpenAISpeechRecognizer(SpeechRecognizer):
     def __init__(
         self,
         openai_api_key: str,
+        model: str = "gpt-4o-mini-transcribe",
+        min_data_length: int = 4096,
         sample_rate: int = 16000,
         language: str = "ja",
         alternative_languages: List[str] = None,
@@ -29,6 +31,8 @@ class OpenAISpeechRecognizer(SpeechRecognizer):
             debug=debug
         )
         self.openai_api_key = openai_api_key
+        self.model = model
+        self.min_data_length = min_data_length
         self.sample_rate = sample_rate
 
     def get_config(self) -> dict:
@@ -47,12 +51,17 @@ class OpenAISpeechRecognizer(SpeechRecognizer):
         return buffer
 
     async def transcribe(self, data: bytes) -> str:
+        if len(data) < self.min_data_length:
+            if self.debug:
+                logger.info(f"Data to transcribe is too short: {len(data)}")
+            return None
+
         headers = {
             "Authorization": f"Bearer {self.openai_api_key}"
         }
 
         form_data = {
-            "model": "whisper-1",
+            "model": self.model,
         }
 
         if self.language and not self.alternative_languages:
