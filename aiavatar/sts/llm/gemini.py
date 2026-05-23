@@ -96,6 +96,12 @@ class GeminiService(LLMService):
         # Add initial messages (e.g. few-shot, preset turns)
         initial_msgs = await self._get_initial_messages(context_id, user_id, system_prompt_params)
         if initial_msgs:
+            for msg in initial_msgs:
+                # Convert OpenAI-style initial messages to Gemini format (text-only fallback)
+                if content := msg.get("content"):
+                    if isinstance(content, str):
+                        msg["parts"] = [{"text": content}]
+                        del msg["content"]
             messages.extend(initial_msgs)
 
         # Extract the history starting from the first message where the role is 'user'
