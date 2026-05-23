@@ -189,25 +189,16 @@ def test_create_check_tool_custom_name():
 # --- Per-user OpenClaw config ---
 
 def test_get_openclaw_config_defaults_when_no_user_config():
-    tool = make_openclaw_tool(
-        openclaw_session_key="default-session",
-        openclaw_session_key_key="x-openclaw-session-key",
-        openclaw_model="openclaw",
-    )
+    tool = make_openclaw_tool()
     config = tool.get_openclaw_config("unknown_user")
 
     assert config.openclaw_api_key == "test-key"
     assert config.openclaw_base_url == "http://localhost:9999"
-    assert config.openclaw_session_key == "default-session"
-    assert config.openclaw_session_key_key == "x-openclaw-session-key"
-    assert config.openclaw_model == "openclaw"
+    assert config.harness == "openclaw"
 
 
 def test_get_openclaw_config_partial_override():
     tool = make_openclaw_tool(
-        openclaw_session_key="default-session",
-        openclaw_session_key_key="x-openclaw-session-key",
-        openclaw_model="openclaw",
         openclaw_configs={
             "user1": OpenClawConfig(
                 openclaw_api_key="user1-key",
@@ -221,23 +212,16 @@ def test_get_openclaw_config_partial_override():
     assert config.openclaw_api_key == "user1-key"
     assert config.openclaw_base_url == "http://user1-server:8000"
     # Falls back to tool defaults
-    assert config.openclaw_session_key == "default-session"
-    assert config.openclaw_session_key_key == "x-openclaw-session-key"
-    assert config.openclaw_model == "openclaw"
+    assert config.harness == "openclaw"
 
 
 def test_get_openclaw_config_full_override():
     tool = make_openclaw_tool(
-        openclaw_session_key="default-session",
-        openclaw_session_key_key="x-openclaw-session-key",
-        openclaw_model="openclaw",
         openclaw_configs={
             "user1": OpenClawConfig(
                 openclaw_api_key="user1-key",
                 openclaw_base_url="http://user1-hermes:8000",
-                openclaw_session_key="user1-session",
-                openclaw_session_key_key="X-Hermes-Session-Id",
-                openclaw_model="hermes-agent",
+                harness="hermes",
             ),
         },
     )
@@ -245,19 +229,14 @@ def test_get_openclaw_config_full_override():
 
     assert config.openclaw_api_key == "user1-key"
     assert config.openclaw_base_url == "http://user1-hermes:8000"
-    assert config.openclaw_session_key == "user1-session"
-    assert config.openclaw_session_key_key == "X-Hermes-Session-Id"
-    assert config.openclaw_model == "hermes-agent"
+    assert config.harness == "hermes"
 
 
 def test_get_openclaw_config_different_users_get_different_configs():
     tool = make_openclaw_tool(
-        openclaw_session_key="default-session",
-        openclaw_session_key_key="x-openclaw-session-key",
-        openclaw_model="openclaw",
         openclaw_configs={
             "user1": OpenClawConfig(openclaw_api_key="key-1", openclaw_base_url="http://server-1"),
-            "user2": OpenClawConfig(openclaw_api_key="key-2", openclaw_model="hermes-agent"),
+            "user2": OpenClawConfig(openclaw_api_key="key-2", harness="hermes"),
         },
     )
 
@@ -266,11 +245,11 @@ def test_get_openclaw_config_different_users_get_different_configs():
 
     assert c1.openclaw_api_key == "key-1"
     assert c1.openclaw_base_url == "http://server-1"
-    assert c1.openclaw_model == "openclaw"  # fallback
+    assert c1.harness == "openclaw"  # fallback
 
     assert c2.openclaw_api_key == "key-2"
     assert c2.openclaw_base_url == "http://localhost:9999"  # fallback
-    assert c2.openclaw_model == "hermes-agent"
+    assert c2.harness == "hermes"
 
 
 def test_update_openclaw_config():
@@ -317,15 +296,11 @@ def test_delete_openclaw_config_nonexistent_is_noop():
 async def test_call_openclaw_api_uses_user_config():
     """Verify that _call_openclaw_api creates a client with per-user config values."""
     tool = make_openclaw_tool(
-        openclaw_session_key="default-session",
-        openclaw_session_key_key="x-openclaw-session-key",
-        openclaw_model="openclaw",
         openclaw_configs={
             "user1": OpenClawConfig(
                 openclaw_api_key="user1-key",
                 openclaw_base_url="http://user1-server:8000",
-                openclaw_session_key_key="X-Hermes-Session-Id",
-                openclaw_model="hermes-agent",
+                harness="hermes",
             ),
         },
     )
@@ -347,7 +322,7 @@ async def test_call_openclaw_api_uses_user_config():
         base_url="http://user1-server:8000",
         timeout=30000,
     )
-    # API called with user1's model and header
+    # API called with hermes model and header
     call_kwargs = mock_client.chat.completions.create.call_args
     assert call_kwargs.kwargs["model"] == "hermes-agent"
     assert call_kwargs.kwargs["extra_headers"]["X-Hermes-Session-Id"] == "ctx1"
@@ -358,11 +333,7 @@ async def test_call_openclaw_api_uses_user_config():
 @pytest.mark.asyncio
 async def test_call_openclaw_api_falls_back_to_defaults():
     """Verify that _call_openclaw_api uses tool defaults for unknown users."""
-    tool = make_openclaw_tool(
-        openclaw_session_key="default-session",
-        openclaw_session_key_key="x-openclaw-session-key",
-        openclaw_model="openclaw",
-    )
+    tool = make_openclaw_tool()
 
     mock_resp = MagicMock()
     mock_resp.choices = [MagicMock()]
@@ -413,8 +384,6 @@ async def test_invoke_openclaw_rejects_unconfigured_user():
             "configured_user": OpenClawConfig(
                 openclaw_api_key="key",
                 openclaw_base_url="http://server:8000",
-                openclaw_session_key_key="x-openclaw-session-key",
-                openclaw_model="openclaw",
             ),
         },
         stream=False,
@@ -436,8 +405,6 @@ async def test_invoke_openclaw_allows_configured_user():
             "user1": OpenClawConfig(
                 openclaw_api_key="key",
                 openclaw_base_url="http://server:8000",
-                openclaw_session_key_key="x-openclaw-session-key",
-                openclaw_model="openclaw",
             ),
         },
         stream=False,
@@ -449,3 +416,146 @@ async def test_invoke_openclaw_allows_configured_user():
 
     assert result == {"answer": "success", "report_channel": None}
     mock_api.assert_awaited_once()
+
+
+# --- request_builder registry ---
+
+def test_request_builder_openclaw():
+    tool = make_openclaw_tool()
+    builder = tool._request_builders["openclaw"]
+    result = builder("task1", "ctx1")
+    assert result == {"model": "openclaw", "extra_headers": {"x-openclaw-session-key": "ctx1"}}
+
+
+def test_request_builder_openclaw_no_context_id():
+    tool = make_openclaw_tool()
+    builder = tool._request_builders["openclaw"]
+    result = builder("task1", "")
+    assert result == {"model": "openclaw"}
+    assert "extra_headers" not in result
+
+
+def test_request_builder_register_custom():
+    tool = make_openclaw_tool()
+
+    @tool.request_builder("custom")
+    def custom_builder(task_id, context_id):
+        return {"extra_body": {"session_id": context_id}}
+
+    assert "custom" in tool._request_builders
+    result = tool._request_builders["custom"]("task1", "ctx1")
+    assert result == {"extra_body": {"session_id": "ctx1"}}
+
+
+@pytest.mark.asyncio
+async def test_call_openclaw_api_uses_custom_request_builder():
+    tool = make_openclaw_tool(
+        openclaw_configs={
+            "user1": OpenClawConfig(
+                openclaw_api_key="key1",
+                openclaw_base_url="http://custom:8000",
+                harness="custom",
+            ),
+        },
+    )
+
+    @tool.request_builder("custom")
+    def custom_builder(task_id, context_id):
+        return {"model": "custom-model", "extra_body": {"session_id": context_id}}
+
+    mock_resp = MagicMock()
+    mock_resp.choices = [MagicMock()]
+    mock_resp.choices[0].message.content = "custom response"
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_resp)
+    mock_client.close = AsyncMock()
+
+    with patch("aiavatar.sts.llm.tools.openclaw_tool.openai.AsyncClient", return_value=mock_client):
+        answer = await tool._call_openclaw_api("hello", "ctx1", "user1", "task1")
+
+    call_kwargs = mock_client.chat.completions.create.call_args
+    assert call_kwargs.kwargs["extra_body"] == {"session_id": "ctx1"}
+    assert "extra_headers" not in call_kwargs.kwargs
+    assert answer == "custom response"
+
+
+# --- response_parser registry ---
+
+def test_response_parser_register_with_key():
+    tool = make_openclaw_tool()
+
+    @tool.response_parser("hermes")
+    def hermes_parser(task_id, context_id, chunk):
+        return f"hermes: {chunk}\n"
+
+    assert "hermes" in tool._response_parsers
+    assert tool._response_parsers["hermes"]("task1", "ctx1", "step1") == "hermes: step1\n"
+
+
+def test_response_parser_backward_compat_no_key():
+    tool = make_openclaw_tool()
+
+    @tool.response_parser
+    def my_parser(task_id, context_id, chunk):
+        return f"custom: {chunk}\n"
+
+    assert tool._response_parsers["openclaw"] is my_parser
+    assert my_parser("task1", "ctx1", "step1") == "custom: step1\n"
+
+
+def test_get_openclaw_config_resolves_harness():
+    tool = make_openclaw_tool(
+        openclaw_configs={
+            "user1": OpenClawConfig(
+                openclaw_api_key="key1",
+                openclaw_base_url="http://server:8000",
+                harness="hermes",
+            ),
+        },
+    )
+    config = tool.get_openclaw_config("user1")
+    assert config.harness == "hermes"
+
+
+def test_get_openclaw_config_falls_back_to_tool_default_harness():
+    tool = make_openclaw_tool()
+    config = tool.get_openclaw_config("unknown_user")
+    assert config.harness == "openclaw"
+
+
+# --- hermes harness ---
+
+@pytest.mark.asyncio
+async def test_call_openclaw_api_hermes_uses_correct_header_and_model():
+    tool = make_openclaw_tool(
+        openclaw_configs={
+            "user1": OpenClawConfig(
+                openclaw_api_key="hermes-key",
+                openclaw_base_url="http://hermes:8000",
+                harness="hermes",
+            ),
+        },
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.choices = [MagicMock()]
+    mock_resp.choices[0].message.content = "hermes response"
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_resp)
+    mock_client.close = AsyncMock()
+
+    with patch("aiavatar.sts.llm.tools.openclaw_tool.openai.AsyncClient", return_value=mock_client):
+        answer = await tool._call_openclaw_api("hello", "ctx1", "user1", "task1")
+
+    call_kwargs = mock_client.chat.completions.create.call_args
+    assert call_kwargs.kwargs["model"] == "hermes-agent"
+    assert call_kwargs.kwargs["extra_headers"]["X-Hermes-Session-Id"] == "ctx1"
+    assert answer == "hermes response"
+
+
+def test_hermes_request_builder_registered():
+    tool = make_openclaw_tool()
+    assert "hermes" in tool._request_builders
+    assert "hermes" in tool._response_parsers

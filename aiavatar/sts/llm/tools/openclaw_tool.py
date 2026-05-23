@@ -13,15 +13,11 @@ class OpenClawConfig:
         *,
         openclaw_api_key: str = None,
         openclaw_base_url: str = None,
-        openclaw_session_key: str = None,
-        openclaw_session_key_key: str = None,
-        openclaw_model: str = None
+        harness: str = None,
     ):
         self.openclaw_api_key = openclaw_api_key
         self.openclaw_base_url = openclaw_base_url
-        self.openclaw_session_key = openclaw_session_key
-        self.openclaw_session_key_key = openclaw_session_key_key
-        self.openclaw_model = openclaw_model
+        self.harness = harness
 
 
 class OpenClawTool(Tool):
@@ -30,10 +26,8 @@ class OpenClawTool(Tool):
         *,
         openclaw_api_key: str = None,
         openclaw_base_url: str = None,
-        openclaw_session_key: str = None,
-        openclaw_session_key_key: str = "x-openclaw-session-key",   # set "X-Hermes-Session-Id" for Hermes
-        openclaw_model: str = "openclaw",   # set "hermes-agent" for Hermes
         openclaw_configs: Dict[str, OpenClawConfig] = None,
+        harness: str = "openclaw",
         stream: bool = False,
         immediate_message: str = "Accepted. You will be notified when the response is ready.",
         timeout: int = 30000,
@@ -45,15 +39,21 @@ class OpenClawTool(Tool):
     ):
         self.openclaw_api_key = openclaw_api_key
         self.openclaw_base_url = openclaw_base_url
-        self.openclaw_session_key = openclaw_session_key
-        self.openclaw_session_key_key = openclaw_session_key_key
-        self.openclaw_model = openclaw_model
         self.openclaw_configs = openclaw_configs or {}
+        self.harness = harness
+        self._request_builders: Dict[str, Callable] = {
+            "openclaw": self._openclaw_request_builder,
+            "hermes": self._hermes_request_builder,
+        }
+        self._response_parsers: Dict[str, Callable] = {
+            "openclaw": self._openclaw_response_parser,
+            "hermes": self._hermes_response_parser,
+        }
         self.timeout = timeout
         self.stream = stream
         self.debug = debug
-        self._on_stream_chunk: Callable = None
         self._running_tasks: Dict[str, dict] = {}
+        self._session_key_map: Dict[str, str] = {}
 
         super().__init__(
             name or "send_query_to_openclaw",
@@ -78,9 +78,73 @@ class OpenClawTool(Tool):
             immediate_message=immediate_message
         )
 
-    def on_stream_chunk(self, func: Callable):
-        self._on_stream_chunk = func
-        return func
+    # Session key mapping
+
+    def get_session_key(self, harness: str, context_id: str) -> str:
+        return self._session_key_map.get(f"{harness}:{context_id}")
+
+    def set_session_key(self, harness: str, context_id: str, session_key: str):
+        self._session_key_map[f"{harness}:{context_id}"] = session_key
+
+    def delete_session_key(self, harness: str, context_id: str):
+        self._session_key_map.pop(f"{harness}:{context_id}", None)
+
+    def request_builder(self, key: str = None):
+        def decorator(func: Callable):
+            self._request_builders[key or self.harness] = func
+            return func
+        return decorator
+
+    def response_parser(self, func_or_key=None):
+        if callable(func_or_key):
+            self._response_parsers[self.harness] = func_or_key
+            return func_or_key
+        else:
+            key = func_or_key or self.harness
+            def decorator(func: Callable):
+                self._response_parsers[key] = func
+                return func
+            return decorator
+
+    @staticmethod
+    def _openclaw_request_builder(task_id: str, context_id: str) -> dict:
+        result = {"model": "openclaw"}
+        if context_id:
+            result["extra_headers"] = {"x-openclaw-session-key": context_id}
+        return result
+
+    @staticmethod
+    def _hermes_request_builder(task_id: str, context_id: str) -> dict:
+        result = {"model": "hermes-agent"}
+        if context_id:
+            result["extra_headers"] = {"X-Hermes-Session-Id": context_id}
+        return result
+
+    def _openclaw_response_parser(self, task_id: str, context_id: str, chunk) -> str:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            return delta.content
+        return None
+
+    def _hermes_response_parser(self, task_id: str, context_id: str, chunk) -> str:
+        # Progress tracking
+        if hasattr(chunk, "tool"):
+            progress_line = ""
+            if tool_name := chunk.tool:
+                emoji = chunk.emoji if hasattr(chunk, "emoji") else ""
+                progress_line = f"- {emoji} {tool_name}"
+                label = chunk.label if hasattr(chunk, "label") else ""
+                if label:
+                    progress_line += f": {label}"
+                progress_line += "\n"
+            if progress_line and task_id:
+                self.add_progress(task_id, progress_line)
+
+        # Extract content
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            return delta.content
+        return None
 
     # Running tasks management
 
@@ -188,9 +252,7 @@ class OpenClawTool(Tool):
         user_config = self.openclaw_configs.get(user_id) or config
         config.openclaw_api_key = user_config.openclaw_api_key or self.openclaw_api_key
         config.openclaw_base_url = user_config.openclaw_base_url or self.openclaw_base_url
-        config.openclaw_session_key = user_config.openclaw_session_key or self.openclaw_session_key
-        config.openclaw_session_key_key = user_config.openclaw_session_key_key or self.openclaw_session_key_key
-        config.openclaw_model = user_config.openclaw_model or self.openclaw_model
+        config.harness = user_config.harness or self.harness
         return config
 
     def update_openclaw_config(self, user_id: str, config: OpenClawConfig):
@@ -206,6 +268,15 @@ class OpenClawTool(Tool):
             logger.info(f"Request to OpenClaw (from {user_id}): {query}")
 
         config = self.get_openclaw_config(user_id)
+        build_request = self._request_builders.get(
+            config.harness, self._openclaw_request_builder
+        )
+        parse_response = self._response_parsers.get(
+            config.harness, self._openclaw_response_parser
+        )
+        extra_kwargs = build_request(task_id, context_id)
+        model = extra_kwargs.pop("model", None)
+
         client = openai.AsyncClient(
             api_key=config.openclaw_api_key,
             base_url=config.openclaw_base_url,
@@ -216,39 +287,22 @@ class OpenClawTool(Tool):
             if self.stream:
                 stream = await client.chat.completions.create(
                     messages=[{"role": "user", "content": query}],
-                    model=config.openclaw_model,
+                    model=model,
                     stream=True,
-                    extra_headers={
-                        config.openclaw_session_key_key: context_id or config.openclaw_session_key
-                    }
+                    **extra_kwargs
                 )
                 chunks = []
                 async for chunk in stream:
-                    if task_id and hasattr(chunk, "tool"):
-                        progress_line = ""
-                        if tool := chunk.tool:
-                            emoji = chunk.emoji or ""
-                            progress_line = f"- {emoji} {tool}"
-                            if label := chunk.label:
-                                progress_line += f": {label}"
-                            progress_line += "\n"
-                        if progress_line:
-                            self.add_progress(task_id, progress_line)
-
-                    if self._on_stream_chunk:
-                        await self._on_stream_chunk(task_id, chunk)
-                    delta = chunk.choices[0].delta if chunk.choices else None
-                    if delta and delta.content:
-                        chunks.append(delta.content)
+                    content = parse_response(task_id, context_id, chunk)
+                    if content:
+                        chunks.append(content)
                 answer = "".join(chunks)
 
             else:
                 resp = await client.chat.completions.create(
                     messages=[{"role": "user", "content": query}],
-                    model=config.openclaw_model,
-                    extra_headers={
-                        config.openclaw_session_key_key: context_id or config.openclaw_session_key
-                    }
+                    model=model,
+                    **extra_kwargs
                 )
                 answer = resp.choices[0].message.content
         finally:

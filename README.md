@@ -2648,39 +2648,27 @@ llm.add_tool(selfie_tool)
 ```python
 from aiavatar.sts.llm.tools.openclaw_tool import OpenClawTool
 
-# OpenClaw
+# OpenClaw (default harness)
 openclaw_tool = OpenClawTool(
     openclaw_api_key=OPENCLAW_API_KEY,
     openclaw_base_url=OPENCLAW_BASE_URL,
-    openclaw_session_key="agent:main:main",  # Set if you want to use a fixed session
-    debug=True
+    stream=True,
+    debug=True,
 )
 
 # Hermes
 openclaw_tool = OpenClawTool(
     openclaw_api_key=HERMES_API_KEY,
     openclaw_base_url=HERMES_BASE_URL,
-    openclaw_session_key_key="X-Hermes-Session-Id",
-    debug=True
+    harness="hermes",
+    stream=True,
+    debug=True,
 )
 
 llm.add_tool(openclaw_tool)
 ```
 
-When `stream=True` is set, you can monitor the agent's intermediate steps (tool usage, code execution, etc.) via the `on_stream_chunk` handler:
-
-```python
-openclaw_tool = OpenClawTool(
-    openclaw_api_key=OPENCLAW_API_KEY,
-    openclaw_base_url=OPENCLAW_BASE_URL,
-    stream=True
-)
-
-@openclaw_tool.on_stream_chunk
-async def handle_chunk(chunk):
-    if chunk.tool:
-        print(f"[{chunk.emoji}] {chunk.tool}: {chunk.label}")
-```
+The `harness` parameter selects the built-in request builder and response parser for each backend. Built-in harnesses are `"openclaw"` (default) and `"hermes"`. You can also register custom harnesses — see [Custom harness](#custom-harness) below.
 
 When `on_completed` is registered, OpenClaw runs asynchronously in the background — the avatar immediately acknowledges the request and notifies the user when the result is ready. The approach for delivering the result depends on your adapter.
 
@@ -2830,25 +2818,72 @@ openclaw_tool = OpenClawTool(
         "user_id_2": OpenClawConfig(
             openclaw_api_key=USER2_API_KEY,
             openclaw_base_url=USER2_HERMES_URL,
-            openclaw_session_key_key="X-Hermes-Session-Id",
-            openclaw_model="hermes-agent",
+            harness="hermes",
         ),
     },
     stream=True,
 )
 ```
 
-Per-user configs are merged with the tool-level defaults. Only the fields you specify are overridden. You can also manage configs at runtime:
+Per-user configs are merged with the tool-level defaults. Only the fields you specify are overridden — `harness` falls back to the tool-level default (`"openclaw"`). You can also manage configs at runtime:
 
 ```python
 # Add or update
 openclaw_tool.update_openclaw_config("user_id_3", OpenClawConfig(
     openclaw_api_key="new-key",
     openclaw_base_url="https://my-hermes.example.com",
+    harness="hermes",
 ))
 
 # Remove (reverts to tool defaults)
 openclaw_tool.delete_openclaw_config("user_id_3")
+```
+
+#### Custom harness
+
+You can register custom harnesses to support backends beyond OpenClaw and Hermes. A harness consists of a **request builder** and a **response parser**.
+
+The **request builder** constructs the extra kwargs passed to the API call. It returns a dict that may include `model`, `extra_headers`, `extra_body`, etc.
+
+```python
+@openclaw_tool.request_builder("my_harness")
+def my_request_builder(task_id, context_id):
+    # Use a previously stored session key if available, otherwise use context_id
+    session_key = openclaw_tool.get_session_key("my_harness", context_id) or context_id
+    result = {"model": "my-model"}
+    if session_key:
+        result["extra_body"] = {"session_id": session_key}
+    return result
+```
+
+The **response parser** processes each streaming chunk. It handles progress tracking, session key storage, and returns the content text (or `None`).
+
+```python
+@openclaw_tool.response_parser("my_harness")
+def my_response_parser(task_id, context_id, chunk):
+    # Store session key returned by the harness
+    if hasattr(chunk, "session_id") and chunk.session_id:
+        openclaw_tool.set_session_key("my_harness", context_id, chunk.session_id)
+
+    # Track progress
+    if hasattr(chunk, "tool") and chunk.tool:
+        openclaw_tool.add_progress(task_id, f"- {chunk.tool}\n")
+
+    # Return content
+    delta = chunk.choices[0].delta if chunk.choices else None
+    if delta and delta.content:
+        return delta.content
+    return None
+```
+
+Assign the custom harness to users via `OpenClawConfig`:
+
+```python
+openclaw_tool.update_openclaw_config("user_id", OpenClawConfig(
+    openclaw_api_key="key",
+    openclaw_base_url="https://my-backend.example.com",
+    harness="my_harness",
+))
 ```
 
 
