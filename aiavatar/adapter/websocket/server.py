@@ -237,6 +237,8 @@ class AIAvatarWebSocketServer(Adapter):
                 self.sts.vad.set_session_data(request.session_id, "user_id", request.user_id, True)
             if request.context_id:
                 self.sts.vad.set_session_data(request.session_id, "context_id", request.context_id, True)
+            if request.channel:
+                self.sts.vad.set_session_data(request.session_id, "channel", request.channel, True)
             if request.metadata:
                 self._apply_session_config(request.session_id, request.metadata, create_session=True)
             session_data.data["metadata"] = request.metadata
