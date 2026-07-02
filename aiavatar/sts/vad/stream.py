@@ -3,6 +3,7 @@ import logging
 import struct
 from typing import Callable, Optional, Dict, List, Awaitable
 from .silero import SileroSpeechDetector, RecordingSession as SileroRecordingSession
+from .filters.base import AudioFilter
 from ..stt.base import SpeechRecognizer
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,8 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
         on_recording_started: Optional[Callable[[str], Awaitable[None]]] = None,
         on_recording_started_min_duration: float = 1.5,
         on_recording_started_min_text_length: int = 2,
-        use_vad_iterator: bool = False
+        use_vad_iterator: bool = False,
+        audio_filters: Optional[List[AudioFilter]] = None
     ):
         super().__init__(
             volume_db_threshold=volume_db_threshold,
@@ -71,7 +73,8 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
             model_pool_size=model_pool_size,
             on_recording_started=on_recording_started,
             on_recording_started_min_duration=on_recording_started_min_duration,
-            use_vad_iterator=use_vad_iterator
+            use_vad_iterator=use_vad_iterator,
+            audio_filters=audio_filters
         )
         self.speech_recognizer = speech_recognizer
         self.segment_silence_threshold = segment_silence_threshold
@@ -124,7 +127,15 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
         if self.to_linear16:
             samples = self.to_linear16(samples)
 
+        # Apply acoustic filters (near-field gate, noise suppression, etc.)
+        for audio_filter in self.audio_filters:
+            samples = audio_filter.process(samples, session_id)
+
         session = self.get_session(session_id)
+
+        if not samples:
+            # A filter is holding audio back (e.g. lookahead buffer warming up)
+            return session.is_recording
 
         if self.should_mute():
             session.reset()

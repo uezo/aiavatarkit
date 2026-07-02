@@ -5,9 +5,10 @@ import os
 import struct
 import threading
 import torch
-from typing import AsyncGenerator, Callable, Optional, Dict, Awaitable
+from typing import AsyncGenerator, Callable, List, Optional, Dict, Awaitable
 from . import SpeechDetector
 from .base import RecordingSessionBase
+from .filters.base import AudioFilter
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +50,14 @@ class SileroSpeechDetector(SpeechDetector):
         model_pool_size: int = 1,
         on_recording_started: Optional[Callable[[str], Awaitable[None]]] = None,
         on_recording_started_min_duration: float = 1.5,
-        use_vad_iterator: bool = False
+        use_vad_iterator: bool = False,
+        audio_filters: Optional[List[AudioFilter]] = None
     ):
         super().__init__(
             sample_rate=sample_rate,
             on_recording_started_min_duration=on_recording_started_min_duration
         )
+        self.audio_filters = audio_filters or []
         self._volume_db_threshold = volume_db_threshold
         if volume_db_threshold is not None:
             self.amplitude_threshold = 32767 * (10 ** (self.volume_db_threshold / 20.0))
@@ -241,7 +244,15 @@ class SileroSpeechDetector(SpeechDetector):
         if self.to_linear16:
             samples = self.to_linear16(samples)
 
+        # Apply acoustic filters (near-field gate, noise suppression, etc.)
+        for audio_filter in self.audio_filters:
+            samples = audio_filter.process(samples, session_id)
+
         session = self.get_session(session_id)
+
+        if not samples:
+            # A filter is holding audio back (e.g. lookahead buffer warming up)
+            return session.is_recording
 
         if self.should_mute():
             session.reset()
@@ -397,6 +408,11 @@ class SileroSpeechDetector(SpeechDetector):
         if session_id in self.recording_sessions:
             self.recording_sessions[session_id].reset()
             del self.recording_sessions[session_id]
+        for audio_filter in self.audio_filters:
+            try:
+                audio_filter.reset_session(session_id)
+            except Exception:
+                logger.error("Error resetting audio filter session state", exc_info=True)
 
     def get_session_data(self, session_id: str, key: str):
         session = self.recording_sessions.get(session_id)
