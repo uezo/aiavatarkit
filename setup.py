@@ -13,7 +13,22 @@ setup(
     long_description_content_type="text/markdown",
     packages=find_packages(exclude=["examples*", "tests*"]),
     package_data={"aiavatar": ["admin/static/*"]},
-    install_requires=["httpx>=0.27.0", "openai>=1.55.3", "aiofiles>=24.1.0", "numpy>=2.2.3", "PyAudio>=0.2.14", "silero-vad>=6.0.0"],
+    install_requires=[
+        "httpx>=0.27.0",
+        "openai>=1.55.3",
+        "aiofiles>=24.1.0",
+        "numpy>=2.2.3",
+        "silero-vad>=6.0.0",
+        "websockets>=13.0",
+        "fastapi>=0.115.0",
+        "uvicorn>=0.30.0",
+    ],
+    extras_require={
+        "local-audio": ["PyAudio>=0.2.14"],
+        "local": ["PyAudio>=0.2.14"],
+        "smart-turn": ["onnxruntime>=1.23.0", "transformers>=4.48.0", "huggingface-hub>=0.26.0"],
+        "namo-turn": ["onnxruntime>=1.23.0", "transformers>=4.48.0", "huggingface-hub>=0.26.0"],
+    },
     license="Apache v2",
     classifiers=[
         "Programming Language :: Python :: 3"

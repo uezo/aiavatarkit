@@ -1,4 +1,5 @@
 import logging
+import warnings
 from typing import List
 from ...database import PoolProvider
 from ...sts.pipeline import STSPipeline
@@ -87,6 +88,12 @@ class AIAvatar(AIAvatarClientBase):
         cancel_echo = True,
         debug = False,
     ):
+        warnings.warn(
+            "aiavatar.adapter.local is deprecated. "
+            "Run AIAvatarWebSocketServer and connect with AIAvatarWebSocketClient for local Python audio clients.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(
             face_controller=face_controller,
             animation_controller=animation_controller,

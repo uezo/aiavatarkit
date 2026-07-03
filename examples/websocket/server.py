@@ -1,4 +1,4 @@
-# pip install aiavatar silero-vad uvicorn
+# pip install aiavatar
 import os
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
