@@ -57,8 +57,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
         on_recording_started_min_text_length: int = 2,
         use_vad_iterator: bool = False,
         audio_filters: Optional[List[AudioFilter]] = None,
-        turn_end_gate: Optional[TurnEndGate] = None,
-        turn_end_gate_timeout: Optional[float] = 1.5
+        turn_end_gates: Optional[List[TurnEndGate]] = None,
     ):
         super().__init__(
             volume_db_threshold=volume_db_threshold,
@@ -78,8 +77,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
             on_recording_started_min_duration=on_recording_started_min_duration,
             use_vad_iterator=use_vad_iterator,
             audio_filters=audio_filters,
-            turn_end_gate=turn_end_gate,
-            turn_end_gate_timeout=turn_end_gate_timeout
+            turn_end_gates=turn_end_gates,
         )
         self.speech_recognizer = speech_recognizer
         self.segment_silence_threshold = segment_silence_threshold
@@ -153,7 +151,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
             )
 
     async def _should_end_turn_with_gate(self, session: RecordingSession, recorded_duration: float) -> bool:
-        if self.turn_end_gate and session.pending_recognition_task is not None:
+        if self.turn_end_gates and session.pending_recognition_task is not None:
             await self._wait_pending_recognition_task(session, "before turn-end gate")
         return await super()._should_end_turn_with_gate(
             session,
@@ -234,6 +232,8 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
             if speech_detected:
                 session.silence_duration = 0
                 session.turn_end_gate_hold_active = False
+                session.turn_end_gate_hold_timeout = None
+                session.turn_end_gate_hold_reasons = []
                 session.segment_silence_duration = 0
                 # Reset fired flag when speech resumes
                 session.segment_fired = False
