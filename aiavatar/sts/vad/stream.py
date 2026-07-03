@@ -4,6 +4,7 @@ import struct
 from typing import Callable, Optional, Dict, List, Awaitable
 from .silero import SileroSpeechDetector, RecordingSession as SileroRecordingSession
 from .filters.base import AudioFilter
+from .turn_end_gates.base import TurnEndGate
 from ..stt.base import SpeechRecognizer
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,9 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
         on_recording_started_min_duration: float = 1.5,
         on_recording_started_min_text_length: int = 2,
         use_vad_iterator: bool = False,
-        audio_filters: Optional[List[AudioFilter]] = None
+        audio_filters: Optional[List[AudioFilter]] = None,
+        turn_end_gate: Optional[TurnEndGate] = None,
+        turn_end_gate_timeout: Optional[float] = 1.5
     ):
         super().__init__(
             volume_db_threshold=volume_db_threshold,
@@ -74,7 +77,9 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
             on_recording_started=on_recording_started,
             on_recording_started_min_duration=on_recording_started_min_duration,
             use_vad_iterator=use_vad_iterator,
-            audio_filters=audio_filters
+            audio_filters=audio_filters,
+            turn_end_gate=turn_end_gate,
+            turn_end_gate_timeout=turn_end_gate_timeout
         )
         self.speech_recognizer = speech_recognizer
         self.segment_silence_threshold = segment_silence_threshold
@@ -122,6 +127,39 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
 
     async def execute_on_speech_detected(self, recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
         await self._execute_on_speech_detected(recorded_data, text, metadata, recorded_duration, session_id)
+
+    async def _wait_pending_recognition_task(self, session: RecordingSession, context: str):
+        task = session.pending_recognition_task
+        if task is None:
+            return
+
+        try:
+            await task
+        except asyncio.CancelledError:
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                raise
+            if self.debug:
+                logger.info(
+                    "Pending recognition task was cancelled while waiting %s: session=%s",
+                    context,
+                    session.session_id
+                )
+        except Exception:
+            logger.error(
+                "Error waiting for pending recognition %s",
+                context,
+                exc_info=True
+            )
+
+    async def _should_end_turn_with_gate(self, session: RecordingSession, recorded_duration: float) -> bool:
+        if self.turn_end_gate and session.pending_recognition_task is not None:
+            await self._wait_pending_recognition_task(session, "before turn-end gate")
+        return await super()._should_end_turn_with_gate(
+            session,
+            recorded_duration,
+            text=session.last_recognized_text,
+        )
 
     async def process_samples(self, samples: bytes, session_id: str) -> bool:
         if self.to_linear16:
@@ -195,6 +233,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
 
             if speech_detected:
                 session.silence_duration = 0
+                session.turn_end_gate_hold_active = False
                 session.segment_silence_duration = 0
                 # Reset fired flag when speech resumes
                 session.segment_fired = False
@@ -238,15 +277,14 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                     if self.debug:
                         logger.info(f"Recording too short: {recorded_duration} sec")
                 else:
+                    if not await self._should_end_turn_with_gate(session, recorded_duration):
+                        return session.is_recording
+
                     if self.debug:
                         logger.info(f"Recording finished: {recorded_duration} sec")
 
                     # Wait for pending recognition task to complete
-                    if session.pending_recognition_task is not None:
-                        try:
-                            await session.pending_recognition_task
-                        except Exception as ex:
-                            logger.error("Error waiting for pending recognition", exc_info=True)
+                    await self._wait_pending_recognition_task(session, "before final recognition")
 
                     # Use last recognized text if available, otherwise run final recognition
                     final_text = session.last_recognized_text
@@ -279,11 +317,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                     logger.info(f"Recording max duration reached: {session.record_duration} sec")
 
                 # Wait for pending recognition task to complete
-                if session.pending_recognition_task is not None:
-                    try:
-                        await session.pending_recognition_task
-                    except Exception as ex:
-                        logger.error("Error waiting for pending recognition", exc_info=True)
+                await self._wait_pending_recognition_task(session, "at max duration")
 
                 # Use last recognized text if available
                 final_text = session.last_recognized_text
