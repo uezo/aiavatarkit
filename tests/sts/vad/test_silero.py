@@ -391,6 +391,80 @@ def test_model_initialization(detector):
     assert detector.model_pool[0] is not None
 
 
+def test_hub_cache_path_loads_from_local_hub(monkeypatch):
+    """
+    Test that hub_cache_path uses torch.hub local source and does not load from remote.
+    """
+    calls = []
+
+    def fake_hub_load(**kwargs):
+        calls.append(kwargs)
+        return object(), [object(), object(), object(), object(), object()]
+
+    monkeypatch.setattr("aiavatar.sts.vad.silero.os.path.isdir", lambda path: True)
+    monkeypatch.setattr("aiavatar.sts.vad.silero.torch.hub.load", fake_hub_load)
+
+    detector = SileroSpeechDetector(hub_cache_path="/models/silero-vad", model_pool_size=2)
+
+    assert len(detector.model_pool) == 2
+    assert len(calls) == 2
+    assert all(call["repo_or_dir"] == "/models/silero-vad" for call in calls)
+    assert all(call["source"] == "local" for call in calls)
+    assert all("force_reload" not in call for call in calls)
+
+
+def test_hub_cache_path_missing_raises(monkeypatch):
+    """
+    Test that hub_cache_path fails fast when the local path does not exist.
+    """
+    hub_load_called = False
+
+    def fake_hub_load(**kwargs):
+        nonlocal hub_load_called
+        hub_load_called = True
+        return object(), [object(), object(), object(), object(), object()]
+
+    monkeypatch.setattr("aiavatar.sts.vad.silero.os.path.isdir", lambda path: False)
+    monkeypatch.setattr("aiavatar.sts.vad.silero.torch.hub.load", fake_hub_load)
+
+    with pytest.raises(FileNotFoundError):
+        SileroSpeechDetector(hub_cache_path="/missing/silero-vad")
+
+    assert hub_load_called is False
+
+
+def test_model_path_overrides_hub_model(monkeypatch):
+    """
+    Test that model_path replaces the hub-loaded model while keeping hub utilities.
+    """
+    hub_model = object()
+    jit_models = [object(), object()]
+    hub_calls = []
+    jit_calls = []
+
+    def fake_hub_load(**kwargs):
+        hub_calls.append(kwargs)
+        return hub_model, [object(), object(), object(), object(), object()]
+
+    def fake_jit_load(path):
+        jit_calls.append(path)
+        return jit_models[len(jit_calls) - 1]
+
+    monkeypatch.setattr("aiavatar.sts.vad.silero.os.path.isdir", lambda path: True)
+    monkeypatch.setattr("aiavatar.sts.vad.silero.torch.hub.load", fake_hub_load)
+    monkeypatch.setattr("aiavatar.sts.vad.silero.torch.jit.load", fake_jit_load)
+
+    detector = SileroSpeechDetector(
+        hub_cache_path="/models/silero-vad",
+        model_path="/models/custom.jit",
+        model_pool_size=2,
+    )
+
+    assert detector.model_pool == jit_models
+    assert jit_calls == ["/models/custom.jit", "/models/custom.jit"]
+    assert len(hub_calls) == 1
+
+
 def test_model_pool_size():
     """
     Test model pool initialization with different sizes.

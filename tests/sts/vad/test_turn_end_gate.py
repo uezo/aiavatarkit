@@ -21,7 +21,7 @@ class DummyVADIterator:
         pass
 
 
-def fake_init_silero_model(self, model_path=None):
+def fake_init_silero_model(self, model_path=None, hub_cache_path=None):
     self.model_pool = [object()]
     self.model_locks = [threading.Lock()]
     self.VADIteratorClass = DummyVADIterator
@@ -508,6 +508,23 @@ async def test_smart_turn_end_gate_marks_incomplete_below_threshold(monkeypatch)
     assert decision.reason == "smart_turn_incomplete"
 
 
+def test_smart_turn_end_gate_model_path_skips_download(monkeypatch):
+    SmartTurnEndGate = import_smart_turn_with_fake_dependencies(monkeypatch)
+    module = sys.modules["aiavatar.sts.vad.turn_end_gates.smart_turn"]
+
+    def fail_download(repo_id, filename):
+        raise AssertionError("hf_hub_download should not be called when model_path is set")
+
+    monkeypatch.setattr(module, "hf_hub_download", fail_download)
+
+    gate = SmartTurnEndGate(
+        model_path="/models/smart-turn.onnx",
+        feature_extractor=FakeFeatureExtractor(),
+    )
+
+    assert gate.session is not None
+
+
 @pytest.mark.asyncio
 async def test_namo_turn_end_gate_marks_complete_from_label_one(monkeypatch):
     NamoTurnEndGate, _ = import_namo_turn_with_fake_dependencies(monkeypatch)
@@ -585,3 +602,29 @@ def test_namo_turn_end_gate_tokenizer_truncates_from_left(monkeypatch):
 
     assert tokenizer_calls
     assert tokenizer_calls[0][1]["truncation_side"] == "left"
+
+
+def test_namo_turn_end_gate_tokenizer_path_loads_local_tokenizer(monkeypatch):
+    NamoTurnEndGate, tokenizer_calls = import_namo_turn_with_fake_dependencies(monkeypatch)
+    monkeypatch.setattr("aiavatar.sts.vad.turn_end_gates.namo_turn.os.path.isdir", lambda path: True)
+
+    gate = NamoTurnEndGate(
+        model_path="/models/namo/model_quant.onnx",
+        tokenizer_path="/models/namo/tokenizer",
+    )
+
+    assert gate.session is not None
+    assert tokenizer_calls
+    assert tokenizer_calls[0][0] == "/models/namo/tokenizer"
+    assert tokenizer_calls[0][1]["truncation_side"] == "left"
+
+
+def test_namo_turn_end_gate_missing_tokenizer_path_raises(monkeypatch):
+    NamoTurnEndGate, _ = import_namo_turn_with_fake_dependencies(monkeypatch)
+    monkeypatch.setattr("aiavatar.sts.vad.turn_end_gates.namo_turn.os.path.isdir", lambda path: False)
+
+    with pytest.raises(FileNotFoundError):
+        NamoTurnEndGate(
+            model_path="/models/namo/model_quant.onnx",
+            tokenizer_path="/missing/namo/tokenizer",
+        )

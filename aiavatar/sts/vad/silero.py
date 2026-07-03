@@ -51,7 +51,10 @@ class SileroSpeechDetector(SpeechDetector):
         preroll_buffer_count: int = 5,
         to_linear16: Optional[Callable[[bytes], bytes]] = None,
         debug: bool = False,
+        # Backward-compatible custom JIT model override. Prefer hub_cache_path
+        # for fully local Silero VAD model + utils loading.
         model_path: Optional[str] = None,
+        hub_cache_path: Optional[str] = None,
         speech_probability_threshold: float = 0.5,
         chunk_size: int = 512,
         model_pool_size: int = 1,
@@ -90,7 +93,7 @@ class SileroSpeechDetector(SpeechDetector):
         self.turn_end_gates = turn_end_gates or []
 
         # Initialize Silero VAD model pool
-        self._init_silero_model(model_path)
+        self._init_silero_model(model_path, hub_cache_path)
 
     def get_config(self) -> dict:
         return {
@@ -140,52 +143,57 @@ class SileroSpeechDetector(SpeechDetector):
             self.amplitude_threshold = None
             logger.debug("Volume threshold disabled (set to None)")
 
-    def _init_silero_model(self, model_path: Optional[str] = None):
+    def _init_silero_model(self, model_path: Optional[str] = None, hub_cache_path: Optional[str] = None):
         """Initialize Silero VAD model pool"""
         try:
             # Initialize model pool and locks
             self.model_pool = []
             self.model_locks = []
-            
-            for i in range(self.model_pool_size):
-                if model_path:
-                    model = torch.jit.load(model_path)
-                    # Load utils from local hub cache to avoid network access and "Using cache" log
-                    hub_cache = os.path.join(torch.hub.get_dir(), "snakers4_silero-vad_master")
-                    if os.path.isdir(hub_cache):
-                        _, utils = torch.hub.load(
-                            repo_or_dir=hub_cache,
-                            model="silero_vad",
-                            source="local",
-                        )
-                    else:
-                        _, utils = torch.hub.load(
-                            repo_or_dir="snakers4/silero-vad",
-                            model="silero_vad",
-                            force_reload=False,
-                            onnx=False
-                        )
-                else:
-                    # Load default Silero VAD model
-                    model, utils = torch.hub.load(
+
+            if hub_cache_path:
+                if not os.path.isdir(hub_cache_path):
+                    raise FileNotFoundError(f"Silero VAD hub cache path not found: {hub_cache_path}")
+
+                def load_hub_model_and_utils():
+                    return torch.hub.load(
+                        repo_or_dir=hub_cache_path,
+                        model="silero_vad",
+                        source="local",
+                        onnx=False,
+                    )
+            else:
+                def load_hub_model_and_utils():
+                    # Load default Silero VAD model. torch.hub uses its cache when available.
+                    return torch.hub.load(
                         repo_or_dir="snakers4/silero-vad",
                         model="silero_vad",
                         force_reload=False,
-                        onnx=False
+                        onnx=False,
                     )
+
+            hub_model, utils = load_hub_model_and_utils()
+
+            self.get_speech_timestamps = utils[0]
+            self.save_audio = utils[1]
+            self.read_audio = utils[2]
+            self.VADIterator = utils[3]
+            self.collect_chunks = utils[4]
+            # Store VAD iterator class for per-session creation
+            self.VADIteratorClass = self.VADIterator
+            
+            for i in range(self.model_pool_size):
+                if model_path:
+                    # Keep model_path as a backward-compatible override for
+                    # callers that pass a custom JIT model file.
+                    model = torch.jit.load(model_path)
+                else:
+                    if i == 0:
+                        model = hub_model
+                    else:
+                        model, _ = load_hub_model_and_utils()
                 
                 self.model_pool.append(model)
                 self.model_locks.append(threading.Lock())
-                
-                # Store utility functions (same for all models)
-                if i == 0:  # Only need to store once
-                    self.get_speech_timestamps = utils[0]
-                    self.save_audio = utils[1]
-                    self.read_audio = utils[2]
-                    self.VADIterator = utils[3]
-                    self.collect_chunks = utils[4]
-                    # Store VAD iterator class for per-session creation
-                    self.VADIteratorClass = self.VADIterator
             
             logger.info(f"Silero VAD model pool initialized successfully with {self.model_pool_size} models")
             
