@@ -48,7 +48,10 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
         preroll_buffer_count: int = 5,
         to_linear16: Optional[Callable[[bytes], bytes]] = None,
         debug: bool = False,
+        # Backward-compatible custom JIT model override. Prefer hub_cache_path
+        # for fully local Silero VAD model + utils loading.
         model_path: Optional[str] = None,
+        hub_cache_path: Optional[str] = None,
         speech_probability_threshold: float = 0.5,
         chunk_size: int = 512,
         model_pool_size: int = 1,
@@ -70,6 +73,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
             to_linear16=to_linear16,
             debug=debug,
             model_path=model_path,
+            hub_cache_path=hub_cache_path,
             speech_probability_threshold=speech_probability_threshold,
             chunk_size=chunk_size,
             model_pool_size=model_pool_size,

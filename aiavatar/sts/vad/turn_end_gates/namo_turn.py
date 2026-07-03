@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import threading
 from typing import Any, Optional
 
@@ -55,7 +56,10 @@ class NamoTurnEndGate(TurnEndGate):
         *,
         language: Optional[str] = "ja",
         repo_id: Optional[str] = None,
+        # Local ONNX model path. When set, Namo does not download the model.
         model_path: Optional[str] = None,
+        # Local tokenizer directory. When set, Namo does not load tokenizer files from Hugging Face.
+        tokenizer_path: Optional[str] = None,
         model_filename: str = "model_quant.onnx",
         tokenizer: Any = None,
         session: Any = None,
@@ -78,10 +82,15 @@ class NamoTurnEndGate(TurnEndGate):
         self.debug = debug
         self._lock = threading.Lock()
 
-        self.tokenizer = tokenizer or AutoTokenizer.from_pretrained(
-            self.repo_id,
-            truncation_side=self.truncation_side,
-        )
+        if tokenizer is None:
+            tokenizer_source = tokenizer_path or self.repo_id
+            if tokenizer_path and not os.path.isdir(tokenizer_path):
+                raise FileNotFoundError(f"Namo tokenizer path not found: {tokenizer_path}")
+            tokenizer = AutoTokenizer.from_pretrained(
+                tokenizer_source,
+                truncation_side=self.truncation_side,
+            )
+        self.tokenizer = tokenizer
 
         if session is None:
             if model_path is None:

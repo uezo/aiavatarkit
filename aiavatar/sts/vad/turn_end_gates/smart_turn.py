@@ -24,6 +24,7 @@ class SmartTurnEndGate(TurnEndGate):
     def __init__(
         self,
         *,
+        # Local ONNX model path. When set, Smart Turn does not download the model.
         model_path: Optional[str] = None,
         threshold: float = 0.5,
         max_audio_duration: float = 8.0,
