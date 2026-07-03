@@ -9,7 +9,8 @@ import httpx
 import numpy
 import pyautogui
 from aiavatar.sts.tts.voicevox import VoicevoxSpeechSynthesizer
-from aiavatar import AIAvatar, AIAvatarResponse
+from aiavatar import AIAvatarResponse
+from aiavatar.adapter.local.client import AIAvatar
 from aiavatar.animation import AnimationControllerDummy
 from aiavatar.face import FaceControllerDummy
 

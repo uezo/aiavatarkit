@@ -24,7 +24,7 @@ cd aiavatarkit/examples/websocket
 Install the required libraries.
 
 ```sh
-pip install aiavatar silero-vad fastapi uvicorn websockets
+pip install aiavatar
 ```
 
 Open `server.py` and set your OpenAI API key to `OPENAI_API_KEY`.

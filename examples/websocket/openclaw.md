@@ -39,7 +39,7 @@ Configure your OpenClaw `gateway` settings as follows:
 Install dependencies:
 
 ```sh
-pip install aiavatar uvicorn fastapi websockets
+pip install aiavatar
 ```
 
 In `openclaw.py`, set your tokens:

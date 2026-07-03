@@ -1,4 +1,4 @@
-# pip install aiavatar uvicorn fastapi websockets
+# pip install aiavatar
 import logging
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles

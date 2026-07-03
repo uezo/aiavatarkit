@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import warnings
 from typing import List
 from ...database import PoolProvider
 from ...sts.models import STSRequest, STSResponse
@@ -76,6 +77,12 @@ class AIAvatarLocalServer(Adapter):
         # Debug
         debug: bool = False,
     ):
+        warnings.warn(
+            "AIAvatarLocalServer is deprecated. "
+            "Use AIAvatarWebSocketServer for the server side and AIAvatarWebSocketClient for local Python audio clients.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         # Speech-to-Speech pipeline
         self.sts = sts or STSPipeline(
             # VAD
