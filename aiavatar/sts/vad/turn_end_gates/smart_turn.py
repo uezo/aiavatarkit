@@ -28,6 +28,7 @@ class SmartTurnEndGate(TurnEndGate):
         threshold: float = 0.5,
         max_audio_duration: float = 8.0,
         target_sample_rate: int = 16000,
+        timeout: Optional[float] = 1.5,
         providers: Optional[Sequence[str]] = None,
         inter_op_num_threads: int = 1,
         feature_extractor: Any = None,
@@ -39,6 +40,7 @@ class SmartTurnEndGate(TurnEndGate):
         self.threshold = threshold
         self.max_audio_duration = max_audio_duration
         self.target_sample_rate = target_sample_rate
+        self.timeout = timeout
         self.debug = debug
         self._lock = threading.Lock()
 
@@ -163,4 +165,5 @@ class SmartTurnEndGate(TurnEndGate):
             should_end=should_end,
             confidence=probability,
             reason="smart_turn_complete" if should_end else "smart_turn_incomplete",
+            timeout=None if should_end else self.timeout,
         )

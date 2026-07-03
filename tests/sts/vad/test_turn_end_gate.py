@@ -10,7 +10,7 @@ import pytest
 from aiavatar.sts.stt.base import SpeechRecognizer
 from aiavatar.sts.vad.silero import SileroSpeechDetector
 from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
-from aiavatar.sts.vad.turn_end_gates import TurnEndDecision, TurnEndGate
+from aiavatar.sts.vad.turn_end_gates import FillerOnlyTurnEndGate, TurnEndDecision, TurnEndGate
 
 
 class DummyVADIterator:
@@ -28,17 +28,19 @@ def fake_init_silero_model(self, model_path=None):
 
 
 class AlwaysHoldGate(TurnEndGate):
-    def __init__(self):
+    def __init__(self, timeout=0.3):
         self.calls = []
+        self.timeout = timeout
 
     async def should_end_turn(self, **kwargs):
         self.calls.append(kwargs)
-        return TurnEndDecision(should_end=False, confidence=0.1, reason="hold")
+        return TurnEndDecision(should_end=False, confidence=0.1, reason="hold", timeout=self.timeout)
 
 
 class HoldThenEndGate(TurnEndGate):
-    def __init__(self):
+    def __init__(self, timeout=0.3):
         self.calls = 0
+        self.timeout = timeout
 
     async def should_end_turn(self, **kwargs):
         self.calls += 1
@@ -46,7 +48,17 @@ class HoldThenEndGate(TurnEndGate):
             should_end=self.calls > 1,
             confidence=0.9 if self.calls > 1 else 0.1,
             reason="jitter",
+            timeout=None if self.calls > 1 else self.timeout,
         )
+
+
+class AlwaysPassGate(TurnEndGate):
+    def __init__(self):
+        self.calls = []
+
+    async def should_end_turn(self, **kwargs):
+        self.calls.append(kwargs)
+        return TurnEndDecision(should_end=True, confidence=0.9, reason="pass")
 
 
 class DummySpeechRecognizer(SpeechRecognizer):
@@ -148,8 +160,7 @@ async def test_silero_turn_end_gate_holds_until_timeout(monkeypatch):
     gate = AlwaysHoldGate()
     detector = SileroSpeechDetector(
         silence_duration_threshold=0.2,
-        turn_end_gate=gate,
-        turn_end_gate_timeout=0.3,
+        turn_end_gates=[gate],
         min_duration=0.1,
         sample_rate=16000,
         chunk_size=1,
@@ -192,8 +203,7 @@ async def test_stream_turn_end_gate_holds_until_timeout(monkeypatch):
         speech_recognizer=DummySpeechRecognizer(),
         silence_duration_threshold=0.2,
         segment_silence_threshold=10.0,
-        turn_end_gate=gate,
-        turn_end_gate_timeout=0.3,
+        turn_end_gates=[gate],
         min_duration=0.1,
         sample_rate=16000,
         chunk_size=1,
@@ -237,8 +247,7 @@ async def test_stream_turn_end_gate_receives_recognized_text(monkeypatch):
         speech_recognizer=DummySpeechRecognizer(),
         silence_duration_threshold=0.2,
         segment_silence_threshold=0.1,
-        turn_end_gate=gate,
-        turn_end_gate_timeout=0.3,
+        turn_end_gates=[gate],
         min_duration=0.1,
         sample_rate=16000,
         chunk_size=1,
@@ -284,8 +293,7 @@ async def test_silero_turn_end_gate_latches_first_hold_until_timeout(monkeypatch
     gate = HoldThenEndGate()
     detector = SileroSpeechDetector(
         silence_duration_threshold=0.2,
-        turn_end_gate=gate,
-        turn_end_gate_timeout=0.3,
+        turn_end_gates=[gate],
         min_duration=0.1,
         sample_rate=16000,
         chunk_size=1,
@@ -318,6 +326,130 @@ async def test_silero_turn_end_gate_latches_first_hold_until_timeout(monkeypatch
     assert len(detected) == 1
     assert gate.calls == 1
     assert detected[0][2] == session_id
+
+
+@pytest.mark.asyncio
+async def test_silero_turn_end_gates_wait_if_any_gate_waits(monkeypatch):
+    monkeypatch.setattr(SileroSpeechDetector, "_init_silero_model", fake_init_silero_model)
+    pass_gate = AlwaysPassGate()
+    hold_gate = AlwaysHoldGate(timeout=0.3)
+    detector = SileroSpeechDetector(
+        silence_duration_threshold=0.2,
+        turn_end_gates=[pass_gate, hold_gate],
+        min_duration=0.1,
+        sample_rate=16000,
+        chunk_size=1,
+    )
+    monkeypatch.setattr(detector, "_detect_speech_silero", detect_non_silent)
+
+    session_id = "silero_multiple_gates"
+    speech_chunk = b"\x01\x00" * 1600
+    silence_chunk = b"\x00\x00" * 1600
+
+    await detector.process_samples(speech_chunk, session_id)
+    await detector.process_samples(speech_chunk, session_id)
+    for _ in range(4):
+        await detector.process_samples(silence_chunk, session_id)
+
+    assert pass_gate.calls
+    assert hold_gate.calls
+    session = detector.get_session(session_id)
+    assert session.is_recording is True
+    assert session.turn_end_gate_hold_reasons == ["hold"]
+
+
+@pytest.mark.asyncio
+async def test_filler_only_turn_end_gate_ignores_punctuation():
+    gate = FillerOnlyTurnEndGate(fillers=["えっと"], timeout=5.0)
+
+    decision = await gate.should_end_turn(
+        audio=b"",
+        sample_rate=16000,
+        channels=1,
+        recorded_duration=0.5,
+        silence_duration=0.5,
+        session_id="filler",
+        text=" えっと。 ",
+    )
+
+    assert decision.should_end is False
+    assert decision.timeout == 5.0
+    assert decision.reason == "filler_only"
+
+
+@pytest.mark.asyncio
+async def test_filler_only_turn_end_gate_ignores_prolonged_sound_mark():
+    gate = FillerOnlyTurnEndGate(fillers=["あの"], timeout=5.0)
+
+    decision = await gate.should_end_turn(
+        audio=b"",
+        sample_rate=16000,
+        channels=1,
+        recorded_duration=0.5,
+        silence_duration=0.5,
+        session_id="filler",
+        text="あのー。",
+    )
+
+    assert decision.should_end is False
+    assert decision.timeout == 5.0
+    assert decision.reason == "filler_only"
+
+
+@pytest.mark.asyncio
+async def test_filler_only_turn_end_gate_passes_non_filler_text():
+    gate = FillerOnlyTurnEndGate(fillers=["えっと"], timeout=5.0)
+
+    decision = await gate.should_end_turn(
+        audio=b"",
+        sample_rate=16000,
+        channels=1,
+        recorded_duration=0.5,
+        silence_duration=0.5,
+        session_id="filler",
+        text="えっと、今日は行きます。",
+    )
+
+    assert decision.should_end is True
+    assert decision.timeout is None
+    assert decision.reason == "not_filler_only"
+
+
+@pytest.mark.asyncio
+async def test_filler_only_turn_end_gate_default_does_not_treat_un_as_filler():
+    gate = FillerOnlyTurnEndGate(timeout=5.0)
+
+    decision = await gate.should_end_turn(
+        audio=b"",
+        sample_rate=16000,
+        channels=1,
+        recorded_duration=0.5,
+        silence_duration=0.5,
+        session_id="filler",
+        text="うん。",
+    )
+
+    assert decision.should_end is True
+    assert decision.reason == "not_filler_only"
+
+
+@pytest.mark.asyncio
+async def test_filler_only_turn_end_gate_default_english_fillers():
+    gate = FillerOnlyTurnEndGate(timeout=5.0)
+
+    decision = await gate.should_end_turn(
+        audio=b"",
+        sample_rate=16000,
+        channels=1,
+        recorded_duration=0.5,
+        silence_duration=0.5,
+        session_id="filler",
+        text="Um...",
+    )
+
+    assert decision.should_end is False
+    assert decision.timeout == 5.0
+    assert decision.reason == "filler_only"
 
 
 @pytest.mark.asyncio

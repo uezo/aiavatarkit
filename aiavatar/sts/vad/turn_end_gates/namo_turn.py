@@ -62,6 +62,7 @@ class NamoTurnEndGate(TurnEndGate):
         threshold: float = 0.5,
         max_length: Optional[int] = None,
         truncation_side: str = "left",
+        timeout: Optional[float] = 1.5,
         no_text_should_end: bool = True,
         providers: Optional[list[str]] = None,
         inter_op_num_threads: int = 1,
@@ -73,6 +74,7 @@ class NamoTurnEndGate(TurnEndGate):
         self.no_text_should_end = no_text_should_end
         self.max_length = max_length if max_length is not None else (8192 if language is None else 512)
         self.truncation_side = truncation_side
+        self.timeout = timeout
         self.debug = debug
         self._lock = threading.Lock()
 
@@ -157,6 +159,7 @@ class NamoTurnEndGate(TurnEndGate):
                 should_end=self.no_text_should_end,
                 confidence=None,
                 reason="namo_no_text",
+                timeout=None if self.no_text_should_end else self.timeout,
             )
 
         predicted_label, confidence = await asyncio.to_thread(self._predict, normalized_text)
@@ -175,4 +178,5 @@ class NamoTurnEndGate(TurnEndGate):
             should_end=should_end,
             confidence=confidence,
             reason="namo_end_of_turn" if should_end else "namo_not_end_of_turn",
+            timeout=None if should_end else self.timeout,
         )

@@ -8,6 +8,7 @@ class TurnEndDecision:
     should_end: bool
     confidence: Optional[float] = None
     reason: Optional[str] = None
+    timeout: Optional[float] = None
 
 
 class TurnEndGate(ABC):
