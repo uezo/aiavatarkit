@@ -9,6 +9,7 @@ from typing import AsyncGenerator, Callable, List, Optional, Dict, Awaitable
 from . import SpeechDetector
 from .base import RecordingSessionBase
 from .filters.base import AudioFilter
+from .turn_end_gates.base import TurnEndGate
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +21,12 @@ class RecordingSession(RecordingSessionBase):
         self.vad_buffer: bytearray = bytearray()
         self.vad_iterator = vad_iterator
         self.is_speech_active: bool = False  # VAD state: True after 'start', False after 'end'
+        self.turn_end_gate_hold_active: bool = False
 
     def reset(self):
         super().reset()
         self.is_speech_active = False
+        self.turn_end_gate_hold_active = False
         self.amplitude_threshold = None
         # Reset VAD iterator state for next utterance
         if self.vad_iterator:
@@ -51,7 +54,9 @@ class SileroSpeechDetector(SpeechDetector):
         on_recording_started: Optional[Callable[[str], Awaitable[None]]] = None,
         on_recording_started_min_duration: float = 1.5,
         use_vad_iterator: bool = False,
-        audio_filters: Optional[List[AudioFilter]] = None
+        audio_filters: Optional[List[AudioFilter]] = None,
+        turn_end_gate: Optional[TurnEndGate] = None,
+        turn_end_gate_timeout: Optional[float] = 1.5
     ):
         super().__init__(
             sample_rate=sample_rate,
@@ -79,6 +84,8 @@ class SileroSpeechDetector(SpeechDetector):
         self.chunk_size = chunk_size
         self.model_pool_size = model_pool_size
         self.use_vad_iterator = use_vad_iterator
+        self.turn_end_gate = turn_end_gate
+        self.turn_end_gate_timeout = turn_end_gate_timeout
 
         # Initialize Silero VAD model pool
         self._init_silero_model(model_path)
@@ -96,6 +103,7 @@ class SileroSpeechDetector(SpeechDetector):
             "speech_probability_threshold": self.speech_probability_threshold,
             "chunk_size": self.chunk_size,
             "use_vad_iterator": self.use_vad_iterator,
+            "turn_end_gate_timeout": self.turn_end_gate_timeout,
         }
 
     def set_config(self, config: dict) -> dict:
@@ -237,6 +245,78 @@ class SileroSpeechDetector(SpeechDetector):
             logger.error(f"Error in Silero VAD detection: {e}")
             return False
 
+    async def _should_end_turn_with_gate(
+        self,
+        session: RecordingSession,
+        recorded_duration: float,
+        text: Optional[str] = None,
+    ) -> bool:
+        """Confirm a VAD turn-end candidate with the optional gate.
+
+        The gate is only consulted after silence_duration_threshold has already
+        been met. turn_end_gate_timeout forces completion after the configured
+        extra silence, even if the gate keeps returning should_end=False.
+        """
+        if self.turn_end_gate is None:
+            return True
+
+        hold_duration = max(0.0, session.silence_duration - self.silence_duration_threshold)
+        if self.turn_end_gate_timeout is not None and hold_duration >= self.turn_end_gate_timeout:
+            if self.debug:
+                logger.info(
+                    "Turn-end gate: FORCE timeout session=%s, hold_duration=%.3f, timeout=%.3f",
+                    session.session_id,
+                    hold_duration,
+                    self.turn_end_gate_timeout
+                )
+            return True
+
+        if session.turn_end_gate_hold_active:
+            return False
+
+        try:
+            decision = await self.turn_end_gate.should_end_turn(
+                audio=bytes(session.buffer),
+                sample_rate=self.sample_rate,
+                channels=self.channels,
+                recorded_duration=recorded_duration,
+                silence_duration=session.silence_duration,
+                session_id=session.session_id,
+                text=text,
+                session=session,
+            )
+        except Exception:
+            logger.error("Error in turn-end gate; ending turn with default behavior", exc_info=True)
+            return True
+
+        if isinstance(decision, bool):
+            should_end = decision
+            confidence = None
+            reason = None
+        else:
+            should_end = decision.should_end
+            confidence = decision.confidence
+            reason = decision.reason
+
+        if self.debug:
+            logger.info(
+                "Turn-end gate: %s session=%s, confidence=%s, reason=%s, hold_duration=%.3f",
+                "PASS" if should_end else "WAIT",
+                session.session_id,
+                confidence,
+                reason,
+                hold_duration
+            )
+        if not should_end:
+            session.turn_end_gate_hold_active = True
+            if self.debug and self.turn_end_gate_timeout is not None:
+                logger.info(
+                    "Turn-end gate: WAIT latched session=%s, will force after %.3f sec of additional silence",
+                    session.session_id,
+                    self.turn_end_gate_timeout
+                )
+        return should_end
+
     async def execute_on_speech_detected(self, recorded_data: bytes, recorded_duration: float, session_id: str):
         await self._execute_on_speech_detected(recorded_data, None, None, recorded_duration, session_id)
 
@@ -308,6 +388,7 @@ class SileroSpeechDetector(SpeechDetector):
 
             if speech_detected:
                 session.silence_duration = 0
+                session.turn_end_gate_hold_active = False
             else:
                 session.silence_duration += sample_duration
 
@@ -321,6 +402,9 @@ class SileroSpeechDetector(SpeechDetector):
                     if self.debug:
                         logger.info(f"Recording too short: {recorded_duration} sec")
                 else:
+                    if not await self._should_end_turn_with_gate(session, recorded_duration):
+                        return session.is_recording
+
                     if self.debug:
                         logger.info(f"Recording finished: {recorded_duration} sec")
                     recorded_data = bytes(session.buffer)
