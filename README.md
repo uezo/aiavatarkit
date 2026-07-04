@@ -22,8 +22,6 @@
 
 **Requirements**: Python 3.11+, OpenAI API key, and a running VOICEVOX instance for TTS
 
-### 📺 Local (Console)
-
 Install AIAvatarKit.
 
 ```sh
@@ -34,38 +32,6 @@ pip install aiavatar
 
 
 Make the script as `run.py`.
-
-```python
-import asyncio
-from aiavatar import AIAvatar
-
-aiavatar_app = AIAvatar(
-    openai_api_key=OPENAI_API_KEY,
-    debug=True
-)
-asyncio.run(aiavatar_app.start_listening())
-```
-
-Start AIAvatar. Also, don't forget to launch VOICEVOX beforehand.
-
-```bash
-$ python run.py
-```
-
-Conversation will start when you say the wake word "こんにちは" (or "Hello" when language is not `ja-JP`).
-
-Feel free to enjoy the conversation afterwards!
-
-
-### 🌐 WebSocket (Browser)
-
-Install AIAvatarKit and additional dependencies.
-
-```sh
-pip install aiavatar fastapi uvicorn websockets
-```
-
-Make the script as `ws.py`.
 
 ```python
 from fastapi import FastAPI
@@ -95,7 +61,7 @@ setup_admin_panel(app, adapter=aiavatar_app)
 Start server. Also, don't forget to launch VOICEVOX beforehand.
 
 ```bash
-$ python -m uvicorn ws:app
+$ python -m uvicorn run:app
 ```
 
 Open following URLs and enjoy the conversation!
@@ -104,6 +70,8 @@ Open following URLs and enjoy the conversation!
 - MotionPNGTuber: http://127.0.0.1:8000/static/mpt.html
 
 You can also access the Admin Panel at http://127.0.0.1:8000/admin.
+
+For a Python console client that uses local microphone and speaker devices, see [WebSocket](#-websocket).
 
 
 ## 🔖 Contents
@@ -126,6 +94,8 @@ You can also access the Admin Panel at http://127.0.0.1:8000/admin.
 - [🎙️ Speech Detector](#%EF%B8%8F-speech-detector)
     - [Silero VAD Speech Detector](#silero-speech-detector)
     - [Silero Stream Speech Detector](#silero-stream-speech-detector)
+    - [Audio Filters](#audio-filters)
+    - [Turn-End Gates](#turn-end-gates)
     - [Azure Stream Speech Detector](#azure-stream-speech-detector)
     - [AWS Stream Speech Detector](#aws-stream-speech-detector)
     - [Customization](#customization)
@@ -911,10 +881,23 @@ vad = SileroSpeechDetector(
 )
 ```
 
-To use a local Silero VAD model file instead of downloading from the hub, set `model_path`:
+To use a local Silero VAD hub repository/cache instead of downloading from the network, set `hub_cache_path`.
+The path must point to a Silero VAD repository/cache directory that contains `hubconf.py`:
 
 ```python
 vad = SileroSpeechDetector(
+    hub_cache_path="/models/silero-vad"
+)
+```
+
+When `hub_cache_path` is set, the detector loads the Silero model and utility functions from that local path only.
+If the path does not exist, initialization fails instead of downloading from the network.
+
+For custom JIT model files, `model_path` is still supported. In that case, the detector first loads the Silero utilities from `hub_cache_path` or the default Torch Hub source, then replaces the model with the local JIT file:
+
+```python
+vad = SileroSpeechDetector(
+    hub_cache_path="/models/silero-vad",
     model_path="path/to/silero_vad.jit"
 )
 ```
@@ -964,6 +947,270 @@ def validate(text):
     if len(text) < 2:
         return "Text too short"  # Return error message to reject
     return None  # Return None to accept
+```
+
+
+### Audio Filters
+
+`SileroSpeechDetector` and `SileroStreamSpeechDetector` can run audio through `audio_filters` before VAD, recording, and speech recognition. Filters are applied in order, and downstream processing sees the filtered audio.
+
+This is useful for acoustic preprocessing such as near-field gating, EQ, gain normalization, and debug recording.
+
+```python
+from aiavatar.sts.vad.filters import (
+    AGCFilter,
+    HighShelfFilter,
+    NearFieldAudioGate,
+    SessionAudioRecorder,
+)
+from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
+
+audio_recorder = SessionAudioRecorder("debug_audio")
+
+vad = SileroStreamSpeechDetector(
+    speech_recognizer=speech_recognizer,
+    audio_filters=[
+        audio_recorder.tap("raw"),
+        NearFieldAudioGate(
+            min_rms_db=-42.0,
+            open_snr_db_threshold=12.0,
+            close_snr_db_threshold=6.0,
+        ),
+        HighShelfFilter(gain_db=6.0, cutoff_hz=2000.0),
+        AGCFilter(target_rms_db=-20.0),
+        audio_recorder.tap("processed"),
+    ],
+)
+```
+
+Built-in filters:
+
+- `NearFieldAudioGate`: attenuates far-field or low-SNR audio before it reaches VAD. It uses a short lookahead buffer so speech onsets are not clipped.
+- `HighShelfFilter`: boosts or cuts high frequencies above a cutoff. This can help intelligibility on band-limited telephony audio.
+- `AGCFilter`: automatic gain control that raises quiet speech toward a target RMS level while avoiding clipping.
+- `SessionAudioRecorder`: debug tap that writes audio at selected points in the filter chain to WAV files.
+
+Filter order matters. Put `NearFieldAudioGate` before `AGCFilter`; otherwise AGC may amplify far-field audio and make the gate less useful. `SessionAudioRecorder.tap()` can be placed before and after filters to compare raw and processed audio.
+
+You can implement a custom filter by subclassing `AudioFilter`:
+
+```python
+from aiavatar.sts.vad.filters import AudioFilter
+
+class MyAudioFilter(AudioFilter):
+    def process(self, samples: bytes, session_id: str) -> bytes:
+        # samples are 16-bit linear PCM bytes
+        return samples
+
+    def reset_session(self, session_id: str):
+        # Optional: release per-session state
+        pass
+```
+
+Filters may keep short internal buffers and return `b""` while warming up. The detector treats this as "no output yet" and keeps the current recording state unchanged.
+
+
+### Turn-End Gates
+
+`SileroSpeechDetector` and `SileroStreamSpeechDetector` can use optional turn-end gates to confirm a VAD turn-end candidate. Gates are called only after `silence_duration_threshold` has already been reached. All gates must pass to end the turn. If any gate returns "wait", the detector keeps the current recording open until the user resumes speaking or the waiting gate's timeout forces the turn to end.
+
+This is useful for utterances that contain a short pause but are likely to continue, such as trailing conjunctions or filler phrases.
+
+```python
+vad = SileroSpeechDetector(
+    silence_duration_threshold=0.5,
+    turn_end_gates=[my_gate],
+)
+```
+
+Gate timeouts are measured after `silence_duration_threshold` has been reached. For example, with `silence_duration_threshold=0.5` and a gate timeout of `2.0`, the longest silence wait is approximately 2.5 seconds.
+
+Gate coordination is handled by `TurnEndGateManager`. VAD detectors only ask the manager whether the current turn-end candidate should end or keep recording. The manager keeps per-session wait state, passes previous gate decisions through `TurnEndGateContext`, and uses the longest timeout among gates that returned wait. If the detector reaches `max_duration`, it still ends the turn even when a gate is holding it, so gate waits cannot keep the recording buffer open forever.
+
+Gates can opt into background execution by setting `run_in_background=True`. Background gates do not block audio processing while they are pending. While pending, their `timeout` is used as a provisional wait timeout, so a detector can be configured with only background gates. When a background gate finishes, its result replaces the provisional pending decision. If the result is still pending when the timeout expires, it is ignored and the turn ends.
+
+`SmartTurnEndGate` and `NamoTurnEndGate` use one ONNX Runtime session per gate instance and serialize inference with an internal lock. This is fine for typical usage because gates run only after a VAD turn-end candidate, not for every audio chunk. For very high concurrency, create separate gate instances per detector or worker process, or add a small gate/session pool if turn-end gate latency becomes visible.
+
+#### Smart Turn Gate
+
+`SmartTurnEndGate` uses [pipecat-ai/smart-turn](https://github.com/pipecat-ai/smart-turn) to classify the current recorded audio as complete or incomplete.
+
+```sh
+pip install "aiavatar[smart-turn]"
+```
+
+```python
+from aiavatar.sts.vad.silero import SileroSpeechDetector
+from aiavatar.sts.vad.turn_end_gates.smart_turn import SmartTurnEndGate
+
+turn_end_gate = SmartTurnEndGate(
+    threshold=0.5,
+    timeout=1.5,
+    debug=True,
+)
+
+vad = SileroSpeechDetector(
+    silence_duration_threshold=0.5,
+    turn_end_gates=[turn_end_gate],
+    debug=True,
+)
+```
+
+To use a local Smart Turn ONNX model instead of downloading from Hugging Face, set `model_path`:
+
+```python
+turn_end_gate = SmartTurnEndGate(
+    model_path="/models/smart-turn-v3.2-cpu.onnx",
+)
+```
+
+#### Filler-Only Gate
+
+`FillerOnlyTurnEndGate` waits longer when the recognized text is only a filler phrase, or ends with a trailing filler phrase, such as "えっと", "あの", "um", or "uh". It normalizes text before matching, so spaces, punctuation, and symbols are ignored; for example, "えっと。" matches "えっと". One-character fillers such as "あ" are not used for trailing-filler matching, and short replies that can be meaningful answers, such as "うん", are not included in the default filler list.
+
+This gate is most useful with `SileroStreamSpeechDetector`, because it needs recognized text.
+
+```python
+from aiavatar.sts.vad.turn_end_gates import FillerOnlyTurnEndGate, FillerPhrase
+
+filler_gate = FillerOnlyTurnEndGate(
+    name="filler",
+    fillers=[
+        FillerPhrase("あの", match="suffix", timeout=6.0),
+        FillerPhrase("えっと", match="suffix"),
+        "um",  # str means exact match
+    ],
+    timeout=5.0,
+    debug=True,
+)
+```
+
+#### Namo Turn Gate
+
+`NamoTurnEndGate` uses [videosdk-live/NAMO-Turn-Detector-v1](https://github.com/videosdk-live/NAMO-Turn-Detector-v1) to classify recognized text as end-of-turn or not-end-of-turn. It is most useful with `SileroStreamSpeechDetector`, because the stream detector can pass accumulated partial recognition text to the gate.
+
+```sh
+pip install "aiavatar[namo-turn]"
+```
+
+```python
+from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
+from aiavatar.sts.vad.turn_end_gates.filler import FillerOnlyTurnEndGate
+from aiavatar.sts.vad.turn_end_gates.namo_turn import NamoTurnEndGate
+
+filler_gate = FillerOnlyTurnEndGate(
+    name="filler",
+    timeout=5.0,
+)
+
+turn_end_gate = NamoTurnEndGate(
+    name="namo",
+    language="ja",   # Japanese model. Use language=None for the multilingual model.
+    threshold=0.5,
+    timeout=1.5,
+    debug=True,
+)
+
+vad = SileroStreamSpeechDetector(
+    speech_recognizer=speech_recognizer,
+    segment_silence_threshold=0.05,
+    silence_duration_threshold=0.5,
+    turn_end_gates=[
+        filler_gate,
+        turn_end_gate,
+    ],
+    debug=True,
+)
+```
+
+For long recordings, Namo keeps the end of the recognized text when tokenized text exceeds the model limit, because turn-end detection depends most on the final words. If no text is available, `NamoTurnEndGate` defaults to ending the turn. You can change this with `no_text_should_end=False`.
+
+To run Namo from local files without downloading from Hugging Face, set both `model_path` and `tokenizer_path`:
+
+```python
+turn_end_gate = NamoTurnEndGate(
+    language="ja",
+    model_path="/models/namo/model_quant.onnx",
+    tokenizer_path="/models/namo/tokenizer",
+)
+```
+
+#### LLM Turn Gate
+
+`LLMTurnEndGate` uses an OpenAI-compatible Chat Completions client to make a slower but more flexible text-based decision. It is useful as a second-stage gate after a cheaper gate has already decided to wait. It runs in the background by default, so the current audio receive loop is not blocked while waiting for the LLM response.
+
+Pass a long-lived client instance to the constructor. The gate reuses that client instead of creating one per decision, so the underlying HTTP connection pool can be reused.
+
+```python
+from openai import AsyncOpenAI
+
+from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
+from aiavatar.sts.vad.turn_end_gates import FillerOnlyTurnEndGate
+from aiavatar.sts.vad.turn_end_gates.llm import LLMTurnEndGate
+from aiavatar.sts.vad.turn_end_gates.namo_turn import NamoTurnEndGate
+
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+filler_gate = FillerOnlyTurnEndGate(
+    name="filler",
+    timeout=5.0,
+)
+
+namo_gate = NamoTurnEndGate(
+    name="namo",
+    language="ja",
+    threshold=0.5,
+    timeout=1.5,
+)
+
+llm_gate = LLMTurnEndGate(
+    openai_client=openai_client,
+    model="gpt-4.1-mini",
+    depends_on=["filler", "namo"],
+    timeout=10.0,
+    request_timeout=2.0,
+    debug=True,
+)
+
+vad = SileroStreamSpeechDetector(
+    speech_recognizer=speech_recognizer,
+    silence_duration_threshold=0.5,
+    turn_end_gates=[
+        filler_gate,
+        namo_gate,
+        llm_gate,
+    ],
+)
+```
+
+When `depends_on` is set, the LLM gate runs only if one of the named previous gates returned wait. The value can be a string or a list of gate names. In the example above, normal utterances do not call the LLM; the LLM is only called when the filler or Namo gate waits. The primary gate first holds the turn for its own timeout. If the LLM finishes during that wait and returns wait, the manager extends the wait to the LLM timeout, so the `10.0` second LLM timeout takes priority. If the LLM is still pending at the primary gate timeout, the pending LLM result is ignored and the turn ends.
+
+`LLMTurnEndGate` accepts `temperature` and `reasoning_effort`, but only passes them to the API when they are explicitly set. Use the option supported by the model you choose.
+
+#### Custom Gate
+
+Implement `TurnEndGate` to plug in your own decision logic. Gates receive the current recorded audio, timing information, the session id, recognized text when available, and a context containing previous gate decisions.
+
+```python
+from aiavatar.sts.vad.turn_end_gates import TurnEndDecision, TurnEndGate, TurnEndGateContext
+
+class MyTurnEndGate(TurnEndGate):
+    async def should_end_turn(
+        self,
+        *,
+        audio: bytes,
+        sample_rate: int,
+        channels: int,
+        recorded_duration: float,
+        silence_duration: float,
+        session_id: str,
+        text: str | None = None,
+        session=None,
+        context: TurnEndGateContext | None = None,
+    ) -> TurnEndDecision:
+        if text and text.endswith("and"):
+            return TurnEndDecision(should_end=False, confidence=0.9, reason="continues", timeout=3.0)
+        return TurnEndDecision(should_end=True, confidence=0.9, reason="complete")
 ```
 
 
@@ -1640,7 +1887,11 @@ uvicorn server:app
 **NOTE:** When you specify `response_audio_chunk_size` in the `AIAvatarWebSocketServer` instance, the audio response will be streamed as PCM data chunks of the specified byte size. In this case, no WAVE header will be included in the response - you'll receive raw PCM audio data only.
 
 
-Next is the simplest example of a client program:
+Next is the simplest example of a Python client program. This client uses local microphone and speaker devices, so install the optional local audio dependencies first:
+
+```sh
+pip install "aiavatar[local-audio]"
+```
 
 ```python
 import asyncio
@@ -1912,7 +2163,7 @@ First, run the commands below in python interpreter to check the audio devices.
 ```sh
 $ python
 
->>> from aiavatar import AudioDevice
+>>> from aiavatar.device import AudioDevice
 >>> AudioDevice().list_audio_devices()
 0: Headset Microphone (Oculus Virt
     :
@@ -3648,7 +3899,7 @@ First, check the device indexes you want to use.
 ```sh
 $ python
 
->>> from aiavatar import AudioDevice
+>>> from aiavatar.device import AudioDevice
 >>> AudioDevice().list_audio_devices()
 {'index': 0, 'name': '外部マイク', 'max_input_channels': 1, 'max_output_channels': 0, 'default_sample_rate': 44100.0}
 {'index': 1, 'name': '外部ヘッドフォン', 'max_input_channels': 0, 'max_output_channels': 2, 'default_sample_rate': 44100.0}
