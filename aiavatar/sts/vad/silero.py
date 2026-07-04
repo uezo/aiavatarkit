@@ -10,6 +10,7 @@ from . import SpeechDetector
 from .base import RecordingSessionBase
 from .filters.base import AudioFilter
 from .turn_end_gates.base import TurnEndGate
+from .turn_end_gates.manager import TurnEndGateManager
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,11 @@ class SileroSpeechDetector(SpeechDetector):
         self.model_pool_size = model_pool_size
         self.use_vad_iterator = use_vad_iterator
         self.turn_end_gates = turn_end_gates or []
+        self.turn_end_gate_manager = TurnEndGateManager(
+            self.turn_end_gates,
+            debug=debug,
+            log=logger,
+        )
 
         # Initialize Silero VAD model pool
         self._init_silero_model(model_path, hub_cache_path)
@@ -260,99 +266,17 @@ class SileroSpeechDetector(SpeechDetector):
         recorded_duration: float,
         text: Optional[str] = None,
     ) -> bool:
-        """Confirm a VAD turn-end candidate with optional gates.
-
-        Gates are only consulted after silence_duration_threshold has already
-        been met. All gates must pass to end the turn. If any gate waits, its
-        timeout controls when the turn is forced to end.
-        """
-        if not self.turn_end_gates:
-            return True
-
-        hold_duration = max(0.0, session.silence_duration - self.silence_duration_threshold)
-        if session.turn_end_gate_hold_active:
-            timeout = session.turn_end_gate_hold_timeout
-            if timeout is not None and hold_duration >= timeout:
-                if self.debug:
-                    logger.info(
-                        "Turn-end gates: FORCE timeout session=%s, hold_duration=%.3f, timeout=%.3f, reasons=%s",
-                        session.session_id,
-                        hold_duration,
-                        timeout,
-                        session.turn_end_gate_hold_reasons,
-                    )
-                return True
-            return False
-
-        decisions = []
-        try:
-            for gate in self.turn_end_gates:
-                decision = await gate.should_end_turn(
-                    audio=bytes(session.buffer),
-                    sample_rate=self.sample_rate,
-                    channels=self.channels,
-                    recorded_duration=recorded_duration,
-                    silence_duration=session.silence_duration,
-                    session_id=session.session_id,
-                    text=text,
-                    session=session,
-                )
-                decisions.append((gate, decision))
-        except Exception:
-            logger.error("Error in turn-end gate; ending turn with default behavior", exc_info=True)
-            return True
-
-        wait_decisions = []
-        for gate, decision in decisions:
-            if isinstance(decision, bool):
-                should_end = decision
-                confidence = None
-                reason = None
-                timeout = None
-            else:
-                should_end = decision.should_end
-                confidence = decision.confidence
-                reason = decision.reason
-                timeout = decision.timeout
-
-            if self.debug:
-                logger.info(
-                    "Turn-end gate[%s]: %s session=%s, confidence=%s, reason=%s, timeout=%s, hold_duration=%.3f",
-                    gate.__class__.__name__,
-                    "PASS" if should_end else "WAIT",
-                    session.session_id,
-                    confidence,
-                    reason,
-                    timeout,
-                    hold_duration,
-                )
-
-            if not should_end:
-                wait_decisions.append((reason, timeout))
-
-        if not wait_decisions:
-            return True
-
-        timeout_values = [timeout for _, timeout in wait_decisions if timeout is not None]
-        effective_timeout = None if len(timeout_values) != len(wait_decisions) else max(timeout_values)
-        session.turn_end_gate_hold_active = True
-        session.turn_end_gate_hold_timeout = effective_timeout
-        session.turn_end_gate_hold_reasons = [reason or "wait" for reason, _ in wait_decisions]
-        if self.debug:
-            if effective_timeout is None:
-                logger.info(
-                    "Turn-end gates: WAIT latched session=%s, no force timeout, reasons=%s",
-                    session.session_id,
-                    session.turn_end_gate_hold_reasons,
-                )
-            else:
-                logger.info(
-                    "Turn-end gates: WAIT latched session=%s, will force after %.3f sec of additional silence, reasons=%s",
-                    session.session_id,
-                    effective_timeout,
-                    session.turn_end_gate_hold_reasons,
-                )
-        return False
+        """Confirm a VAD turn-end candidate with optional gates."""
+        return await self.turn_end_gate_manager.should_end_turn(
+            session=session,
+            audio_factory=lambda: bytes(session.buffer),
+            sample_rate=self.sample_rate,
+            channels=self.channels,
+            recorded_duration=recorded_duration,
+            silence_duration=session.silence_duration,
+            silence_duration_threshold=self.silence_duration_threshold,
+            text=text,
+        )
 
     async def execute_on_speech_detected(self, recorded_data: bytes, recorded_duration: float, session_id: str):
         await self._execute_on_speech_detected(recorded_data, None, None, recorded_duration, session_id)
@@ -372,6 +296,7 @@ class SileroSpeechDetector(SpeechDetector):
             return session.is_recording
 
         if self.should_mute():
+            self.turn_end_gate_manager.reset_session(session_id, session=session)
             session.reset()
             session.preroll_buffer.clear()
             session.vad_buffer.clear()
@@ -425,9 +350,7 @@ class SileroSpeechDetector(SpeechDetector):
 
             if speech_detected:
                 session.silence_duration = 0
-                session.turn_end_gate_hold_active = False
-                session.turn_end_gate_hold_timeout = None
-                session.turn_end_gate_hold_reasons = []
+                self.turn_end_gate_manager.reset_session(session.session_id, session=session)
             else:
                 session.silence_duration += sample_duration
 
@@ -435,7 +358,15 @@ class SileroSpeechDetector(SpeechDetector):
             # Check on_recording_started trigger condition
             await self._check_and_trigger_recording_started(session)
 
-            if session.silence_duration >= self.silence_duration_threshold:
+            if session.record_duration >= self.max_duration:
+                if self.debug:
+                    logger.info(f"Recording max duration reached: {session.record_duration} sec")
+                recorded_data = bytes(session.buffer)
+                asyncio.create_task(self.execute_on_speech_detected(recorded_data, session.record_duration, session.session_id))
+                self.turn_end_gate_manager.reset_session(session.session_id, session=session)
+                session.reset()
+
+            elif session.silence_duration >= self.silence_duration_threshold:
                 recorded_duration = session.record_duration - session.silence_duration
                 if recorded_duration < self.min_duration:
                     if self.debug:
@@ -448,13 +379,6 @@ class SileroSpeechDetector(SpeechDetector):
                         logger.info(f"Recording finished: {recorded_duration} sec")
                     recorded_data = bytes(session.buffer)
                     asyncio.create_task(self.execute_on_speech_detected(recorded_data, recorded_duration, session.session_id))
-                session.reset()
-
-            elif session.record_duration >= self.max_duration:
-                if self.debug:
-                    logger.info(f"Recording max duration reached: {session.record_duration} sec")
-                recorded_data = bytes(session.buffer)
-                asyncio.create_task(self.execute_on_speech_detected(recorded_data, session.record_duration, session.session_id))
                 session.reset()
 
         return session.is_recording
@@ -493,6 +417,7 @@ class SileroSpeechDetector(SpeechDetector):
 
     def reset_session(self, session_id: str):
         if session := self.recording_sessions.get(session_id):
+            self.turn_end_gate_manager.reset_session(session_id, session=session)
             session.reset()
 
     def reset_session_audio_state(self, session_id: str, clear_preroll: bool = True):
@@ -504,6 +429,7 @@ class SileroSpeechDetector(SpeechDetector):
         into the next turn.
         """
         if session := self.recording_sessions.get(session_id):
+            self.turn_end_gate_manager.reset_session(session_id, session=session)
             dropped_buffer_bytes = len(session.buffer)
             dropped_preroll_bytes = sum(len(f) for f in session.preroll_buffer)
             dropped_vad_bytes = len(session.vad_buffer)
@@ -529,8 +455,11 @@ class SileroSpeechDetector(SpeechDetector):
 
     def delete_session(self, session_id: str):
         if session_id in self.recording_sessions:
+            self.turn_end_gate_manager.reset_session(session_id, session=self.recording_sessions[session_id])
             self.recording_sessions[session_id].reset()
             del self.recording_sessions[session_id]
+        else:
+            self.turn_end_gate_manager.reset_session(session_id)
         for audio_filter in self.audio_filters:
             try:
                 audio_filter.reset_session(session_id)

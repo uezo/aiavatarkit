@@ -8,7 +8,7 @@ import onnxruntime as ort
 from huggingface_hub import hf_hub_download
 from transformers import WhisperFeatureExtractor
 
-from .base import TurnEndDecision, TurnEndGate
+from .base import TurnEndDecision, TurnEndGate, TurnEndGateContext
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,7 @@ class SmartTurnEndGate(TurnEndGate):
     def __init__(
         self,
         *,
+        name: str = "smart_turn",
         # Local ONNX model path. When set, Smart Turn does not download the model.
         model_path: Optional[str] = None,
         threshold: float = 0.5,
@@ -38,6 +39,7 @@ class SmartTurnEndGate(TurnEndGate):
         hf_filename: str = "smart-turn-v3.2-cpu.onnx",
         debug: bool = False,
     ):
+        self.name = name
         self.threshold = threshold
         self.max_audio_duration = max_audio_duration
         self.target_sample_rate = target_sample_rate
@@ -147,6 +149,7 @@ class SmartTurnEndGate(TurnEndGate):
         session_id: str,
         text: Optional[str] = None,
         session: Any = None,
+        context: Optional[TurnEndGateContext] = None,
     ) -> TurnEndDecision:
         waveform = self._prepare_audio(audio, sample_rate, channels)
         probability = await asyncio.to_thread(self._predict_probability, waveform)

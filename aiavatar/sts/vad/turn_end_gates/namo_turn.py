@@ -9,7 +9,7 @@ import onnxruntime as ort
 from huggingface_hub import hf_hub_download
 from transformers import AutoTokenizer
 
-from .base import TurnEndDecision, TurnEndGate
+from .base import TurnEndDecision, TurnEndGate, TurnEndGateContext
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,7 @@ class NamoTurnEndGate(TurnEndGate):
     def __init__(
         self,
         *,
+        name: str = "namo",
         language: Optional[str] = "ja",
         repo_id: Optional[str] = None,
         # Local ONNX model path. When set, Namo does not download the model.
@@ -72,6 +73,7 @@ class NamoTurnEndGate(TurnEndGate):
         inter_op_num_threads: int = 1,
         debug: bool = False,
     ):
+        self.name = name
         self.language = language
         self.repo_id = repo_id or get_namo_repo_id(language)
         self.threshold = threshold
@@ -153,6 +155,7 @@ class NamoTurnEndGate(TurnEndGate):
         session_id: str,
         text: Optional[str] = None,
         session: Any = None,
+        context: Optional[TurnEndGateContext] = None,
     ) -> TurnEndDecision:
         normalized_text = (text or "").strip()
         if not normalized_text:
