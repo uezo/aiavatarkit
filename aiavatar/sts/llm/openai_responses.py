@@ -6,6 +6,10 @@ import openai as openai_module
 from . import LLMService, LLMResponse, ToolCall, Tool
 from .context_manager import ContextManager
 from .response_id_store import ResponseIdStore, SQLiteResponseIdStore
+from .openai_responses_recovery import (
+    build_recovery_input,
+    is_previous_response_not_found,
+)
 
 logger = getLogger(__name__)
 
@@ -194,7 +198,9 @@ class OpenAIResponsesService(LLMService):
         if self.debug:
             logger.info(f"Request to OpenAI Responses API: {response_params}")
 
-        # Send request
+        # Send request. If the server-side conversation is unavailable (for
+        # example after switching between OpenAI and Azure), rebuild it from
+        # the locally stored messages and retry once.
         try:
             stream_resp = await self.openai_client.responses.create(**response_params)
 
@@ -202,11 +208,54 @@ class OpenAIResponsesService(LLMService):
             response_json = None
             try:
                 response_json = aserr.response.json()
-            except:
+            except Exception:
                 pass
-            logger.warning(f"APIStatusError from OpenAI Responses API: {aserr}")
-            yield LLMResponse(context_id=context_id, error_info={"exception": aserr, "response_json": response_json})
-            return
+
+            can_recover = (
+                "previous_response_id" in response_params
+                and messages
+                and messages[-1].get("role") == "user"
+                and is_previous_response_not_found(response_json)
+            )
+            if can_recover:
+                previous_response_id = response_params.pop("previous_response_id")
+                logger.warning(
+                    "Previous response not found; rebuilding conversation from "
+                    f"local history and retrying: context_id={context_id}, "
+                    f"previous_response_id={previous_response_id}"
+                )
+                await self.response_id_store.delete(context_id)
+                response_params["input"] = await build_recovery_input(
+                    context_id,
+                    user_id,
+                    messages,
+                    system_prompt_params,
+                    self._get_initial_messages,
+                    self.context_manager,
+                )
+                try:
+                    stream_resp = await self.openai_client.responses.create(**response_params)
+                except openai_module.APIStatusError as retry_error:
+                    retry_response_json = None
+                    try:
+                        retry_response_json = retry_error.response.json()
+                    except Exception:
+                        pass
+                    logger.warning(
+                        f"APIStatusError from OpenAI Responses API after retry: {retry_error}"
+                    )
+                    yield LLMResponse(context_id=context_id, error_info={"exception": retry_error, "response_json": retry_response_json})
+                    return
+                except Exception as retry_error:
+                    logger.warning(
+                        f"Error from OpenAI Responses API after retry: {retry_error}"
+                    )
+                    yield LLMResponse(context_id=context_id, error_info={"exception": retry_error, "response_json": None})
+                    return
+            else:
+                logger.warning(f"APIStatusError from OpenAI Responses API: {aserr}")
+                yield LLMResponse(context_id=context_id, error_info={"exception": aserr, "response_json": response_json})
+                return
 
         except Exception as ex:
             logger.warning(f"Error from OpenAI Responses API: {ex}")
