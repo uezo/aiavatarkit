@@ -9,6 +9,10 @@ import websockets
 from . import LLMService, LLMResponse, ToolCall, Tool
 from .context_manager import ContextManager
 from .response_id_store import ResponseIdStore, SQLiteResponseIdStore
+from .openai_responses_recovery import (
+    build_recovery_input,
+    is_previous_response_not_found,
+)
 
 logger = getLogger(__name__)
 
@@ -269,6 +273,39 @@ class OpenAIResponsesWebSocketService(LLMService):
             async with self._ws_pool.connection() as ws:
                 current_input = messages
                 suppress_output = False
+                recovery_attempted = False
+
+                async def try_recovery(error: dict, ws_message: dict, output_received: bool) -> bool:
+                    nonlocal current_input, recovery_attempted
+                    can_recover = (
+                        not recovery_attempted
+                        and not output_received
+                        and "previous_response_id" in ws_message
+                        and current_input is messages
+                        and messages
+                        and messages[-1].get("role") == "user"
+                        and is_previous_response_not_found(error)
+                    )
+                    if not can_recover:
+                        return False
+
+                    previous_response_id = ws_message["previous_response_id"]
+                    logger.warning(
+                        "Previous response not found; rebuilding conversation from "
+                        f"local history and retrying: context_id={context_id}, "
+                        f"previous_response_id={previous_response_id}"
+                    )
+                    await self.response_id_store.delete(context_id)
+                    current_input = await build_recovery_input(
+                        context_id,
+                        user_id,
+                        messages,
+                        system_prompt_params,
+                        self._get_initial_messages,
+                        self.context_manager,
+                    )
+                    recovery_attempted = True
+                    return True
 
                 while True:
                     # Build response.create message
@@ -292,6 +329,8 @@ class OpenAIResponsesWebSocketService(LLMService):
                     # Receive and process events until response completes
                     tool_calls: List[ToolCall] = []
                     tool_call_map: Dict[int, int] = {}
+                    retry_with_history = False
+                    output_received = False
 
                     while True:
                         raw = await ws.recv()
@@ -299,6 +338,7 @@ class OpenAIResponsesWebSocketService(LLMService):
                         event_type = event.get("type")
 
                         if event_type == "response.output_text.delta":
+                            output_received = True
                             if not suppress_output:
                                 yield LLMResponse(context_id=context_id, text=event.get("delta", ""))
 
@@ -323,15 +363,24 @@ class OpenAIResponsesWebSocketService(LLMService):
                         elif event_type == "response.failed":
                             resp = event.get("response", {})
                             error = resp.get("error", {})
+                            if await try_recovery(error, ws_message, output_received):
+                                retry_with_history = True
+                                break
                             logger.warning(f"Response failed from OpenAI Responses API (WebSocket): {error}")
                             yield LLMResponse(context_id=context_id, error_info={"exception": Exception(error.get("message", "Unknown error")), "response_json": resp})
                             return
 
                         elif event_type == "error":
                             error = event.get("error", {})
+                            if await try_recovery(error, ws_message, output_received):
+                                retry_with_history = True
+                                break
                             logger.warning(f"Error from OpenAI Responses API (WebSocket): {error}")
                             yield LLMResponse(context_id=context_id, error_info={"exception": Exception(error.get("message", "Unknown error")), "response_json": event})
                             return
+
+                    if retry_with_history:
+                        continue
 
                     # No tool calls — done
                     if not tool_calls:
