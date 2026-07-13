@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 class RecordingSession(SileroRecordingSession):
     def __init__(self, session_id: str, preroll_buffer_count: int = 5, vad_iterator=None):
         super().__init__(session_id, preroll_buffer_count, vad_iterator)
+        self._speech_recognizer_override: Optional[SpeechRecognizer] = None
         # Segment tracking for on_speech_detecting hook
         self.segment_buffer: bytearray = bytearray()
         self.segment_duration: float = 0
@@ -31,6 +32,18 @@ class RecordingSession(SileroRecordingSession):
         self.segment_fired = False
         self.pending_recognition_task = None
         self.recognition_sequence = 0
+
+    def set_speech_recognizer(self, speech_recognizer: SpeechRecognizer) -> None:
+        """Set the speech recognizer override for this stream session."""
+        self._speech_recognizer_override = speech_recognizer
+
+    def get_speech_recognizer(self) -> Optional[SpeechRecognizer]:
+        """Return this stream session's speech recognizer override, if any."""
+        return self._speech_recognizer_override
+
+    def clear_speech_recognizer(self) -> None:
+        """Clear the override so the detector uses its default recognizer."""
+        self._speech_recognizer_override = None
 
 
 class SileroStreamSpeechDetector(SileroSpeechDetector):
@@ -126,6 +139,37 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                 await handler(error, session_id)
             except Exception:
                 logger.error("Error in on_speech_recognition_error callback", exc_info=True)
+
+    def set_speech_recognizer(
+        self,
+        session_id: str,
+        speech_recognizer: SpeechRecognizer,
+    ) -> None:
+        session = self.recording_sessions.get(session_id)
+        if session is None:
+            session = self.get_session(session_id)
+        session.set_speech_recognizer(speech_recognizer)
+
+    def get_speech_recognizer(self, session_id: str) -> SpeechRecognizer:
+        session = self.recording_sessions.get(session_id)
+        if session is None:
+            return self.speech_recognizer
+        return self._get_speech_recognizer(session)
+
+    def clear_speech_recognizer(self, session_id: str) -> None:
+        session = self.recording_sessions.get(session_id)
+        if session is not None:
+            session.clear_speech_recognizer()
+
+    def _get_speech_recognizer(self, session: RecordingSession) -> SpeechRecognizer:
+        speech_recognizer = session.get_speech_recognizer()
+        if speech_recognizer is not None:
+            return speech_recognizer
+        return self.speech_recognizer
+
+    async def _recognize_audio(self, session: RecordingSession, data: bytes):
+        speech_recognizer = self._get_speech_recognizer(session)
+        return await speech_recognizer.recognize(session.session_id, data)
 
     async def execute_on_speech_detected(self, recorded_data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
         await self._execute_on_speech_detected(recorded_data, text, metadata, recorded_duration, session_id)
@@ -257,7 +301,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                 # Run recognition on segment
                 async def _run_segment_recognition(data: bytes, sess: RecordingSession, seq: int):
                     try:
-                        result = await self.speech_recognizer.recognize(sess.session_id, data)
+                        result = await self._recognize_audio(sess, data)
                         # Only update if this is still the latest sequence
                         recognized_text = result.text or ""
                         # Only update if this is still the latest sequence
@@ -320,7 +364,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                     if final_text is None:
                         # No segment was recognized, run recognition on full buffer
                         try:
-                            result = await self.speech_recognizer.recognize(session.session_id, bytes(session.buffer))
+                            result = await self._recognize_audio(session, bytes(session.buffer))
                             final_text = result.text
                         except Exception as ex:
                             logger.error("Error in final recognition", exc_info=True)

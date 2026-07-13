@@ -6,7 +6,7 @@ import logging
 import re
 from time import time
 import traceback
-from typing import AsyncGenerator, Tuple, List, Optional
+from typing import AsyncGenerator, Dict, Tuple, List, Optional
 from uuid import uuid4
 from ..database import PoolProvider
 from .models import STSRequest, STSResponse
@@ -131,6 +131,7 @@ class STSPipeline:
             sample_rate=stt_sample_rate,
             debug=debug
         )
+        self._speech_recognizer_overrides: Dict[str, SpeechRecognizer] = {}
 
         # LLM
         if llm:
@@ -267,6 +268,25 @@ class STSPipeline:
     async def process_audio_samples(self, samples: bytes, context_id: str):
         await self.vad.process_samples(samples, context_id)
 
+    def set_speech_recognizer(
+        self,
+        session_id: str,
+        speech_recognizer: SpeechRecognizer,
+    ) -> None:
+        """Set the per-session STT used for batch recognition."""
+        if speech_recognizer is None:
+            self.clear_speech_recognizer(session_id)
+            return
+        self._speech_recognizer_overrides[session_id] = speech_recognizer
+
+    def get_speech_recognizer(self, session_id: str) -> SpeechRecognizer:
+        """Return the batch STT override, falling back to the default."""
+        return self._speech_recognizer_overrides.get(session_id, self.stt)
+
+    def clear_speech_recognizer(self, session_id: str) -> None:
+        """Clear the per-session batch STT override."""
+        self._speech_recognizer_overrides.pop(session_id, None)
+
     def process_llm_chunk(self, func) -> dict:
         self._process_llm_chunk = func
         return func
@@ -348,7 +368,16 @@ class STSPipeline:
                     logger.info(f"Use text in request: {recognized_text}")
             elif request.audio_data:
                 # Speech-to-Text
-                recognized_text = (await self.stt.recognize(request.session_id, request.audio_data)).text
+                speech_recognizer = self.get_speech_recognizer(
+                    request.session_id
+                )
+                performance.stt_name = speech_recognizer.__class__.__name__
+                recognized_text = (
+                    await speech_recognizer.recognize(
+                        request.session_id,
+                        request.audio_data,
+                    )
+                ).text
                 if not recognized_text:
                     if self.debug:
                         logger.info("No speech recognized.")
