@@ -90,6 +90,7 @@ For a Python console client that uses local microphone and speaker devices, see 
 - [👂 Speech Listener](#-speech-listener)
     - [Preprocessing and Postprocessing](#preprocessing-and-postprocessing)
     - [Speaker Diarization](#speaker-diarization)
+    - [Per-session STT Switching](#per-session-stt-switching)
 
 - [🎙️ Speech Detector](#%EF%B8%8F-speech-detector)
     - [Silero VAD Speech Detector](#silero-speech-detector)
@@ -842,6 +843,97 @@ async def stt_postprocess(session_id: str, text: str, audio_bytes: bytes, prepro
     else:
         return text, gate_response.to_dict()
 ```
+
+
+### Per-session STT Switching
+
+You can override the STT engine for a specific session without changing the default engine used by other sessions. Batch VAD and stream VAD perform recognition in different places, so use the API belonging to the component that performs STT:
+
+- For batch VAD, use `STSPipeline.set/get/clear_speech_recognizer()`.
+- For `SileroStreamSpeechDetector` and its echo-cancelling variant, use the detector's `set/get/clear_speech_recognizer()` methods.
+
+The examples below ask the LLM to prefix questions whose answers may contain proper nouns with `<require_noun />`. The tag is detected before TTS, so the specialized STT is already active if the user barges in while the question is being spoken.
+
+```python
+from aiavatar.sts.llm import LLMResponse
+from aiavatar.sts.stt.amivoice import AmiVoiceSpeechRecognizer
+
+REQUIRE_NOUN_TAG = "<require_noun />"
+
+# Create this once and share it across sessions. Do not mutate the engine on a
+# shared recognizer because concurrent sessions may require different engines.
+proper_noun_stt = AmiVoiceSpeechRecognizer(
+    amivoice_api_key=AMIVOICE_API_KEY,
+    engine="YOUR_PROPER_NOUN_ENGINE",
+)
+
+# Prompt convention for the LLM:
+# When the next user response may contain a place or other proper noun, prefix
+# the response with <require_noun />.
+# Example: <require_noun />Where are you traveling for summer vacation?
+```
+
+#### Batch VAD
+
+Batch recognition is performed by `STSPipeline`, which owns the per-session override:
+
+```python
+# aiavatar_app.sts.get_speech_recognizer(session_id) returns the override,
+# or the pipeline's default STT when no override is set.
+
+@aiavatar_app.sts.process_llm_chunk
+async def switch_stt_for_travel_question(
+    llm_chunk: LLMResponse,
+    session_id: str,
+    user_id: str,
+) -> dict:
+    if REQUIRE_NOUN_TAG in (llm_chunk.text or ""):
+        aiavatar_app.sts.set_speech_recognizer(
+            session_id,
+            proper_noun_stt,
+        )
+    return {}
+
+
+@aiavatar_app.sts.on_finish
+async def restore_default_stt(request, response):
+    # Keep the specialized STT after the tagged travel question. The response
+    # generated after the user's answer normally has no tag, so it restores the
+    # default STT for the following turn.
+    if REQUIRE_NOUN_TAG not in (response.text or ""):
+        aiavatar_app.sts.clear_speech_recognizer(request.session_id)
+```
+
+#### Stream VAD
+
+Stream recognition is performed inside the VAD. Call the `SileroStreamSpeechDetector` instance that was passed to the app. `EchoCancellingSileroStreamSpeechDetector` uses the same API:
+
+```python
+# stream_vad is the SileroStreamSpeechDetector instance passed to AIAvatar.
+# stream_vad.get_speech_recognizer(session_id) returns the override,
+# or the stream detector's default STT when no override is set.
+
+@aiavatar_app.sts.process_llm_chunk
+async def switch_stream_stt_for_travel_question(
+    llm_chunk: LLMResponse,
+    session_id: str,
+    user_id: str,
+) -> dict:
+    if REQUIRE_NOUN_TAG in (llm_chunk.text or ""):
+        stream_vad.set_speech_recognizer(
+            session_id,
+            proper_noun_stt,
+        )
+    return {}
+
+
+@aiavatar_app.sts.on_finish
+async def restore_default_stream_stt(request, response):
+    if REQUIRE_NOUN_TAG not in (response.text or ""):
+        stream_vad.clear_speech_recognizer(request.session_id)
+```
+
+Switching back is intentionally controlled by user code. Batch overrides remain in the pipeline until `aiavatar_app.sts.clear_speech_recognizer()` is called, so also clear them from a `finally` block or an adapter disconnect callback if a session can end before `on_finish` runs. Stream overrides are stored in the VAD recording session and are naturally discarded when that session is deleted, but explicit cleanup is still recommended for consistent application behavior.
 
 
 ## 🎙️ Speech Detector
