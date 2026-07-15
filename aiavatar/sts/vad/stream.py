@@ -15,6 +15,9 @@ class RecordingSession(SileroRecordingSession):
         super().__init__(session_id, preroll_buffer_count, vad_iterator)
         self._speech_recognizer_override: Optional[SpeechRecognizer] = None
         # Segment tracking for on_speech_detecting hook
+        # TODO: Remove segment_buffer after compatibility review. Partial STT
+        # is cumulative for the current utterance and can use immutable
+        # snapshots of buffer; this legacy state remains exposed via callbacks.
         self.segment_buffer: bytearray = bytearray()
         self.segment_duration: float = 0
         self.segment_silence_duration: float = 0  # Silence duration within segment
@@ -294,7 +297,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                 not session.segment_fired
             ):
                 session.segment_fired = True
-                segment_data = bytes(session.segment_buffer)
+                segment_data = bytes(session.buffer)
                 # Increment sequence number for this recognition
                 session.recognition_sequence += 1
                 current_seq = session.recognition_sequence

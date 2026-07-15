@@ -6,7 +6,9 @@ import pytest
 from pathlib import Path
 
 from aiavatar.sts.vad.stream import SileroStreamSpeechDetector, RecordingSession
+from aiavatar.sts.stt.base import SpeechRecognitionResult
 from aiavatar.sts.stt.azure import AzureSpeechRecognizer
+from _turn_end_gate_helpers import fake_init_silero_model
 
 
 AZURE_API_KEY = os.getenv("AZURE_API_KEY")
@@ -85,6 +87,72 @@ def detector(test_output_dir, speech_recognizer):
     # Cleanup: delete all sessions
     for session_id in list(detector.recording_sessions.keys()):
         detector.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_partial_stt_uses_same_audio_as_final_recording(monkeypatch):
+    monkeypatch.setattr(
+        SileroStreamSpeechDetector,
+        "_init_silero_model",
+        fake_init_silero_model,
+    )
+
+    class CapturingRecognizer:
+        def __init__(self):
+            self.inputs = []
+
+        async def recognize(self, session_id, data):
+            self.inputs.append(data)
+            return SpeechRecognitionResult(text="recognized")
+
+    recognizer = CapturingRecognizer()
+    detector = SileroStreamSpeechDetector(
+        speech_recognizer=recognizer,
+        silence_duration_threshold=0.1,
+        segment_silence_threshold=0.1,
+        min_duration=0.1,
+        max_duration=10.0,
+        sample_rate=16000,
+        channels=1,
+        preroll_buffer_count=2,
+        chunk_size=1,
+    )
+    decisions = iter((False, True, True, False))
+    monkeypatch.setattr(
+        detector,
+        "_detect_speech_silero",
+        lambda *_: next(decisions),
+    )
+
+    recorded_audio = []
+    recording_received = asyncio.Event()
+
+    @detector.on_speech_detected
+    async def capture_recording(data, text, metadata, duration, session_id):
+        recorded_audio.append(data)
+        recording_received.set()
+
+    def pcm_chunk(value):
+        return struct.pack("<h", value) * 1600
+
+    preroll = pcm_chunk(100)
+    # Equal thresholds make partial STT and final recording snapshot the same
+    # input boundary, so any difference is audio coverage rather than trailing
+    # silence added between the two events.
+    for chunk in (
+        preroll,
+        pcm_chunk(1000),
+        pcm_chunk(2000),
+        pcm_chunk(0),
+    ):
+        await detector.process_samples(chunk, "same-audio")
+
+    await asyncio.wait_for(recording_received.wait(), timeout=1.0)
+
+    assert len(recognizer.inputs) == 1
+    assert len(recorded_audio) == 1
+    assert recorded_audio[0].startswith(preroll)
+    assert recognizer.inputs[0] == recorded_audio[0]
 
 
 @pytest.mark.asyncio
