@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import struct
+import time
 from typing import Callable, Optional, Dict, List, Awaitable
 from .silero import SileroSpeechDetector, RecordingSession as SileroRecordingSession
 from .filters.base import AudioFilter
@@ -182,6 +183,11 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
         if task is None:
             return
 
+        started_at = (
+            time.perf_counter()
+            if session.silence_threshold_reached_at is not None
+            else None
+        )
         try:
             await task
         except asyncio.CancelledError:
@@ -200,6 +206,17 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                 context,
                 exc_info=True
             )
+        finally:
+            if started_at is not None:
+                elapsed = time.perf_counter() - started_at
+                session.stt_after_threshold_time = (
+                    session.stt_after_threshold_time or 0.0
+                ) + elapsed
+
+    def _mark_silence_threshold_reached(self, session: RecordingSession):
+        super()._mark_silence_threshold_reached(session)
+        if session.stt_after_threshold_time is None:
+            session.stt_after_threshold_time = 0.0
 
     async def _should_end_turn_with_gate(self, session: RecordingSession, recorded_duration: float) -> bool:
         if self.turn_end_gates and session.pending_recognition_task is not None:
@@ -282,6 +299,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
             session.segment_duration += sample_duration
 
             if speech_detected:
+                session.reset_turn_end_timing()
                 session.silence_duration = 0
                 self.turn_end_gate_manager.reset_session(session.session_id, session=session)
                 session.segment_silence_duration = 0
@@ -340,7 +358,14 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                             return session.is_recording
 
                     recorded_data = bytes(session.buffer)
-                    asyncio.create_task(self.execute_on_speech_detected(recorded_data, final_text, None, session.record_duration, session.session_id))
+                    metadata = self._build_vad_performance_metadata(session)
+                    asyncio.create_task(self.execute_on_speech_detected(
+                        recorded_data,
+                        final_text,
+                        metadata,
+                        session.record_duration,
+                        session.session_id,
+                    ))
                 else:
                     if self.debug:
                         logger.info("No text recognized at max duration, skipping")
@@ -348,6 +373,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                 session.reset()
 
             elif session.silence_duration >= self.silence_duration_threshold:
+                self._mark_silence_threshold_reached(session)
                 recorded_duration = session.record_duration - session.silence_duration
                 if recorded_duration < self.min_duration:
                     if self.debug:
@@ -366,12 +392,17 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                     final_text = session.last_recognized_text
                     if final_text is None:
                         # No segment was recognized, run recognition on full buffer
+                        started_at = time.perf_counter()
                         try:
                             result = await self._recognize_audio(session, bytes(session.buffer))
                             final_text = result.text
                         except Exception as ex:
                             logger.error("Error in final recognition", exc_info=True)
                             await self._execute_on_speech_recognition_error(ex, session.session_id)
+                        finally:
+                            session.stt_after_threshold_time = (
+                                session.stt_after_threshold_time or 0.0
+                            ) + (time.perf_counter() - started_at)
 
                     if final_text:
                         if self._validate_recognized_text:
@@ -382,7 +413,14 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                                 return session.is_recording
 
                         recorded_data = bytes(session.buffer)
-                        asyncio.create_task(self.execute_on_speech_detected(recorded_data, final_text, None, recorded_duration, session.session_id))
+                        metadata = self._build_vad_performance_metadata(session)
+                        asyncio.create_task(self.execute_on_speech_detected(
+                            recorded_data,
+                            final_text,
+                            metadata,
+                            recorded_duration,
+                            session.session_id,
+                        ))
                     else:
                         if self.debug:
                             logger.info("No text recognized, skipping")

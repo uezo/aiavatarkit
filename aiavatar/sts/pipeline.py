@@ -119,7 +119,8 @@ class STSPipeline:
                 text=text,
                 audio_data=data,
                 audio_duration=recorded_duration,
-                system_prompt_params=self.vad.get_session_data(session_id, "system_prompt_params")
+                system_prompt_params=self.vad.get_session_data(session_id, "system_prompt_params"),
+                metadata=metadata,
             )):
                 if response.type == "start":
                     self.vad.set_session_data(session_id, "context_id", response.context_id)
@@ -337,29 +338,35 @@ class STSPipeline:
                 raise ValueError("session_id is required but not provided")
 
             start_time = time()
-            transaction_id = str(uuid4())
-
             # Notify client that request is accepted (fire and forget to avoid blocking pipeline latency)
             asyncio.create_task(self.handle_response(STSResponse(
                 type="accepted",
                 session_id=request.session_id,
-                transaction_id=transaction_id,
+                transaction_id=request.transaction_id,
                 metadata={"block_barge_in": request.block_barge_in}
             )))
             for handler in self._on_accepted_handlers:
                 await handler(request)
 
             performance = PerformanceRecord(
-                transaction_id=transaction_id,
+                transaction_id=request.transaction_id,
                 user_id=request.user_id,
                 stt_name=self.stt.__class__.__name__,
                 llm_name=self.llm.__class__.__name__,
                 tts_name=self.tts.__class__.__name__
             )
+            vad_performance = (
+                (request.metadata or {}).get("vad_performance") or {}
+            )
+            performance.speech_end_at = vad_performance.get("speech_end_at")
+            performance.silence_threshold_time = vad_performance.get("silence_threshold_time")
+            performance.stt_after_threshold_time = vad_performance.get("stt_after_threshold_time")
+            performance.turn_end_gate_time = vad_performance.get("turn_end_gate_time")
+            performance.turn_end_gate_held = vad_performance.get("turn_end_gate_held")
 
             # Record request voice
             if self.voice_recorder_enabled and request.audio_data:
-                await self.voice_recorder.record(RequestVoice(transaction_id, request.audio_data))
+                await self.voice_recorder.record(RequestVoice(request.transaction_id, request.audio_data))
 
             if request.text:
                 # Use text if exist
@@ -386,7 +393,7 @@ class STSPipeline:
                         session_id=request.session_id,
                         user_id=request.user_id,
                         context_id=request.context_id,
-                        transaction_id=transaction_id,
+                        transaction_id=request.transaction_id,
                         metadata={"reason": "No speech recognized."}
                     )
                     return
@@ -411,7 +418,7 @@ class STSPipeline:
                         session_id=request.session_id,
                         user_id=request.user_id,
                         context_id=request.context_id,
-                        transaction_id=transaction_id,
+                        transaction_id=request.transaction_id,
                         metadata={"reason": reason}
                     )
                     return
@@ -461,8 +468,8 @@ class STSPipeline:
 
                 # Overwrite active transaction
                 if self.debug:
-                    logger.info(f"Start transaction: {transaction_id} {request.text} (previous: {state.active_transaction_id})")
-                await self.session_state_manager.update_transaction(request.session_id, transaction_id, timestamp_inserted_at)
+                    logger.info(f"Start transaction: {request.transaction_id} {request.text} (previous: {state.active_transaction_id})")
+                await self.session_state_manager.update_transaction(request.session_id, request.transaction_id, timestamp_inserted_at)
             else:
                 # Clear request content to avoid LLM and TTS processing
                 request.text = None
@@ -480,7 +487,7 @@ class STSPipeline:
                 session_id=request.session_id,
                 user_id=request.user_id,
                 context_id=request.context_id,
-                transaction_id=transaction_id,
+                transaction_id=request.transaction_id,
                 metadata={"request_text": request.text, "recognized_text": recognized_text}
             )
 
@@ -497,7 +504,7 @@ class STSPipeline:
                     session_id=request.session_id,
                     user_id=request.user_id,
                     context_id=request.context_id,
-                    transaction_id=transaction_id,
+                    transaction_id=request.transaction_id,
                     text=request.quick_response_text,
                     voice_text=request.quick_response_voice_text,
                     audio_data=request.quick_response_audio,
@@ -519,11 +526,11 @@ class STSPipeline:
                 voice_text = ""
                 language = None
                 async for llm_stream_chunk in llm_stream:
-                    is_txn_active, active_txn = await self.is_transaction_active(request.session_id, transaction_id)
+                    is_txn_active, active_txn = await self.is_transaction_active(request.session_id, request.transaction_id)
                     if not is_txn_active:
                         # Break when new transaction started in this session
                         if self.debug:
-                            logger.info(f"Break llm_stream for new transaction: {active_txn} {request.text} (current: {transaction_id})")
+                            logger.info(f"Break llm_stream for new transaction: {active_txn} {request.text} (current: {request.transaction_id})")
                         break
 
                     # LLM error
@@ -582,11 +589,11 @@ class STSPipeline:
             is_first_chunk = not request.quick_response_text
             tool_call_records = {}  # {tool_call_id: {name, arguments, result}}
             async for audio_chunk, llm_stream_chunk, language, guradrail_name in synthesize_stream():
-                is_txn_active, active_txn = await self.is_transaction_active(request.session_id, transaction_id)
+                is_txn_active, active_txn = await self.is_transaction_active(request.session_id, request.transaction_id)
                 if not is_txn_active:
                     # Break when new transaction started in this session
                     if self.debug:
-                        logger.info(f"Break synthesize_stream for new transaction: {active_txn} {request.text} (current: {transaction_id})")
+                        logger.info(f"Break synthesize_stream for new transaction: {active_txn} {request.text} (current: {request.transaction_id})")
                     break
 
                 if llm_stream_chunk.tool_call:
@@ -605,7 +612,7 @@ class STSPipeline:
                         session_id=request.session_id,
                         user_id=request.user_id,
                         context_id=llm_stream_chunk.context_id,
-                        transaction_id=transaction_id,
+                        transaction_id=request.transaction_id,
                         tool_call=llm_stream_chunk.tool_call,
                         structured_content=llm_stream_chunk.structured_content
                     )
@@ -621,7 +628,7 @@ class STSPipeline:
                     session_id=request.session_id,
                     user_id=request.user_id,
                     context_id=llm_stream_chunk.context_id,
-                    transaction_id=transaction_id,
+                    transaction_id=request.transaction_id,
                     text=llm_stream_chunk.text,
                     voice_text=llm_stream_chunk.voice_text,
                     language=language,
@@ -641,7 +648,7 @@ class STSPipeline:
                 session_id=request.session_id,
                 user_id=request.user_id,
                 context_id=request.context_id,
-                transaction_id=transaction_id,
+                transaction_id=request.transaction_id,
                 text=(request.quick_response_text or "") + response_text,
                 voice_text=(request.quick_response_voice_text or "") + (performance.response_voice_text or "")
             )
@@ -649,10 +656,10 @@ class STSPipeline:
             if self.voice_recorder_enabled:
                 if request.quick_response_audio:
                     await self.voice_recorder.record(ResponseVoices(
-                        transaction_id + "_qr", [request.quick_response_audio], self.voice_recorder_response_audio_format
+                        request.transaction_id + "_qr", [request.quick_response_audio], self.voice_recorder_response_audio_format
                     ))
                 await self.voice_recorder.record(ResponseVoices(
-                    transaction_id, response_audios, self.voice_recorder_response_audio_format
+                    request.transaction_id, response_audios, self.voice_recorder_response_audio_format
                 ))
             for handler in self._on_finish_handlers:
                 await handler(request, final_response)
@@ -674,7 +681,7 @@ class STSPipeline:
                 session_id=request.session_id,
                 user_id=request.user_id,
                 context_id=request.context_id,
-                transaction_id=transaction_id,
+                transaction_id=request.transaction_id,
                 metadata={"error": "Error in processing Speech-to-Speech pipeline"}
             )
 
@@ -693,7 +700,8 @@ class STSPipeline:
                     await response_queue.put(STSResponse(
                         type="cancelled",
                         session_id=session_id,
-                        context_id=request.context_id
+                        context_id=request.context_id,
+                        transaction_id=request.transaction_id,
                     ))
                     await response_queue.put(None)
             except asyncio.QueueEmpty:
@@ -731,6 +739,7 @@ class STSPipeline:
                             type="error",
                             session_id=session_id,
                             context_id=request.context_id,
+                            transaction_id=request.transaction_id,
                             metadata={"error": "invoke timed out"}
                         ))
                 except Exception as ex:
@@ -740,6 +749,7 @@ class STSPipeline:
                             type="error",
                             session_id=session_id,
                             context_id=request.context_id,
+                            transaction_id=request.transaction_id,
                             metadata={"error": "invoke error in queue worker"}
                         ))
                 finally:

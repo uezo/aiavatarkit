@@ -3,11 +3,20 @@ from datetime import datetime, timezone
 import queue
 import sqlite3
 import threading
-from . import PerformanceRecorder, PerformanceRecord
+from . import (
+    PerformanceRecorder,
+    PerformanceRecord,
+    TIME_ORIGIN_USER_SPEECH_END,
+)
 
 
 class SQLitePerformanceRecorder(PerformanceRecorder):
-    def __init__(self, db_path="aiavatar.db"):
+    def __init__(
+        self,
+        db_path="aiavatar.db",
+        time_origin=TIME_ORIGIN_USER_SPEECH_END,
+    ):
+        super().__init__(time_origin=time_origin)
         self.db_path = db_path
         self.record_queue = queue.Queue()
         self.stop_event = threading.Event()
@@ -30,6 +39,11 @@ class SQLitePerformanceRecorder(PerformanceRecorder):
                         user_id TEXT,
                         context_id TEXT,
                         voice_length REAL,
+                        speech_end_at TIMESTAMP,
+                        silence_threshold_time REAL,
+                        stt_after_threshold_time REAL,
+                        turn_end_gate_time REAL,
+                        turn_end_gate_held INTEGER,
                         stt_time REAL,
                         stop_response_time REAL,
                         before_llm_time REAL,
@@ -85,6 +99,21 @@ class SQLitePerformanceRecorder(PerformanceRecorder):
                 if "tool_calls" not in columns:
                     conn.execute("ALTER TABLE performance_records ADD COLUMN tool_calls TEXT")
 
+                if "speech_end_at" not in columns:
+                    conn.execute("ALTER TABLE performance_records ADD COLUMN speech_end_at TIMESTAMP")
+
+                if "silence_threshold_time" not in columns:
+                    conn.execute("ALTER TABLE performance_records ADD COLUMN silence_threshold_time REAL")
+
+                if "stt_after_threshold_time" not in columns:
+                    conn.execute("ALTER TABLE performance_records ADD COLUMN stt_after_threshold_time REAL")
+
+                if "turn_end_gate_time" not in columns:
+                    conn.execute("ALTER TABLE performance_records ADD COLUMN turn_end_gate_time REAL")
+
+                if "turn_end_gate_held" not in columns:
+                    conn.execute("ALTER TABLE performance_records ADD COLUMN turn_end_gate_held INTEGER")
+
                 # Create index
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_created_at ON performance_records (created_at)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_transaction_id ON performance_records (transaction_id)")
@@ -117,7 +146,7 @@ class SQLitePerformanceRecorder(PerformanceRecorder):
         conn.commit()
 
     def record(self, record: PerformanceRecord):
-        self.record_queue.put(record)
+        self.record_queue.put(self._prepare_record_for_storage(record))
 
     def close(self):
         self.stop_event.set()

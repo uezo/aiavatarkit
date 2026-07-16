@@ -1,11 +1,13 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 import logging
 import numpy as np
 import os
 import struct
 import threading
+import time
 import torch
-from typing import AsyncGenerator, Callable, List, Optional, Dict, Awaitable
+from typing import Any, AsyncGenerator, Callable, List, Optional, Dict, Awaitable
 from . import SpeechDetector
 from .base import RecordingSessionBase
 from .filters.base import AudioFilter
@@ -25,6 +27,26 @@ class RecordingSession(RecordingSessionBase):
         self.turn_end_gate_hold_active: bool = False
         self.turn_end_gate_hold_timeout: Optional[float] = None
         self.turn_end_gate_hold_reasons: List[str] = []
+        self.reset_turn_end_timing()
+
+    def reset_turn_end_timing(self):
+        self.speech_end_at: Optional[datetime] = None
+        self.silence_threshold_reached_at: Optional[float] = None
+        self.silence_threshold_time: Optional[float] = None
+        self.stt_after_threshold_time: Optional[float] = None
+        self.turn_end_gate_time: Optional[float] = None
+        self.turn_end_gate_held: Optional[bool] = None
+
+    def snapshot_turn_end_timing(self) -> Optional[Dict[str, Any]]:
+        if self.speech_end_at is None:
+            return None
+        return {
+            "speech_end_at": self.speech_end_at,
+            "silence_threshold_time": self.silence_threshold_time,
+            "stt_after_threshold_time": self.stt_after_threshold_time,
+            "turn_end_gate_time": self.turn_end_gate_time,
+            "turn_end_gate_held": self.turn_end_gate_held,
+        }
 
     def reset(self):
         super().reset()
@@ -33,6 +55,7 @@ class RecordingSession(RecordingSessionBase):
         self.turn_end_gate_hold_timeout = None
         self.turn_end_gate_hold_reasons = []
         self.amplitude_threshold = None
+        self.reset_turn_end_timing()
         # Reset VAD iterator state for next utterance
         if self.vad_iterator:
             self.vad_iterator.reset_states()
@@ -267,7 +290,7 @@ class SileroSpeechDetector(SpeechDetector):
         text: Optional[str] = None,
     ) -> bool:
         """Confirm a VAD turn-end candidate with optional gates."""
-        return await self.turn_end_gate_manager.should_end_turn(
+        should_end = await self.turn_end_gate_manager.should_end_turn(
             session=session,
             audio_factory=lambda: bytes(session.buffer),
             sample_rate=self.sample_rate,
@@ -277,9 +300,53 @@ class SileroSpeechDetector(SpeechDetector):
             silence_duration_threshold=self.silence_duration_threshold,
             text=text,
         )
+        if self.turn_end_gates:
+            if not should_end and session.turn_end_gate_hold_active:
+                session.turn_end_gate_held = True
+            elif should_end:
+                self._finalize_turn_end_gate_timing(session)
+        return should_end
 
-    async def execute_on_speech_detected(self, recorded_data: bytes, recorded_duration: float, session_id: str):
-        await self._execute_on_speech_detected(recorded_data, None, None, recorded_duration, session_id)
+    def _mark_silence_threshold_reached(self, session: RecordingSession):
+        if session.silence_threshold_reached_at is not None:
+            return
+        now_monotonic = time.perf_counter()
+        session.silence_threshold_reached_at = now_monotonic
+        session.speech_end_at = datetime.now(timezone.utc) - timedelta(
+            seconds=session.silence_duration
+        )
+        session.silence_threshold_time = session.silence_duration
+        if self.turn_end_gates:
+            session.turn_end_gate_held = False
+
+    def _finalize_turn_end_gate_timing(self, session: RecordingSession):
+        if (
+            not self.turn_end_gates
+            or session.silence_threshold_reached_at is None
+            or session.turn_end_gate_time is not None
+        ):
+            return
+        stt_time = session.stt_after_threshold_time or 0.0
+        session.turn_end_gate_time = max(
+            0.0,
+            time.perf_counter() - session.silence_threshold_reached_at - stt_time,
+        )
+
+    def _build_vad_performance_metadata(self, session: RecordingSession) -> Optional[dict]:
+        self._finalize_turn_end_gate_timing(session)
+        timing = session.snapshot_turn_end_timing()
+        return {"vad_performance": timing} if timing is not None else None
+
+    async def execute_on_speech_detected(
+        self,
+        recorded_data: bytes,
+        recorded_duration: float,
+        session_id: str,
+        metadata: Optional[dict] = None,
+    ):
+        await self._execute_on_speech_detected(
+            recorded_data, None, metadata, recorded_duration, session_id
+        )
 
     async def process_samples(self, samples: bytes, session_id: str) -> bool:
         if self.to_linear16:
@@ -349,6 +416,7 @@ class SileroSpeechDetector(SpeechDetector):
             session.record_duration += sample_duration
 
             if speech_detected:
+                session.reset_turn_end_timing()
                 session.silence_duration = 0
                 self.turn_end_gate_manager.reset_session(session.session_id, session=session)
             else:
@@ -362,11 +430,18 @@ class SileroSpeechDetector(SpeechDetector):
                 if self.debug:
                     logger.info(f"Recording max duration reached: {session.record_duration} sec")
                 recorded_data = bytes(session.buffer)
-                asyncio.create_task(self.execute_on_speech_detected(recorded_data, session.record_duration, session.session_id))
+                metadata = self._build_vad_performance_metadata(session)
+                asyncio.create_task(self.execute_on_speech_detected(
+                    recorded_data,
+                    session.record_duration,
+                    session.session_id,
+                    metadata,
+                ))
                 self.turn_end_gate_manager.reset_session(session.session_id, session=session)
                 session.reset()
 
             elif session.silence_duration >= self.silence_duration_threshold:
+                self._mark_silence_threshold_reached(session)
                 recorded_duration = session.record_duration - session.silence_duration
                 if recorded_duration < self.min_duration:
                     if self.debug:
@@ -378,7 +453,13 @@ class SileroSpeechDetector(SpeechDetector):
                     if self.debug:
                         logger.info(f"Recording finished: {recorded_duration} sec")
                     recorded_data = bytes(session.buffer)
-                    asyncio.create_task(self.execute_on_speech_detected(recorded_data, recorded_duration, session.session_id))
+                    metadata = self._build_vad_performance_metadata(session)
+                    asyncio.create_task(self.execute_on_speech_detected(
+                        recorded_data,
+                        recorded_duration,
+                        session.session_id,
+                        metadata,
+                    ))
                 session.reset()
 
         return session.is_recording
