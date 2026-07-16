@@ -1233,6 +1233,45 @@ async def test_insert_channel_tag_disabled():
     await sts.shutdown()
 
 
+def test_sts_request_has_a_unique_transaction_id_by_default():
+    first = STSRequest()
+    second = STSRequest()
+    specified = STSRequest(transaction_id="specified-transaction")
+
+    assert first.transaction_id
+    assert second.transaction_id
+    assert first.transaction_id != second.transaction_id
+    assert specified.transaction_id == "specified-transaction"
+
+
+def test_sts_request_is_keyword_only():
+    with pytest.raises(TypeError):
+        STSRequest("start")
+
+
+@pytest.mark.asyncio
+async def test_queued_cancellation_keeps_request_transaction_id():
+    sts = object.__new__(STSPipeline)
+    request_queue = asyncio.Queue()
+    response_queue = asyncio.Queue()
+    request = STSRequest(
+        session_id="session",
+        transaction_id="queued-transaction",
+    )
+    await request_queue.put(("queue-request", request))
+    sts._request_queues = {"session": request_queue}
+    sts._response_queues = {
+        "session": {"queue-request": response_queue},
+    }
+
+    await sts._clear_queue("session")
+
+    response = await response_queue.get()
+    assert response.type == "cancelled"
+    assert response.transaction_id == "queued-transaction"
+    assert await response_queue.get() is None
+
+
 @pytest.mark.asyncio
 async def test_transaction_id_in_responses():
     """Test that all responses from a single invoke have a consistent non-None transaction_id"""
