@@ -2,12 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from aiavatar.sts.playback import PlaybackTimeline
 from aiavatar.sts.pipeline import STSPipeline
-from aiavatar.sts.vad.echo_cancelling.stream import (
-    EchoCancellingSileroStreamSpeechDetector,
-    RecordingSession as EchoStreamRecordingSession,
-)
 from aiavatar.sts.vad.stream import (
     RecordingSession as StreamRecordingSession,
     SileroStreamSpeechDetector,
@@ -48,7 +43,6 @@ class CaptureAwareSpeechRecognizer(TrackingSpeechRecognizer):
     "session_class",
     [
         StreamRecordingSession,
-        EchoStreamRecordingSession,
     ],
 )
 def test_stream_session_speech_recognizer_override_survives_reset(session_class):
@@ -157,64 +151,3 @@ async def test_pipeline_finalize_keeps_batch_override_until_user_clears_it():
 
     pipeline.clear_speech_recognizer("session")
     assert pipeline.get_speech_recognizer("session") is default
-
-
-@pytest.mark.asyncio
-async def test_echo_stream_uses_capture_aware_session_override():
-    timeline = PlaybackTimeline()
-    default = TrackingSpeechRecognizer("default")
-    override = CaptureAwareSpeechRecognizer("override", timeline)
-    detector = object.__new__(EchoCancellingSileroStreamSpeechDetector)
-    detector.speech_recognizer = default
-    detector.playback_timeline = timeline
-    session = EchoStreamRecordingSession("session")
-    session.set_speech_recognizer(override)
-
-    result = await detector._recognize_audio(
-        session,
-        b"audio",
-        capture_ended_at=123.0,
-    )
-
-    assert result.text == "override"
-    assert override.capture_calls == [("session", b"audio", 123.0)]
-    assert default.calls == []
-
-
-@pytest.mark.asyncio
-async def test_echo_stream_uses_plain_session_override():
-    default = TrackingSpeechRecognizer("default")
-    override = TrackingSpeechRecognizer("override")
-    detector = object.__new__(EchoCancellingSileroStreamSpeechDetector)
-    detector.speech_recognizer = default
-    detector.playback_timeline = PlaybackTimeline()
-    session = EchoStreamRecordingSession("session")
-    session.set_speech_recognizer(override)
-
-    result = await detector._recognize_audio(
-        session,
-        b"audio",
-        capture_ended_at=123.0,
-    )
-
-    assert result.text == "override"
-    assert override.calls == [("session", b"audio")]
-    assert default.calls == []
-
-
-@pytest.mark.asyncio
-async def test_echo_stream_rejects_override_using_another_timeline():
-    detector = object.__new__(EchoCancellingSileroStreamSpeechDetector)
-    detector.speech_recognizer = TrackingSpeechRecognizer("default")
-    detector.playback_timeline = PlaybackTimeline()
-    session = EchoStreamRecordingSession("session")
-    session.set_speech_recognizer(
-        CaptureAwareSpeechRecognizer("override", PlaybackTimeline())
-    )
-
-    with pytest.raises(ValueError, match="must share the same playback_timeline"):
-        await detector._recognize_audio(
-            session,
-            b"audio",
-            capture_ended_at=123.0,
-        )

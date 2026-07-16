@@ -5,7 +5,11 @@ import queue
 import threading
 import asyncio
 import asyncpg
-from . import PerformanceRecorder, PerformanceRecord
+from . import (
+    PerformanceRecorder,
+    PerformanceRecord,
+    TIME_ORIGIN_USER_SPEECH_END,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +24,10 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
         user: str = "postgres",
         password: str = None,
         connection_str: str = None,
-        db_pool_size: int = 2  # Single worker only needs 1, but 2 provides failover when a connection becomes stale
+        db_pool_size: int = 2,  # Single worker only needs 1, but 2 provides failover when a connection becomes stale
+        time_origin: str = TIME_ORIGIN_USER_SPEECH_END,
     ):
+        super().__init__(time_origin=time_origin)
         self.host = host
         self.port = port
         self.dbname = dbname
@@ -95,6 +101,11 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
                         user_id TEXT,
                         context_id TEXT,
                         voice_length REAL,
+                        speech_end_at TIMESTAMPTZ,
+                        silence_threshold_time REAL,
+                        stt_after_threshold_time REAL,
+                        turn_end_gate_time REAL,
+                        turn_end_gate_held BOOLEAN,
                         stt_time REAL,
                         stop_response_time REAL,
                         before_llm_time REAL,
@@ -145,6 +156,22 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
 
                 # Add tool_calls column if not exist
                 await self.add_column_if_not_exist(conn, "tool_calls")
+
+                await conn.execute(
+                    "ALTER TABLE performance_records ADD COLUMN IF NOT EXISTS speech_end_at TIMESTAMPTZ"
+                )
+                await conn.execute(
+                    "ALTER TABLE performance_records ADD COLUMN IF NOT EXISTS silence_threshold_time REAL"
+                )
+                await conn.execute(
+                    "ALTER TABLE performance_records ADD COLUMN IF NOT EXISTS stt_after_threshold_time REAL"
+                )
+                await conn.execute(
+                    "ALTER TABLE performance_records ADD COLUMN IF NOT EXISTS turn_end_gate_time REAL"
+                )
+                await conn.execute(
+                    "ALTER TABLE performance_records ADD COLUMN IF NOT EXISTS turn_end_gate_held BOOLEAN"
+                )
 
                 # Create index
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_created_at ON performance_records (created_at)")
@@ -208,7 +235,7 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
             await conn.execute(sql, *values)
 
     def record(self, record: PerformanceRecord):
-        self.record_queue.put(record)
+        self.record_queue.put(self._prepare_record_for_storage(record))
 
     def close(self):
         self.stop_event.set()

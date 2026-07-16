@@ -1,14 +1,16 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Any
+from uuid import uuid4
 from .llm import ToolCall
 
 
-@dataclass
+@dataclass(kw_only=True)
 class STSRequest:
     type: str = "start"
     session_id: str = None
     user_id: str = None
     context_id: str = None
+    transaction_id: str = field(default_factory=lambda: str(uuid4()))
     text: str = None
     audio_data: bytes = None
     audio_duration: float = 0
@@ -25,7 +27,7 @@ class STSRequest:
     metadata: Dict[str, Any] = None
 
 
-@dataclass
+@dataclass(kw_only=True)
 class STSResponse:
     type: str
     session_id: str = None
