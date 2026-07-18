@@ -64,10 +64,7 @@ Start server. Also, don't forget to launch VOICEVOX beforehand.
 $ python -m uvicorn run:app
 ```
 
-Open following URLs and enjoy the conversation!
-
-- Character icon (dynamic expression, lip sync, blinking): http://127.0.0.1:8000/static/index.html
-- MotionPNGTuber: http://127.0.0.1:8000/static/mpt.html
+Set `AVATAR_MODE` in `html/index.html` to `"image"` for the character icon or `"mpt"` for MotionPNGTuber, then open http://127.0.0.1:8000/static/index.html and enjoy the conversation!
 
 You can also access the Admin Panel at http://127.0.0.1:8000/admin.
 
@@ -95,8 +92,8 @@ For a Python console client that uses local microphone and speaker devices, see 
 - [🎙️ Speech Detector](#%EF%B8%8F-speech-detector)
     - [Silero VAD Speech Detector](#silero-speech-detector)
     - [Silero Stream Speech Detector](#silero-stream-speech-detector)
+    - [Semantic VAD](#semantic-vad)
     - [Audio Filters](#audio-filters)
-    - [Turn-End Gates](#turn-end-gates)
     - [Azure Stream Speech Detector](#azure-stream-speech-detector)
     - [AWS Stream Speech Detector](#aws-stream-speech-detector)
     - [Customization](#customization)
@@ -1042,71 +1039,13 @@ def validate(text):
 ```
 
 
-### Audio Filters
+### Semantic VAD
 
-`SileroSpeechDetector` and `SileroStreamSpeechDetector` can run audio through `audio_filters` before VAD, recording, and speech recognition. Filters are applied in order, and downstream processing sees the filtered audio.
+AIAvatarKit supports semantic VAD by combining acoustic VAD with optional turn-end gates. The acoustic VAD first detects a turn-end candidate from silence, then turn-end gates inspect audio, recognized text, or model-specific signals to decide whether the user's utterance is semantically complete.
 
-This is useful for acoustic preprocessing such as near-field gating, EQ, gain normalization, and debug recording.
+`SileroSpeechDetector` and `SileroStreamSpeechDetector` can use built-in gates such as Smart Turn, Filler-only, Namo Turn, and LLM-based gates. You can also implement your own `TurnEndGate` when you need domain-specific turn-end logic. Gates are called only after `silence_duration_threshold` has already been reached. All gates must pass to end the turn. If any gate returns "wait", the detector keeps the current recording open until the user resumes speaking or the waiting gate's timeout forces the turn to end.
 
-```python
-from aiavatar.sts.vad.filters import (
-    AGCFilter,
-    HighShelfFilter,
-    NearFieldAudioGate,
-    SessionAudioRecorder,
-)
-from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
-
-audio_recorder = SessionAudioRecorder("debug_audio")
-
-vad = SileroStreamSpeechDetector(
-    speech_recognizer=speech_recognizer,
-    audio_filters=[
-        audio_recorder.tap("raw"),
-        NearFieldAudioGate(
-            min_rms_db=-42.0,
-            open_snr_db_threshold=12.0,
-            close_snr_db_threshold=6.0,
-        ),
-        HighShelfFilter(gain_db=6.0, cutoff_hz=2000.0),
-        AGCFilter(target_rms_db=-20.0),
-        audio_recorder.tap("processed"),
-    ],
-)
-```
-
-Built-in filters:
-
-- `NearFieldAudioGate`: attenuates far-field or low-SNR audio before it reaches VAD. It uses a short lookahead buffer so speech onsets are not clipped.
-- `HighShelfFilter`: boosts or cuts high frequencies above a cutoff. This can help intelligibility on band-limited telephony audio.
-- `AGCFilter`: automatic gain control that raises quiet speech toward a target RMS level while avoiding clipping.
-- `SessionAudioRecorder`: debug tap that writes audio at selected points in the filter chain to WAV files.
-
-Filter order matters. Put `NearFieldAudioGate` before `AGCFilter`; otherwise AGC may amplify far-field audio and make the gate less useful. `SessionAudioRecorder.tap()` can be placed before and after filters to compare raw and processed audio.
-
-You can implement a custom filter by subclassing `AudioFilter`:
-
-```python
-from aiavatar.sts.vad.filters import AudioFilter
-
-class MyAudioFilter(AudioFilter):
-    def process(self, samples: bytes, session_id: str) -> bytes:
-        # samples are 16-bit linear PCM bytes
-        return samples
-
-    def reset_session(self, session_id: str):
-        # Optional: release per-session state
-        pass
-```
-
-Filters may keep short internal buffers and return `b""` while warming up. The detector treats this as "no output yet" and keeps the current recording state unchanged.
-
-
-### Turn-End Gates
-
-`SileroSpeechDetector` and `SileroStreamSpeechDetector` can use optional turn-end gates to confirm a VAD turn-end candidate. Gates are called only after `silence_duration_threshold` has already been reached. All gates must pass to end the turn. If any gate returns "wait", the detector keeps the current recording open until the user resumes speaking or the waiting gate's timeout forces the turn to end.
-
-This is useful for utterances that contain a short pause but are likely to continue, such as trailing conjunctions or filler phrases.
+This is useful for utterances that contain a short pause but are likely to continue, such as trailing conjunctions, filler phrases, or incomplete requests.
 
 ```python
 vad = SileroSpeechDetector(
@@ -1304,6 +1243,66 @@ class MyTurnEndGate(TurnEndGate):
             return TurnEndDecision(should_end=False, confidence=0.9, reason="continues", timeout=3.0)
         return TurnEndDecision(should_end=True, confidence=0.9, reason="complete")
 ```
+
+
+### Audio Filters
+
+`SileroSpeechDetector` and `SileroStreamSpeechDetector` can run audio through `audio_filters` before VAD, recording, and speech recognition. Filters are applied in order, and downstream processing sees the filtered audio.
+
+This is useful for acoustic preprocessing such as near-field gating, EQ, gain normalization, and debug recording.
+
+```python
+from aiavatar.sts.vad.filters import (
+    AGCFilter,
+    HighShelfFilter,
+    NearFieldAudioGate,
+    SessionAudioRecorder,
+)
+from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
+
+audio_recorder = SessionAudioRecorder("debug_audio")
+
+vad = SileroStreamSpeechDetector(
+    speech_recognizer=speech_recognizer,
+    audio_filters=[
+        audio_recorder.tap("raw"),
+        NearFieldAudioGate(
+            min_rms_db=-42.0,
+            open_snr_db_threshold=12.0,
+            close_snr_db_threshold=6.0,
+        ),
+        HighShelfFilter(gain_db=6.0, cutoff_hz=2000.0),
+        AGCFilter(target_rms_db=-20.0),
+        audio_recorder.tap("processed"),
+    ],
+)
+```
+
+Built-in filters:
+
+- `NearFieldAudioGate`: attenuates far-field or low-SNR audio before it reaches VAD. It uses a short lookahead buffer so speech onsets are not clipped.
+- `HighShelfFilter`: boosts or cuts high frequencies above a cutoff. This can help intelligibility on band-limited telephony audio.
+- `AGCFilter`: automatic gain control that raises quiet speech toward a target RMS level while avoiding clipping.
+- `SessionAudioRecorder`: debug tap that writes audio at selected points in the filter chain to WAV files.
+
+Filter order matters. Put `NearFieldAudioGate` before `AGCFilter`; otherwise AGC may amplify far-field audio and make the gate less useful. `SessionAudioRecorder.tap()` can be placed before and after filters to compare raw and processed audio.
+
+You can implement a custom filter by subclassing `AudioFilter`:
+
+```python
+from aiavatar.sts.vad.filters import AudioFilter
+
+class MyAudioFilter(AudioFilter):
+    def process(self, samples: bytes, session_id: str) -> bytes:
+        # samples are 16-bit linear PCM bytes
+        return samples
+
+    def reset_session(self, session_id: str):
+        # Optional: release per-session state
+        pass
+```
+
+Filters may keep short internal buffers and return `b""` while warming up. The detector treats this as "no output yet" and keeps the current recording state unchanged.
 
 
 ### Azure Stream Speech Detector
