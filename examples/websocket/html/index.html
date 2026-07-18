@@ -12,28 +12,38 @@
             --avatar-zoom: 1.0;
         }
 
-        .avatar-container img {
-            display: block;
+        .avatar-container img,
+        .avatar-container video,
+        .avatar-container canvas {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
             transform: scale(var(--avatar-zoom));
         }
 
-        .face-image {
-            position: absolute;
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
+        .mouth-overlay,
+        #mouth-canvas {
+            pointer-events: none;
+            z-index: 1;
         }
 
         .mouth-overlay {
-            position: absolute;
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            pointer-events: none;
-            z-index: 1;
             display: none;
+        }
+
+        .vision-btn {
+            font-size: 1.3rem;
+            cursor: pointer;
+            opacity: 0.4;
+            transition: opacity 0.2s;
+            user-select: none;
+        }
+
+        .vision-btn[data-state="1"],
+        .vision-btn[data-state="2"] {
+            opacity: 1;
         }
     </style>
 </head>
@@ -42,9 +52,14 @@
     <h1>AIAvatarKit WebSocket Example</h1>
 
     <div class="avatar-frame" id="avatarFrame">
-        <div class="avatar-container">
-            <img id="faceImage" class="face-image" src="images/neutral.png" alt="Avatar Face">
-            <img id="mouthImage" class="mouth-overlay" alt="">
+        <div class="avatar-container" id="stage">
+            <!-- Image avatar -->
+            <img id="faceImage" class="face-image" src="images/neutral.png" alt="Avatar Face" hidden>
+            <img id="mouthImage" class="mouth-overlay" alt="" hidden>
+
+            <!-- MotionPNGTuber avatar -->
+            <video id="base-video" playsinline muted hidden></video>
+            <canvas id="mouth-canvas" hidden></canvas>
         </div>
     </div>
 
@@ -54,10 +69,7 @@
             <span class="toggle-label">Barge-in</span>
             <input type="checkbox" id="interruptToggle" class="toggle-switch">
         </div>
-        <div class="toggle-container" style="display: none;">
-            <span class="toggle-label">Camera</span>
-            <input type="checkbox" id="cameraToggle" class="toggle-switch">
-        </div>
+        <input type="checkbox" id="cameraToggle" style="display: none;">
         <div class="volume-control" id="volumeControl">
             <span class="volume-btn" id="volumeBtn">&#x1f50a;</span>
             <div class="volume-popup" id="volumePopup">
@@ -65,8 +77,9 @@
                 <span class="volume-value" id="volumeValue">100</span>
             </div>
         </div>
+        <span class="vision-btn" id="visionBtn" role="button" tabindex="0" aria-label="Camera: Off" title="Camera: Off">&#x1f4f7;</span>
     </div>
-    
+
     <div class="input-level">
         <span>Input: </span>
         <span id="inputLevel">0.0 dB</span>
@@ -79,108 +92,191 @@
 
     <div id="toolStatus" class="tool-status"></div>
 
-    <!-- Hidden camera elements -->
-    <video id="cameraVideo" style="display: none;" playsinline></video>
-    <canvas id="cameraCanvas" style="display: none;"></canvas>
+    <video id="visionPreview" style="display: none; position: fixed; top: 12px; left: 12px; width: 120px; border-radius: 8px; z-index: 200; object-fit: cover;" playsinline muted></video>
 
     <footer>
         <p>
-            Powered by <a href="https://github.com/uezo/aiavatarkit" target="_blank">AIAvatarKit</a>
+            <span id="mptCredit" hidden>Avatar powered by <a href="https://github.com/rotejin/MotionPNGTuber_Player" target="_blank">MotionPNGTuber Player</a> by rotejin | </span>Voice chat powered by <a href="https://github.com/uezo/aiavatarkit" target="_blank">AIAvatarKit</a> by uezo
         </p>
     </footer>
 
     <script src="aiavatar.js"></script>
-    <script src="camera.js"></script>
+    <script src="vision-stream.js"></script>
     <script src="lipsync.js"></script>
     <script src="blink.js"></script>
+    <script src="motionpngtuber/lipsync.js"></script>
+    <script src="image-avatar.js"></script>
+    <script src="mpt-avatar.js"></script>
     <script src="ui.js"></script>
     <script>
-        // Set to false if mouth/blink image assets are not prepared
-        const lipsyncEnabled = true;
-        const blinkEnabled = true;
+        // User settings
+        const AVATAR_MODE = "image"; // "image" or "mpt"
+        const PLAYBACK_RMS_SCALE = 1.0; // Lower this (e.g. 0.2) if the mouth stays open
+        const VISION_STREAM_ENABLED = false; // Requires the optional Vision server
+        const VISION_SERVER_URL = "../vision";
 
-        const faceImage = document.getElementById("faceImage");
-        const mouthImage = document.getElementById("mouthImage");
+        // Avatar
+        let avatar;
+        if (AVATAR_MODE === "image") {
+            avatar = new ImageAvatar({
+                faceImage: document.getElementById("faceImage"),
+                mouthImage: document.getElementById("mouthImage"),
+                rmsScale: PLAYBACK_RMS_SCALE,
+                faceImagePaths: {
+                    neutral: "images/neutral.png",
+                    joy: "images/joy.png",
+                    angry: "images/angry.png",
+                    sorrow: "images/sorrow.png",
+                    fun: "images/fun.png",
+                    surprised: "images/surprised.png",
+                    eyes_closed: "images/eyes_closed.png",
+                },
+            });
+        } else if (AVATAR_MODE === "mpt") {
+            document.documentElement.style.setProperty("--avatar-zoom", "1.2");
+            document.getElementById("mptCredit").hidden = false;
+            avatar = new MPTAvatar({
+                video: document.getElementById("base-video"),
+                mouthCanvas: document.getElementById("mouth-canvas"),
+                stage: document.getElementById("stage"),
+                rmsScale: PLAYBACK_RMS_SCALE,
+                assets: {
+                    video: "motionpngtuber/miuna/miuna_loop_mouthless.mp4",
+                    track: "motionpngtuber/miuna/mouth_track.json",
+                    mouth_closed: "motionpngtuber/miuna/mouth/closed.png",
+                    mouth_open: "motionpngtuber/miuna/mouth/open.png",
+                    mouth_half: "motionpngtuber/miuna/mouth/half.png",
+                    mouth_e: "motionpngtuber/miuna/mouth/e.png",
+                    mouth_u: "motionpngtuber/miuna/mouth/u.png",
+                },
+            });
+        } else {
+            throw new Error(`Unsupported AVATAR_MODE: ${AVATAR_MODE}`);
+        }
 
         // AIAvatar
         const aiavatar = new AIAvatarClient({
             webSocketUrl: "../ws",
-            faceImage: faceImage,
-            faceImagePaths: {
-                neutral: "images/neutral.png",
-                joy: "images/joy.png",
-                angry: "images/angry.png",
-                sorrow: "images/sorrow.png",
-                fun: "images/fun.png",
-                surprised: "images/surprised.png",
-                eyes_closed: "images/eyes_closed.png"
-            },
+            ...avatar.aiAvatarOptions,
         });
-
-        // LipSync
-        if (lipsyncEnabled) {
-            const lipsyncEngine = new LipSyncEngine({
-                applyTarget: mouthImage,
-                mouthPathTemplate: "images/mouth_{mouth}.png",
-                hideOnClosed: true,
-            });
-            aiavatar.onPlaybackAnalyze = ({ rms, centroid01, tSec }) => {
-                lipsyncEngine.apply({ rms, centroid01, tSec });
-            };
-            aiavatar.onResetFace = () => { lipsyncEngine.reset(); };
-        }
-
-        // Blink
-        if (blinkEnabled) {
-            const blinker = new BlinkController({
-                targetImage: faceImage,
-                facePathTemplate: "images/{face}.png",
-                blinkFaceName: "eyes_closed",
-                stateProvider: () => ({ isSpeaking: aiavatar.isAudioPlaying, currentFace: aiavatar.getCurrentFace() }),
-            });
-        }
-
-        // Camera
-        const camera = new Camera({
-            videoElement: document.getElementById('cameraVideo'),
-            canvasElement: document.getElementById('cameraCanvas'),
-            onCapture: (imageDataUrl) => {
-                const imageMessage = {
-                    type: "invoke",
-                    session_id: ui.sessionId,
-                    user_id: ui.userId,
-                    files: [{url: imageDataUrl}],
-                    allow_merge: false,
-                    wait_in_queue: true
-                };
-                aiavatar.ws.send(JSON.stringify(imageMessage));
-            }
-        });
+        avatar.bind(aiavatar);
 
         // Shared UI
         const ui = new AvatarUI({
-            aiavatar: aiavatar,
-            camera: camera,
+            aiavatar,
             toolLabels: {
                 "send_query_to_openclaw": "Asking OpenClaw🦞",
+            },
+            onStop: () => avatar.stop(),
+        });
+
+        // Vision (0=OFF, 1=Camera/on-demand, 2=Camera/stream)
+        const visionPreview = document.getElementById("visionPreview");
+        const visionBtn = document.getElementById("visionBtn");
+        const visionStateCount = VISION_STREAM_ENABLED ? 3 : 2;
+        const VISION_ICONS = ["\u{1F4F7}", "\u{1F4F7}", "\u{1F4F9}"];
+        const VISION_LABELS = ["Camera: Off", "Camera: On-demand", "Camera: Stream"];
+        let visionClient = null;
+        let visionState = 0;
+
+        function updateVisionBtn() {
+            visionBtn.textContent = VISION_ICONS[visionState];
+            visionBtn.setAttribute("data-state", visionState);
+            visionBtn.setAttribute("aria-label", VISION_LABELS[visionState]);
+            visionBtn.title = VISION_LABELS[visionState];
+        }
+
+        visionPreview.addEventListener("click", () => {
+            if (visionClient) visionClient.switchCamera();
+        });
+
+        async function startCamera() {
+            visionPreview.style.display = "block";
+            visionClient = new VisionStreamClient({
+                serverUrl: VISION_SERVER_URL,
+                contextId: aiavatar.chatContextId || null,
+                userId: ui.userId,
+                interval: 3,
+                maxLongEdge: 1536,
+                jpegQuality: 0.7,
+                videoElement: visionPreview,
+                pauseWhen: () => visionState < 2 || ui.isUserSpeaking,
+                onResult: (text, attentionLevel, imageUrl) => {
+                    console.log(`[Vision] (${attentionLevel}) ${text}`);
+                    if (attentionLevel >= 3) {
+                        aiavatar.ws.send(JSON.stringify({
+                            type: "invoke",
+                            session_id: ui.sessionId,
+                            user_id: ui.userId,
+                            text: "$注目すべき視覚情報が入力されました。見えたものの解説ではなく、これまでの文脈の中でこの画像が見えたときに相応しい反応をしてください",
+                            files: [{ url: imageUrl }],
+                            allow_merge: false,
+                            wait_in_queue: true,
+                        }));
+                        return 10000;
+                    }
+                },
+                onError: (seq, error) => console.error("[Vision] Error:", error),
+            });
+            await visionClient.start();
+        }
+
+        function stopCamera() {
+            if (visionClient) {
+                visionClient.stop();
+                visionClient = null;
+            }
+            visionPreview.style.display = "none";
+        }
+
+        visionBtn.addEventListener("click", async () => {
+            visionState = (visionState + 1) % visionStateCount;
+            updateVisionBtn();
+
+            if (visionState === 1) {
+                try {
+                    await startCamera();
+                } catch (error) {
+                    console.error("[Vision] Failed to start camera:", error);
+                    visionState = 0;
+                    stopCamera();
+                    updateVisionBtn();
+                }
+            } else if (visionState === 0) {
+                stopCamera();
             }
         });
 
+        visionBtn.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                visionBtn.click();
+            }
+        });
+
+        ui.onVisionRequested = async () => {
+            if (visionState < 1 || !visionClient) return;
+
+            const imageDataUrl = await visionClient.capture();
+            if (!imageDataUrl) return;
+            aiavatar.ws.send(JSON.stringify({
+                type: "invoke",
+                session_id: ui.sessionId,
+                user_id: ui.userId,
+                text: "$応答に必要な視覚情報を提供します。単に見えたものの説明だけではなく、これまでの文脈の中でこの画像が見えたときに相応しい反応をしてください",
+                files: [{ url: imageDataUrl }],
+                allow_merge: false,
+                wait_in_queue: true,
+            }));
+        };
+
         // Custom response handling
         aiavatar.onResponseReceived = (response) => {
-            // Custom handling logic
-            if (response.type == "start") {
-                // Uncomment to change to thinking face
-                // aiavatar.updateFace("eyes_closed", 10);
-            } else if (response.type == "chunk" && response.metadata.is_first_chunk) {
-                aiavatar.updateFace("neutral", 0);
-            } else if (response.type == "tool_call") {
-                console.log(response.metadata);
-            }
+            // Custom handling logic here
 
             // Common handling
             ui.handleResponse(response);
-        }
+        };
 
         // Console helper: chat("Hello.") or chat("What's this?", imageDataUrl)
         window.chat = (text, imageDataUrl) => aiavatar.chat(ui.sessionId, ui.userId, text, imageDataUrl);
