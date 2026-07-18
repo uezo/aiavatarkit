@@ -39,7 +39,7 @@ Start the server.
 uvicorn server:app
 ```
 
-Visit http://localhost:8000/static/index.html and click `Start`, then try talking to the avatar.
+Set `AVATAR_MODE` in `html/index.html` to `"image"` or `"mpt"`. Then visit http://localhost:8000/static/index.html, click `Start`, and try talking to the avatar.
 
 
 ## Deep Dive
