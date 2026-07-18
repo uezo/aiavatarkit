@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>AIAvatarKit 3D Avatar</title>
+    <link rel="stylesheet" href="avatar3d/3d.css">
+    <link rel="stylesheet" href="vrm-themes/theme-girly.css">
+</head>
+
+<body>
+    <div id="bgLayer"></div>
+
+    <div id="avatarFrame">
+        <canvas id="avatarCanvas"></canvas>
+        <div class="avatar-placeholder" id="avatarPlaceholder">Drop or load a VRM file</div>
+    </div>
+
+    <video id="visionPreview" playsinline muted></video>
+    <div class="mic-glow" id="micGlow"></div>
+
+    <div class="drop-overlay" id="dropOverlay">
+        <div class="drop-overlay-text">VRM / VRMA file をドロップ</div>
+    </div>
+
+    <div id="messageBox" class="message-box hidden">
+        <div class="message-inner">
+            <div id="messageSpeaker" class="message-speaker ai">AI</div>
+            <div class="vn-menu">
+                <button class="vn-menu-btn" id="chatBtn">START</button>
+                <button class="vn-menu-btn" id="bargeInBtn">BARGE-IN</button>
+                <button class="vn-menu-btn" id="visionBtn" aria-label="Camera: Off">VISION</button>
+                <div class="vn-vol-wrap" id="volumeControl">
+                    <button class="vn-menu-btn" id="volumeBtn">VOL</button>
+                    <div class="volume-popup" id="volumePopup">
+                        <input
+                            type="range"
+                            id="volumeSlider"
+                            class="volume-slider-vertical"
+                            min="0"
+                            max="100"
+                            value="100"
+                        >
+                        <span class="volume-value" id="volumeValue">100</span>
+                    </div>
+                </div>
+                <button class="vn-menu-btn" id="configBtn">CONFIG</button>
+            </div>
+            <div id="messageText" class="message-text"></div>
+        </div>
+    </div>
+
+    <div id="toolStatus" hidden></div>
+    <div id="toolToastContainer" class="tool-toast-container"></div>
+
+    <!-- AvatarUI compatibility elements -->
+    <div class="input-level">
+        <span>Input: </span>
+        <span id="inputLevel">0.0 dB</span>
+    </div>
+    <input type="checkbox" id="interruptToggle" hidden>
+    <input type="checkbox" id="cameraToggle" hidden>
+
+    <!-- Existing shared libraries are intentionally kept unchanged. -->
+    <script src="aiavatar.js"></script>
+    <script src="vision-stream.js"></script>
+    <script src="lipsync.js"></script>
+    <script src="ui.js"></script>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/",
+            "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.1.1/lib/three-vrm.module.min.js",
+            "@pixiv/three-vrm-animation": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm-animation@3.1.1/lib/three-vrm-animation.module.min.js"
+        }
+    }
+    </script>
+
+    <!--
+        Public page configuration lives here. Runtime modules implement these
+        choices, but do not hide page-level tuning values in separate files.
+    -->
+    <script type="module">
+        import { start3dPage } from "./avatar3d/3d-main.js";
+
+        await start3dPage({
+            connection: {
+                webSocketUrl: "../ws",
+                apiKey: null,
+            },
+
+            audio: {
+                sampleRate: 16000,
+                playbackAnalyzeHz: 60,
+                voiceDetectMode: "rms",
+                voiceHoldDurationMs: 1000,
+                initialVolume: 1.0,
+                bargeInEnabled: false,
+            },
+
+            ui: {
+                characterName: "",
+                userName: "",
+                messageBoxOpacity: 80,
+                messageSpeed: 70,
+                autoHide: false,
+                autoHideDelayMs: 10000,
+                showUserText: true,
+                showAIText: true,
+                showMicGlow: true,
+                showMenu: true,
+                toastDurationMs: 4000,
+                controls: {
+                    start: "START",
+                    stop: "STOP",
+                    volume: "VOL",
+                },
+                toolLabels: {
+                    send_query_to_openclaw: "Asking OpenClaw🦞",
+                },
+            },
+
+            vision: {
+                enabled: true,
+                serverUrl: "../vision",
+                defaultMode: "off",
+                availableModes: ["off", "capture", "stream"],
+                intervalSeconds: 3,
+                maxLongEdge: 1536,
+                jpegQuality: 0.7,
+                attentionThreshold: 3,
+                cooldownMs: 10000,
+                camera: {
+                    facingMode: "user",
+                    idealSize: 1920,
+                },
+                labels: {
+                    off: "Camera: Off",
+                    capture: "Camera: On-demand",
+                    stream: "Camera: Stream",
+                },
+                streamPrompt: "$注目すべき視覚情報が入力されました。見えたものの解説ではなく、これまでの文脈の中でこの画像が見えたときに相応しい反応をしてください",
+                capturePrompt: "$応答に必要な視覚情報を提供します。単に見えたものの説明だけではなく、これまでの文脈の中でこの画像が見えたときに相応しい反応をしてください",
+            },
+
+            persistence: {
+                enabled: true,
+                restoreUserSettings: true,
+                databaseVersion: 1,
+                storeName: "blobs",
+            },
+
+            model: {
+                // Change this to "mmd" to use MMD as the default model format.
+                type: "vrm",
+                // `3d.html?model=mmd` can temporarily override the default above.
+                queryParameter: "model",
+
+                adapters: {
+                    vrm: {
+                        module: "avatar3d/models/vrm/vrm-adapter.js",
+                        exportName: "VrmAdapter",
+                        dependencies: {
+                            scripts: ["vrm-idle.js"],
+                            stylesheets: ["avatar3d/models/vrm/vrm-page.css"],
+                        },
+                        labels: {
+                            title: "AIAvatarKit 3D Avatar (VRM)",
+                            placeholder: "Drop or load a VRM file",
+                            drop: "VRM / VRMA file をドロップ",
+                        },
+                        persistence: {
+                            databaseName: "vrm_galge_cache",
+                            displayKey: "vrm_display",
+                            backgroundKey: "bg_image",
+                            legacyBackgroundKey: "vrm_bg_image",
+                            cameraKey: "vrm_camera",
+                            lightingKey: "vrm_lighting",
+                            modelKey: "vrm_file",
+                            animationNamesKey: "vrma_names",
+                            animationKeyPrefix: "vrma_",
+                        },
+                        options: {
+                            renderer: {
+                                alpha: true,
+                                antialias: true,
+                                maxPixelRatio: null,
+                            },
+                            camera: {
+                                fov: 20,
+                                near: 0.1,
+                                far: 100,
+                                position: [0, 1.35, 2.5],
+                                target: [0, 1.35, 0],
+                                autoFrameDistance: 2.5,
+                                enableDamping: true,
+                                dampingFactor: 0.1,
+                                enablePan: true,
+                                minDistance: 0.5,
+                                maxDistance: 5,
+                                saveDebounceMs: 300,
+                            },
+                            lighting: {
+                                ambient: 1.0,
+                                directional: 1.0,
+                                horizontalAngle: 20,
+                                verticalAngle: 30,
+                                colorTemperature: 6500,
+                            },
+                            idle: {
+                                swayResumeDelaySeconds: 20,
+                            },
+                            expression: {
+                                neutralName: "neutral",
+                                defaultDurationSeconds: 2,
+                            },
+                            lipsync: {
+                                audioHz: 60,
+                                cutoffHz: 8.0,
+                                minVowelInterval: 0.12,
+                                peakMargin: 0.02,
+                                historySeconds: 10,
+                            },
+                        },
+                    },
+
+                    mmd: {
+                        module: "avatar3d/models/mmd/mmd-adapter.js",
+                        exportName: "MmdAdapter",
+                        dependencies: {
+                            scripts: [
+                                "blink.js",
+                                "https://cdn.babylonjs.com/babylon.js",
+                                "https://cdn.jsdelivr.net/npm/babylon-mmd@1.2.0/umd/babylon.mmd.min.js",
+                            ],
+                            stylesheets: ["avatar3d/models/mmd/mmd-page.css"],
+                        },
+                        labels: {
+                            title: "AIAvatarKit 3D Avatar (MMD)",
+                            placeholder: "Drop or load a PMX/PMD file",
+                            drop: "PMX / PMD / VMD file をドロップ",
+                        },
+                        persistence: {
+                            databaseName: "mmd_galge_cache",
+                            displayKey: "mmd_display",
+                            backgroundKey: "bg_image",
+                            cameraKey: "mmd_camera",
+                            modelKey: "mmd_model",
+                            modelExtensionKey: "mmd_model_extension",
+                            referenceFilesKey: "mmd_reference_files",
+                            motionKey: "vmd_file",
+                            motionNameKey: "vmd_name",
+                            physicsKey: "mmd_physics_settings",
+                            legacyPhysicsEnabledKey: "mmd_physics_enabled",
+                            idleKey: "mmd_idle_settings",
+                            appearanceKey: "mmd_appearance",
+                            expressionMappingKey: "mmd_expression_mapping",
+                            faceMotionKey: "mmd_face_motion",
+                        },
+                        options: {
+                            engine: {
+                                antialias: true,
+                                preserveDrawingBuffer: true,
+                                stencil: true,
+                                alpha: true,
+                                clearColor: [0, 0, 0, 0],
+                            },
+                            loader: {
+                                loggingEnabled: true,
+                            },
+                            camera: {
+                                alpha: Math.PI,
+                                beta: Math.PI / 2.25,
+                                radius: 28,
+                                target: [0, 10, 0],
+                                minRadius: 3,
+                                maxRadius: 80,
+                                wheelPrecision: 40,
+                                panningSensibility: 80,
+                                targetHeightRatio: 0.05,
+                                frameDistanceRatio: 1.8,
+                                minFrameRadius: 10,
+                                saveDebounceMs: 300,
+                            },
+                            lighting: {
+                                sceneAmbientColor: [0.72, 0.68, 0.66],
+                                groundColor: [0.42, 0.38, 0.42],
+                                direction: [0.15, -0.8, -0.55],
+                                directionalPosition: [0, 30, -30],
+                                facePosition: [0, 12, -18],
+                                faceRange: 40,
+                                faceColor: [1.0, 0.9, 0.84],
+                                faceFollowDistance: 4,
+                            },
+                            physics: {
+                                enabled: true,
+                                gravity: 80,
+                            },
+                            appearance: {
+                                ambient: 0.82,
+                                directional: 0.38,
+                                face: 0.55,
+                                outlineScale: 0.1,
+                                toonEnabled: true,
+                                toonRamp: ["#44404a", "#8a7f89", "#cfc1c5", "#fff2ee"],
+                            },
+                            idle: {
+                                enabled: true,
+                                armRelax: -35,
+                                breath: 60,
+                                sway: 35,
+                            },
+                            expression: {
+                                neutralName: "neutral",
+                                defaultDurationSeconds: 2,
+                                testDurationSeconds: 1.5,
+                                keys: [
+                                    { key: "neutral", label: "Neutral" },
+                                    { key: "joy", label: "Joy" },
+                                    { key: "fun", label: "Fun" },
+                                    { key: "angry", label: "Angry" },
+                                    { key: "sorrow", label: "Sorrow" },
+                                    { key: "surprised", label: "Surprised" },
+                                ],
+                                fallbacks: {
+                                    neutral: [],
+                                    joy: ["笑い", "笑顔", "にこり", "happy", "smile", "joy"],
+                                    fun: ["笑い", "笑顔", "にこり", "happy", "smile", "fun"],
+                                    angry: ["怒り", "angry"],
+                                    sorrow: ["悲しむ", "悲しい", "sad", "sorrow"],
+                                    surprised: ["びっくり", "驚き", "surprise", "surprised"],
+                                },
+                            },
+                            faceMotion: {
+                                blinkEnabled: true,
+                                blinkMorph: "",
+                                blinkInterval: 4,
+                                blinkDurationMs: 130,
+                                blinkCloseSpeed: 18,
+                                blinkOpenSpeed: 12,
+                                blinkMorphCandidates: ["まばたき", "blink", "Blink"],
+                                lipSmooth: 70,
+                                lipGain: 1,
+                                mouthShapes: {
+                                    closed: { a: 0, u: 0, e: 0 },
+                                    half: { a: 0.4, u: 0, e: 0 },
+                                    open: { a: 1.0, u: 0, e: 0 },
+                                    u: { a: 0, u: 0.8, e: 0 },
+                                    e: { a: 0, u: 0, e: 0.7 },
+                                },
+                                mouthMorphCandidates: {
+                                    a: ["あ", "a"],
+                                    u: ["う", "u"],
+                                    e: ["え", "e"],
+                                },
+                            },
+                            lipsync: {
+                                audioHz: 60,
+                                cutoffHz: 8.0,
+                                minVowelInterval: 0.12,
+                                peakMargin: 0.02,
+                                historySeconds: 10,
+                            },
+                        },
+                    },
+                },
+            },
+        });
+    </script>
+</body>
+
+</html>
