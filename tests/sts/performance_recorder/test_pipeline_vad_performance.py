@@ -68,6 +68,7 @@ async def test_pipeline_copies_optional_vad_performance(
 
     assert responses[-1].type == "final"
     record = recorder.records[0]
+    assert record.session_id == "session"
     assert record.silence_threshold_time == expected_threshold
     if metadata is None:
         assert record.speech_end_at is None

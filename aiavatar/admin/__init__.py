@@ -1,75 +1,43 @@
-import base64
 from pathlib import Path
-import secrets
 from typing import Optional
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, Response
-from .character import setup_character_api, CharacterService
-from .config import setup_config_api, _adapter_key
-from .control import setup_control_api
-from .evaluation import setup_evaluation_api
-from .logs import setup_logs_api
-from .metrics import setup_metrics_api
+
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+
 from ..adapter import Adapter
 from ..eval import DialogEvaluator
 from ..sts.llm.chatgpt import ChatGPTService
+from .auth import AdminAuthenticator, BasicAdminAuthenticator, create_auth_dependency
+from .config import _adapter_key, create_config_router
+from .evaluation import EvaluationAPI
+from .logs import LogsAPI
+from .metrics import MetricsAPI
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
 
 class AdminPanel:
-    """Lightweight handle returned by setup_admin_panel for post-setup configuration."""
+    """Handle for adding adapters to the Config view after setup."""
 
     def __init__(self, adapters: dict):
         self._adapters = adapters
 
     def add_adapter(self, adapter: Adapter, *, name: Optional[str] = None):
-        """Register an additional adapter for the Config API."""
-        key = name or _adapter_key(adapter)
-        self._adapters[key] = adapter
+        self._adapters[name or _adapter_key(adapter)] = adapter
 
 
-def _setup_admin_html(app: FastAPI, *, title: str = "AIAvatarKit Admin Panel", html: str = None):
-    @app.get("/admin", response_class=HTMLResponse, include_in_schema=False)
-    async def admin_page():
-        if html is not None:
-            return html
-        default_html = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
-        return default_html.replace("{{ADMIN_TITLE}}", title)
-
-
-def _setup_admin_basic_auth(app: FastAPI, *, username: str, password: str, path_prefix: str = "/admin"):
-    @app.middleware("http")
-    async def admin_basic_auth(request: Request, call_next):
-        if request.url.path.startswith(path_prefix):
-            auth_header = request.headers.get("Authorization")
-            if auth_header is None or not auth_header.startswith("Basic "):
-                return Response(
-                    status_code=401,
-                    headers={"WWW-Authenticate": "Basic realm='Admin'"},
-                    content="Unauthorized"
-                )
-
-            try:
-                encoded = auth_header.split(" ")[1]
-                decoded = base64.b64decode(encoded).decode("utf-8")
-                req_username, req_password = decoded.split(":", 1)
-
-                if not (secrets.compare_digest(req_username, username) and
-                        secrets.compare_digest(req_password, password)):
-                    return Response(
-                        status_code=401,
-                        headers={"WWW-Authenticate": "Basic realm='Admin'"},
-                        content="Invalid credentials"
-                    )
-            except Exception:
-                return Response(
-                    status_code=401,
-                    headers={"WWW-Authenticate": "Basic realm='Admin'"},
-                    content="Invalid credentials"
-                )
-
-        return await call_next(request)
+def _default_evaluator(adapter: Adapter) -> Optional[DialogEvaluator]:
+    if not isinstance(adapter.sts.llm, ChatGPTService):
+        return None
+    source = adapter.sts.llm
+    evaluation_llm = ChatGPTService(
+        openai_api_key=source.openai_client.api_key,
+        base_url=str(source.openai_client.base_url),
+        model=source.model,
+        temperature=source.temperature,
+        reasoning_effort=source.reasoning_effort,
+    )
+    return DialogEvaluator(llm=source, evaluation_llm=evaluation_llm)
 
 
 def setup_admin_panel(
@@ -77,92 +45,61 @@ def setup_admin_panel(
     *,
     adapter: Adapter,
     title: str = "AIAvatarKit Admin Panel",
-    html: str = None,
+    authenticator: AdminAuthenticator = None,
     evaluator: DialogEvaluator = None,
-    character_service: CharacterService = None,
-    character_id: str = None,
-    default_session_id: str = None,
-    api_key: str = None,
-    basic_auth_username: str = None,
-    basic_auth_password: str = None,
 ) -> AdminPanel:
-    """Convenience function to set up the full admin panel.
+    """Install the new Admin UI and API under ``/admin``.
 
-    Required:
-        adapter: Adapter instance (provides sts pipeline, performance_recorder, voice_recorder)
-
-    Optional:
-        title: Admin panel title
-        html: Custom HTML string for the admin page (overrides built-in template)
-        evaluator: DialogEvaluator for evaluation tab
-        character_service: CharacterService for character tab
-        character_id: Character ID for character tab (required if character_service is set)
-        default_session_id: Default session ID for control API
-        api_key: API key for all admin endpoints
-        basic_auth_username: Username for Basic authentication (requires basic_auth_password)
-        basic_auth_password: Password for Basic authentication (requires basic_auth_username)
-
-    Returns:
-        AdminPanel instance for post-setup configuration (e.g. add_adapter)
+    The same authenticator protects HTML, assets, and API calls. Pass
+    ``BasicAdminAuthenticator`` for Basic auth or any async/sync callable taking
+    a FastAPI ``Request`` for an SSO integration.
     """
-    # Basic auth middleware (must be registered before routes)
-    if basic_auth_username and basic_auth_password:
-        _setup_admin_basic_auth(app, username=basic_auth_username, password=basic_auth_password)
+    evaluator = evaluator or _default_evaluator(adapter)
+    auth = create_auth_dependency(authenticator)
+    router = APIRouter(prefix="/admin", dependencies=[Depends(auth)])
 
-    # Admin HTML page
-    _setup_admin_html(app, title=title, html=html)
+    def render_page():
+        html = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        return HTMLResponse(html.replace("{{ADMIN_TITLE}}", title))
 
-    # Metrics
-    setup_metrics_api(
-        app,
-        recorder=adapter.sts.performance_recorder,
-        api_key=api_key
+    def redirect_to_page():
+        return RedirectResponse("admin/")
+
+    router.add_api_route("", redirect_to_page, methods=["GET"], include_in_schema=False)
+    router.add_api_route("/", render_page, methods=["GET"], include_in_schema=False)
+
+    @router.get("/assets/{asset_path:path}", include_in_schema=False)
+    async def asset(asset_path: str):
+        static_root = _STATIC_DIR.resolve()
+        target = (static_root / asset_path).resolve()
+        if static_root not in target.parents or not target.is_file():
+            raise HTTPException(status_code=404, detail="Asset not found")
+        return FileResponse(target)
+
+    @router.get("/api/capabilities", tags=["Admin"])
+    async def capabilities():
+        return {"evaluation": evaluator is not None}
+
+    router.include_router(MetricsAPI(adapter.sts.performance_recorder).get_router(), prefix="/api")
+    router.include_router(
+        LogsAPI(
+            adapter.sts.performance_recorder,
+            adapter.sts.voice_recorder if adapter.sts.voice_recorder_enabled else None,
+        ).get_router(),
+        prefix="/api",
     )
+    config_router, adapters = create_config_router(adapter=adapter)
+    router.include_router(config_router, prefix="/api")
+    if evaluator is not None:
+        router.include_router(EvaluationAPI(evaluator).get_router(), prefix="/api")
 
-    # Logs
-    setup_logs_api(
-        app,
-        recorder=adapter.sts.performance_recorder,
-        voice_recorder=adapter.sts.voice_recorder if adapter.sts.voice_recorder_enabled else None,
-        api_key=api_key,
-    )
+    app.include_router(router)
+    return AdminPanel(adapters)
 
-    # Control (perform / conversation)
-    setup_control_api(
-        app,
-        adapter=adapter,
-        default_session_id=default_session_id,
-        api_key=api_key
-    )
 
-    # Config
-    adapters = setup_config_api(
-        app,
-        adapter=adapter,
-        api_key=api_key
-    )
-
-    # Evaluation
-    if not evaluator:
-        if isinstance(adapter.sts.llm, ChatGPTService):
-            eval_llm = ChatGPTService(
-                openai_api_key=adapter.sts.llm.openai_client.api_key,
-                base_url=str(adapter.sts.llm.openai_client.base_url),
-                model=adapter.sts.llm.model,
-                temperature=adapter.sts.llm.temperature,
-                reasoning_effort=adapter.sts.llm.reasoning_effort
-            )
-            evaluator = DialogEvaluator(llm=adapter.sts.llm, evaluation_llm=eval_llm)
-    if evaluator:
-        setup_evaluation_api(app, evaluator=evaluator, api_key=api_key)
-
-    # Character (optional)
-    if character_service and character_id:
-        setup_character_api(
-            app,
-            character_service=character_service,
-            character_id=character_id,
-            api_key=api_key,
-        )
-
-    return AdminPanel(adapters=adapters)
+__all__ = [
+    "AdminAuthenticator",
+    "AdminPanel",
+    "BasicAdminAuthenticator",
+    "setup_admin_panel",
+]

@@ -225,6 +225,7 @@ async def test_init_db_creates_indexes(recorder):
         )
         index_names = {row["indexname"] for row in rows}
         assert "idx_created_at" in index_names
+        assert "idx_performance_event_at" in index_names
         assert "idx_transaction_id" in index_names
         assert "idx_user_id" in index_names
         assert "idx_context_id" in index_names

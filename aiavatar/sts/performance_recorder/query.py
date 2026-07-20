@@ -3,9 +3,11 @@ import math
 import re
 import sqlite3
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
+
+from .base import TIME_ORIGIN_PIPELINE_START, TIME_ORIGIN_USER_SPEECH_END
 
 
 VALID_PERIODS = {"1h", "6h", "24h", "7d", "30d"}
@@ -84,6 +86,59 @@ class MetricsSummary:
     avg_llm_phase: Optional[float] = None
     avg_processing_phase: Optional[float] = None
     avg_tts_phase: Optional[float] = None
+
+
+@dataclass
+class DetailedTimelineBucket:
+    timestamp: str
+    request_count: int
+    success_count: int = 0
+    error_count: int = 0
+    measured_count: int = 0
+    avg_first_response_time: Optional[float] = None
+    avg_silence_detection_phase: Optional[float] = None
+    avg_streaming_stt_finalization_phase: Optional[float] = None
+    avg_turn_end_gate_phase: Optional[float] = None
+    avg_stt_phase: Optional[float] = None
+    avg_stop_response_phase: Optional[float] = None
+    avg_before_llm_phase: Optional[float] = None
+    avg_llm_phase: Optional[float] = None
+    avg_processing_phase: Optional[float] = None
+    avg_tts_phase: Optional[float] = None
+
+
+@dataclass
+class DetailedMetricsSummary:
+    total_requests: int
+    success_count: int = 0
+    error_count: int = 0
+    measured_count: int = 0
+    avg_first_response_time: Optional[float] = None
+    p50_first_response_time: Optional[float] = None
+    p95_first_response_time: Optional[float] = None
+    p99_first_response_time: Optional[float] = None
+    avg_silence_detection_phase: Optional[float] = None
+    avg_streaming_stt_finalization_phase: Optional[float] = None
+    avg_turn_end_gate_phase: Optional[float] = None
+    avg_stt_phase: Optional[float] = None
+    avg_stop_response_phase: Optional[float] = None
+    avg_before_llm_phase: Optional[float] = None
+    avg_llm_phase: Optional[float] = None
+    avg_processing_phase: Optional[float] = None
+    avg_tts_phase: Optional[float] = None
+
+
+_DETAILED_PHASE_FIELDS = (
+    "avg_silence_detection_phase",
+    "avg_streaming_stt_finalization_phase",
+    "avg_turn_end_gate_phase",
+    "avg_stt_phase",
+    "avg_stop_response_phase",
+    "avg_before_llm_phase",
+    "avg_llm_phase",
+    "avg_processing_phase",
+    "avg_tts_phase",
+)
 
 
 def _compute_phases(rows):
@@ -198,11 +253,157 @@ def _build_summary(rows) -> MetricsSummary:
     )
 
 
+def _raw_phase_vector(row, time_origin: str):
+    """Return nine contiguous phases from speech end to first response.
+
+    Detailed rows are ordered as defined by ``_DETAILED_QUERY_SQL``. Records
+    without a speech-end timestamp, errors, or a first-response endpoint are
+    intentionally excluded from the detailed cohort.
+    """
+    if row[12] or row[1] is None:
+        return None
+
+    def positive(value):
+        return max(float(value or 0), 0.0)
+
+    # Validate the actual stored endpoint before carrying missing intermediate
+    # boundaries forward. Otherwise a silence timing alone can be mistaken for
+    # a completed first-response measurement.
+    endpoint_index = 7 if row[11] else 10
+    if positive(row[endpoint_index]) <= 0:
+        return None
+
+    stored_origin = time_origin
+    if time_origin == TIME_ORIGIN_USER_SPEECH_END:
+        # Timing columns added before origin rebasing may coexist with newer
+        # rows in the same table. A decreasing, explicitly stored VAD boundary
+        # identifies an older pipeline-relative row without guessing from the
+        # pipeline duration itself.
+        previous = None
+        for value in row[2:5]:
+            if value is None:
+                continue
+            current = positive(value)
+            if previous is not None and current < previous:
+                stored_origin = TIME_ORIGIN_PIPELINE_START
+                break
+            previous = current
+
+    if stored_origin == TIME_ORIGIN_PIPELINE_START:
+        silence = positive(row[2])
+        streaming_stt = positive(row[3])
+        turn_end_gate = positive(row[4])
+        pre_pipeline = silence + streaming_stt + turn_end_gate
+        points = [
+            0.0,
+            silence,
+            silence + streaming_stt,
+            pre_pipeline,
+            pre_pipeline + positive(row[5]),
+            pre_pipeline + positive(row[6]),
+            pre_pipeline + positive(row[7]),
+            pre_pipeline + positive(row[8]),
+            pre_pipeline + positive(row[9]),
+            pre_pipeline + positive(row[10]),
+        ]
+    else:
+        points = [
+            0.0,
+            positive(row[2]),
+            positive(row[3]),
+            positive(row[4]),
+            positive(row[5]),
+            positive(row[6]),
+            positive(row[7]),
+            positive(row[8]),
+            positive(row[9]),
+            positive(row[10]),
+        ]
+
+    # Missing timings are represented by zero in historical records. Carry the
+    # previous boundary forward so a later known lap absorbs the unknown gap and
+    # the stack remains equal to the measured first-response time.
+    for index in range(1, len(points)):
+        points[index] = max(points[index], points[index - 1])
+
+    endpoint_index = 6 if row[11] else 9
+    if points[endpoint_index] <= 0:
+        return None
+    points = points[:endpoint_index + 1]
+    points.extend([points[-1]] * (10 - len(points)))
+    return [points[index + 1] - points[index] for index in range(9)]
+
+
+def _phase_vector(row, time_origin: str):
+    """Return the nine display phases used by aggregate metrics."""
+    return _raw_phase_vector(row, time_origin)
+
+
+def _detailed_values(rows, time_origin: str):
+    vectors = [vector for row in rows if (vector := _phase_vector(row, time_origin)) is not None]
+    if not vectors:
+        return 0, None, [None] * len(_DETAILED_PHASE_FIELDS), []
+    phase_averages = [
+        sum(vector[index] for vector in vectors) / len(vectors)
+        for index in range(len(_DETAILED_PHASE_FIELDS))
+    ]
+    first_response_times = [sum(vector) for vector in vectors]
+    return len(vectors), _safe_avg(first_response_times), phase_averages, first_response_times
+
+
+def _detailed_fields(rows, time_origin: str):
+    measured_count, average, phase_averages, first_response_times = _detailed_values(rows, time_origin)
+    values = dict(zip(_DETAILED_PHASE_FIELDS, phase_averages))
+    values.update(measured_count=measured_count, avg_first_response_time=average)
+    return values, first_response_times
+
+
+def _build_detailed_timeline(rows, interval_seconds: int, start_time: datetime, time_origin: str):
+    data_buckets = {}
+    for row in rows:
+        data_buckets.setdefault(_bucket_key(row[0], interval_seconds), []).append(row)
+
+    now = datetime.now(timezone.utc)
+    current_ts = (int(start_time.timestamp()) // interval_seconds) * interval_seconds
+    end_ts = (int(now.timestamp()) // interval_seconds) * interval_seconds
+    result = []
+    while current_ts <= end_ts:
+        key = datetime.fromtimestamp(current_ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        bucket_rows = data_buckets.get(key, [])
+        error_count = sum(1 for row in bucket_rows if row[12])
+        values, _ = _detailed_fields(bucket_rows, time_origin)
+        result.append(DetailedTimelineBucket(
+            timestamp=key,
+            request_count=len(bucket_rows),
+            success_count=len(bucket_rows) - error_count,
+            error_count=error_count,
+            **values,
+        ))
+        current_ts += interval_seconds
+    return result
+
+
+def _build_detailed_summary(rows, time_origin: str):
+    error_count = sum(1 for row in rows if row[12])
+    values, response_times = _detailed_fields(rows, time_origin)
+    sorted_times = sorted(response_times)
+    return DetailedMetricsSummary(
+        total_requests=len(rows),
+        success_count=len(rows) - error_count,
+        error_count=error_count,
+        p50_first_response_time=percentile(sorted_times, 50),
+        p95_first_response_time=percentile(sorted_times, 95),
+        p99_first_response_time=percentile(sorted_times, 99),
+        **values,
+    )
+
+
 @dataclass
 class ConversationLog:
     created_at: str
     transaction_id: Optional[str] = None
     user_id: Optional[str] = None
+    session_id: Optional[str] = None
     context_id: Optional[str] = None
     tts_first_chunk_time: Optional[float] = None
     before_llm_time: Optional[float] = None
@@ -213,6 +414,21 @@ class ConversationLog:
     response_voice_text: Optional[str] = None
     error_info: Optional[str] = None
     tool_calls: Optional[str] = None
+    timing_breakdown: Optional["TurnTimingBreakdown"] = None
+
+
+@dataclass
+class TurnTimingBreakdown:
+    total_first_response: float
+    silence_detection: float
+    streaming_stt_finalization: float
+    turn_end_gate: float
+    stt: float
+    stop_response: float
+    before_llm: float
+    llm: float
+    processing: float
+    tts: float
 
 
 @dataclass
@@ -223,18 +439,30 @@ class ConversationGroup:
 
 
 _QUERY_SQL = """
-SELECT created_at, stt_time, before_llm_time, llm_first_chunk_time, llm_first_voice_chunk_time, tts_first_chunk_time, quick_response_text, error_info
+SELECT COALESCE(speech_end_at, created_at) AS event_at,
+       stt_time, before_llm_time, llm_first_chunk_time, llm_first_voice_chunk_time, tts_first_chunk_time, quick_response_text, error_info
 FROM performance_records
-WHERE created_at >= ?
-ORDER BY created_at
+WHERE COALESCE(speech_end_at, created_at) >= ?
+ORDER BY event_at
 """
 
-_LOGS_SQL = """
-SELECT created_at, transaction_id, user_id, context_id, tts_first_chunk_time, before_llm_time, quick_response_text,
-       request_text, request_files, response_text, response_voice_text, error_info, tool_calls
+_DETAILED_QUERY_SQL = """
+SELECT COALESCE(speech_end_at, created_at) AS event_at,
+       speech_end_at, silence_threshold_time, stt_after_threshold_time, turn_end_gate_time,
+       stt_time, stop_response_time, before_llm_time, llm_first_chunk_time, llm_first_voice_chunk_time,
+       tts_first_chunk_time, quick_response_text, error_info
 FROM performance_records
-ORDER BY created_at DESC
-LIMIT ?
+WHERE COALESCE(speech_end_at, created_at) >= ?
+ORDER BY event_at
+"""
+
+_LOGS_SELECT_SQL = """
+SELECT COALESCE(speech_end_at, created_at) AS event_at,
+       transaction_id, user_id, session_id, context_id, tts_first_chunk_time, before_llm_time, quick_response_text,
+       request_text, request_files, response_text, response_voice_text, error_info, tool_calls,
+       speech_end_at, silence_threshold_time, stt_after_threshold_time, turn_end_gate_time,
+       stt_time, stop_response_time, llm_first_chunk_time, llm_first_voice_chunk_time
+FROM performance_records
 """
 
 
@@ -248,11 +476,28 @@ class MetricsQuery(ABC):
         pass
 
     @abstractmethod
-    async def query_logs(self, limit: int) -> List[ConversationGroup]:
+    async def query_detailed_timeline(self, period: str, interval: str) -> List[DetailedTimelineBucket]:
+        pass
+
+    @abstractmethod
+    async def query_detailed_summary(self, period: str) -> DetailedMetricsSummary:
+        pass
+
+    @abstractmethod
+    async def query_logs(
+        self,
+        limit: int,
+        *,
+        user_id: str = None,
+        session_id: str = None,
+        context_id: str = None,
+        has_error: bool = None,
+        keyword: str = None,
+    ) -> List[ConversationGroup]:
         pass
 
 
-def _group_logs(rows) -> List[ConversationGroup]:
+def _group_logs(rows, time_origin: str) -> List[ConversationGroup]:
     logs = []
     for row in rows:
         created_at = row[0]
@@ -260,20 +505,39 @@ def _group_logs(rows) -> List[ConversationGroup]:
             created_at = created_at.strftime("%Y-%m-%dT%H:%M:%S")
         elif isinstance(created_at, str):
             pass  # already string
+        detailed_row = (
+            row[0], row[14], row[15], row[16], row[17], row[18], row[19],
+            row[6], row[20], row[21], row[5], row[7], row[12],
+        )
+        phases = _raw_phase_vector(detailed_row, time_origin)
+        timing = TurnTimingBreakdown(
+            total_first_response=sum(phases),
+            silence_detection=phases[0],
+            streaming_stt_finalization=phases[1],
+            turn_end_gate=phases[2],
+            stt=phases[3],
+            stop_response=phases[4],
+            before_llm=phases[5],
+            llm=phases[6],
+            processing=phases[7],
+            tts=phases[8],
+        ) if phases is not None else None
         logs.append(ConversationLog(
             created_at=created_at,
             transaction_id=row[1],
             user_id=row[2],
-            context_id=row[3],
-            tts_first_chunk_time=row[4],
-            before_llm_time=row[5],
-            quick_response_text=row[6],
-            request_text=row[7],
-            request_files=row[8],
-            response_text=row[9],
-            response_voice_text=row[10],
-            error_info=row[11],
-            tool_calls=row[12],
+            session_id=row[3],
+            context_id=row[4],
+            tts_first_chunk_time=row[5],
+            before_llm_time=row[6],
+            quick_response_text=row[7],
+            request_text=row[8],
+            request_files=row[9],
+            response_text=row[10],
+            response_voice_text=row[11],
+            error_info=row[12],
+            tool_calls=row[13],
+            timing_breakdown=timing,
         ))
 
     # Group by context_id, preserving order of first appearance
@@ -301,9 +565,14 @@ def _group_logs(rows) -> List[ConversationGroup]:
     return result
 
 
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 class SQLiteMetricsQuery(MetricsQuery):
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, time_origin: str = TIME_ORIGIN_USER_SPEECH_END):
         self.db_path = db_path
+        self.time_origin = time_origin
 
     def _fetch_rows(self, start_time: datetime):
         conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
@@ -322,10 +591,54 @@ class SQLiteMetricsQuery(MetricsQuery):
         finally:
             conn.close()
 
-    def _fetch_logs(self, limit: int):
+    def _fetch_detailed_rows(self, start_time: datetime):
         conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
         try:
-            return conn.execute(_LOGS_SQL, (limit,)).fetchall()
+            rows = conn.execute(_DETAILED_QUERY_SQL, (start_time,)).fetchall()
+            result = []
+            for row in rows:
+                created_at = row[0]
+                if isinstance(created_at, str):
+                    created_at = datetime.fromisoformat(created_at)
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                result.append((created_at, *row[1:]))
+            return result
+        finally:
+            conn.close()
+
+    def _fetch_logs(
+        self,
+        limit: int,
+        user_id: str = None,
+        session_id: str = None,
+        context_id: str = None,
+        has_error: bool = None,
+        keyword: str = None,
+    ):
+        clauses = []
+        params = []
+        for column, value in (("user_id", user_id), ("session_id", session_id), ("context_id", context_id)):
+            if value:
+                clauses.append(f"{column} = ?")
+                params.append(value)
+        if has_error is True:
+            clauses.append("error_info IS NOT NULL AND error_info <> ''")
+        elif has_error is False:
+            clauses.append("(error_info IS NULL OR error_info = '')")
+        if keyword:
+            searchable = (
+                "request_text", "response_text", "response_voice_text",
+                "quick_response_text", "error_info", "tool_calls",
+            )
+            clauses.append("(" + " OR ".join(f"COALESCE({column}, '') LIKE ? ESCAPE '\\'" for column in searchable) + ")")
+            params.extend([f"%{_escape_like(keyword)}%"] * len(searchable))
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"{_LOGS_SELECT_SQL}{where} ORDER BY event_at DESC LIMIT ?"
+        params.append(limit)
+        conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
+        try:
+            return conn.execute(sql, params).fetchall()
         finally:
             conn.close()
 
@@ -341,9 +654,32 @@ class SQLiteMetricsQuery(MetricsQuery):
         rows = await asyncio.to_thread(self._fetch_rows, start_time)
         return _build_summary(rows)
 
-    async def query_logs(self, limit: int) -> List[ConversationGroup]:
-        rows = await asyncio.to_thread(self._fetch_logs, limit)
-        return _group_logs(rows)
+    async def query_detailed_timeline(self, period: str, interval: str) -> List[DetailedTimelineBucket]:
+        if interval not in VALID_INTERVALS:
+            raise ValueError(f"Invalid interval: {interval}. Must be one of {VALID_INTERVALS}")
+        start_time = datetime.now(timezone.utc) - parse_period(period)
+        rows = await asyncio.to_thread(self._fetch_detailed_rows, start_time)
+        return _build_detailed_timeline(rows, INTERVAL_SECONDS[interval], start_time, self.time_origin)
+
+    async def query_detailed_summary(self, period: str) -> DetailedMetricsSummary:
+        start_time = datetime.now(timezone.utc) - parse_period(period)
+        rows = await asyncio.to_thread(self._fetch_detailed_rows, start_time)
+        return _build_detailed_summary(rows, self.time_origin)
+
+    async def query_logs(
+        self,
+        limit: int,
+        *,
+        user_id: str = None,
+        session_id: str = None,
+        context_id: str = None,
+        has_error: bool = None,
+        keyword: str = None,
+    ) -> List[ConversationGroup]:
+        rows = await asyncio.to_thread(
+            self._fetch_logs, limit, user_id, session_id, context_id, has_error, keyword
+        )
+        return _group_logs(rows, self.time_origin)
 
 
 class PostgreSQLMetricsQuery(MetricsQuery):
@@ -356,6 +692,7 @@ class PostgreSQLMetricsQuery(MetricsQuery):
         user: str = "postgres",
         password: str = None,
         connection_str: str = None,
+        time_origin: str = TIME_ORIGIN_USER_SPEECH_END,
     ):
         self.host = host
         self.port = port
@@ -363,6 +700,7 @@ class PostgreSQLMetricsQuery(MetricsQuery):
         self.user = user
         self.password = password
         self.connection_str = connection_str
+        self.time_origin = time_origin
         self._pool = None
 
     async def _get_pool(self):
@@ -381,30 +719,86 @@ class PostgreSQLMetricsQuery(MetricsQuery):
     async def _fetch_rows(self, start_time: datetime):
         pool = await self._get_pool()
         query = """
-        SELECT created_at, stt_time, before_llm_time, llm_first_chunk_time, llm_first_voice_chunk_time, tts_first_chunk_time, quick_response_text, error_info
+        SELECT COALESCE(speech_end_at, created_at) AS event_at,
+               stt_time, before_llm_time, llm_first_chunk_time, llm_first_voice_chunk_time, tts_first_chunk_time, quick_response_text, error_info
         FROM performance_records
-        WHERE created_at >= $1
-        ORDER BY created_at
+        WHERE COALESCE(speech_end_at, created_at) >= $1
+        ORDER BY event_at
         """
         async with pool.acquire() as conn:
             records = await conn.fetch(query, start_time)
-        return [(r["created_at"], r["stt_time"], r["before_llm_time"], r["llm_first_chunk_time"], r["llm_first_voice_chunk_time"], r["tts_first_chunk_time"], r["quick_response_text"], r["error_info"]) for r in records]
+        return [(r["event_at"], r["stt_time"], r["before_llm_time"], r["llm_first_chunk_time"], r["llm_first_voice_chunk_time"], r["tts_first_chunk_time"], r["quick_response_text"], r["error_info"]) for r in records]
 
     async def _fetch_logs(self, limit: int):
+        return await self._fetch_filtered_logs(limit)
+
+    async def _fetch_detailed_rows(self, start_time: datetime):
         pool = await self._get_pool()
         query = """
-        SELECT created_at, transaction_id, user_id, context_id, tts_first_chunk_time, before_llm_time, quick_response_text,
-               request_text, request_files, response_text, response_voice_text, error_info, tool_calls
+        SELECT COALESCE(speech_end_at, created_at) AS event_at,
+               speech_end_at, silence_threshold_time, stt_after_threshold_time, turn_end_gate_time,
+               stt_time, stop_response_time, before_llm_time, llm_first_chunk_time, llm_first_voice_chunk_time,
+               tts_first_chunk_time, quick_response_text, error_info
         FROM performance_records
-        ORDER BY created_at DESC
-        LIMIT $1
+        WHERE COALESCE(speech_end_at, created_at) >= $1
+        ORDER BY event_at
         """
         async with pool.acquire() as conn:
-            records = await conn.fetch(query, limit)
-        return [(r["created_at"], r["transaction_id"], r["user_id"], r["context_id"],
-                 r["tts_first_chunk_time"], r["before_llm_time"], r["quick_response_text"],
-                 r["request_text"], r["request_files"],
-                 r["response_text"], r["response_voice_text"], r["error_info"], r["tool_calls"]) for r in records]
+            records = await conn.fetch(query, start_time)
+        columns = (
+            "event_at", "speech_end_at", "silence_threshold_time", "stt_after_threshold_time",
+            "turn_end_gate_time", "stt_time", "stop_response_time", "before_llm_time",
+            "llm_first_chunk_time", "llm_first_voice_chunk_time", "tts_first_chunk_time",
+            "quick_response_text", "error_info",
+        )
+        return [tuple(record[column] for column in columns) for record in records]
+
+    async def _fetch_filtered_logs(
+        self,
+        limit: int,
+        user_id: str = None,
+        session_id: str = None,
+        context_id: str = None,
+        has_error: bool = None,
+        keyword: str = None,
+    ):
+        clauses = []
+        params = []
+
+        def bind(value):
+            params.append(value)
+            return f"${len(params)}"
+
+        for column, value in (("user_id", user_id), ("session_id", session_id), ("context_id", context_id)):
+            if value:
+                clauses.append(f"{column} = {bind(value)}")
+        if has_error is True:
+            clauses.append("error_info IS NOT NULL AND error_info <> ''")
+        elif has_error is False:
+            clauses.append("(error_info IS NULL OR error_info = '')")
+        if keyword:
+            marker = bind(f"%{_escape_like(keyword)}%")
+            searchable = (
+                "request_text", "response_text", "response_voice_text",
+                "quick_response_text", "error_info", "tool_calls",
+            )
+            clauses.append("(" + " OR ".join(
+                f"COALESCE({column}, '') ILIKE {marker} ESCAPE '\\'" for column in searchable
+            ) + ")")
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        limit_marker = bind(limit)
+        query = f"{_LOGS_SELECT_SQL}{where} ORDER BY event_at DESC LIMIT {limit_marker}"
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            records = await conn.fetch(query, *params)
+        columns = (
+            "event_at", "transaction_id", "user_id", "session_id", "context_id",
+            "tts_first_chunk_time", "before_llm_time", "quick_response_text", "request_text",
+            "request_files", "response_text", "response_voice_text", "error_info", "tool_calls",
+            "speech_end_at", "silence_threshold_time", "stt_after_threshold_time", "turn_end_gate_time",
+            "stt_time", "stop_response_time", "llm_first_chunk_time", "llm_first_voice_chunk_time",
+        )
+        return [tuple(record[column] for column in columns) for record in records]
 
     async def query_timeline(self, period: str, interval: str) -> List[TimelineBucket]:
         if interval not in VALID_INTERVALS:
@@ -418,15 +812,38 @@ class PostgreSQLMetricsQuery(MetricsQuery):
         rows = await self._fetch_rows(start_time)
         return _build_summary(rows)
 
-    async def query_logs(self, limit: int) -> List[ConversationGroup]:
-        rows = await self._fetch_logs(limit)
-        return _group_logs(rows)
+    async def query_detailed_timeline(self, period: str, interval: str) -> List[DetailedTimelineBucket]:
+        if interval not in VALID_INTERVALS:
+            raise ValueError(f"Invalid interval: {interval}. Must be one of {VALID_INTERVALS}")
+        start_time = datetime.now(timezone.utc) - parse_period(period)
+        rows = await self._fetch_detailed_rows(start_time)
+        return _build_detailed_timeline(rows, INTERVAL_SECONDS[interval], start_time, self.time_origin)
+
+    async def query_detailed_summary(self, period: str) -> DetailedMetricsSummary:
+        start_time = datetime.now(timezone.utc) - parse_period(period)
+        rows = await self._fetch_detailed_rows(start_time)
+        return _build_detailed_summary(rows, self.time_origin)
+
+    async def query_logs(
+        self,
+        limit: int,
+        *,
+        user_id: str = None,
+        session_id: str = None,
+        context_id: str = None,
+        has_error: bool = None,
+        keyword: str = None,
+    ) -> List[ConversationGroup]:
+        rows = await self._fetch_filtered_logs(
+            limit, user_id, session_id, context_id, has_error, keyword
+        )
+        return _group_logs(rows, self.time_origin)
 
 
 def create_metrics_query(recorder) -> MetricsQuery:
     from .sqlite import SQLitePerformanceRecorder
     if isinstance(recorder, SQLitePerformanceRecorder):
-        return SQLiteMetricsQuery(recorder.db_path)
+        return SQLiteMetricsQuery(recorder.db_path, time_origin=recorder.time_origin)
 
     from .postgres import PostgreSQLPerformanceRecorder
     if isinstance(recorder, PostgreSQLPerformanceRecorder):
@@ -437,6 +854,7 @@ def create_metrics_query(recorder) -> MetricsQuery:
             user=recorder.user,
             password=recorder.password,
             connection_str=recorder.connection_str,
+            time_origin=recorder.time_origin,
         )
 
     raise ValueError(f"Unsupported recorder type: {type(recorder)}")

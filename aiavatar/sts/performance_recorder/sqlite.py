@@ -37,6 +37,7 @@ class SQLitePerformanceRecorder(PerformanceRecorder):
                         created_at TIMESTAMP,
                         transaction_id TEXT,
                         user_id TEXT,
+                        session_id TEXT,
                         context_id TEXT,
                         voice_length REAL,
                         speech_end_at TIMESTAMP,
@@ -78,6 +79,9 @@ class SQLitePerformanceRecorder(PerformanceRecorder):
                 if "user_id" not in columns:
                     conn.execute("ALTER TABLE performance_records ADD COLUMN user_id TEXT")
 
+                if "session_id" not in columns:
+                    conn.execute("ALTER TABLE performance_records ADD COLUMN session_id TEXT")
+
                 # Add transaction_id column if not exist (migration v0.3.3 -> 0.3.4)
                 if "transaction_id" not in columns:
                     print("add column: transaction_id")
@@ -116,8 +120,13 @@ class SQLitePerformanceRecorder(PerformanceRecorder):
 
                 # Create index
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_created_at ON performance_records (created_at)")
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_performance_event_at "
+                    "ON performance_records (COALESCE(speech_end_at, created_at))"
+                )
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_transaction_id ON performance_records (transaction_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON performance_records (user_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_session_id ON performance_records (session_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_context_id ON performance_records (context_id)")
 
         finally:

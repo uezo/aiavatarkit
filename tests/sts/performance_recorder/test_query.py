@@ -135,6 +135,27 @@ async def test_query_timeline_excludes_old_data(recorder, db_path, query):
 
 
 @pytest.mark.asyncio
+async def test_metrics_use_speech_end_with_created_at_fallback(recorder, db_path, query):
+    now = datetime.now(timezone.utc)
+    current_txn = f"speech-current-{uuid4()}"
+    recorder.record(PerformanceRecord(
+        transaction_id=current_txn,
+        speech_end_at=now,
+    ))
+    recorder.record(PerformanceRecord(
+        transaction_id=f"speech-old-{uuid4()}",
+        speech_end_at=now - timedelta(hours=2),
+    ))
+    recorder.record_queue.join()
+
+    # Storage time must not move a recent speech event outside the period.
+    _update_created_at(db_path, current_txn, now - timedelta(hours=2))
+
+    result = await query.query_summary("1h")
+    assert result.total_requests == 1
+
+
+@pytest.mark.asyncio
 async def test_query_timeline_success_and_error_counts(recorder, db_path, query):
     """Test that success and error counts are correct"""
     # Create success record
@@ -472,3 +493,158 @@ async def test_query_timeline_all_intervals(recorder, db_path, query):
         period = "30d" if interval == "1d" else "24h"
         result = await query.query_timeline(period, interval)
         assert len(result) > 0
+
+
+# ========== detailed metrics and log filters ==========
+
+@pytest.mark.asyncio
+async def test_detailed_summary_stacks_from_speech_end(recorder, query):
+    recorder.record(PerformanceRecord(
+        transaction_id=f"test_txn_{uuid4()}",
+        speech_end_at=datetime.now(timezone.utc),
+        silence_threshold_time=0.5,
+        stt_after_threshold_time=0.1,
+        turn_end_gate_time=0.2,
+        stt_time=0.1,
+        stop_response_time=0.15,
+        before_llm_time=0.2,
+        llm_first_chunk_time=0.3,
+        llm_first_voice_chunk_time=0.4,
+        tts_first_chunk_time=0.6,
+    ))
+    recorder.record_queue.join()
+
+    result = await query.query_detailed_summary("1h")
+    phases = [
+        result.avg_silence_detection_phase,
+        result.avg_streaming_stt_finalization_phase,
+        result.avg_turn_end_gate_phase,
+        result.avg_stt_phase,
+        result.avg_stop_response_phase,
+        result.avg_before_llm_phase,
+        result.avg_llm_phase,
+        result.avg_processing_phase,
+        result.avg_tts_phase,
+    ]
+    assert phases == pytest.approx([0.5, 0.1, 0.2, 0.1, 0.05, 0.05, 0.1, 0.1, 0.2])
+    assert sum(phases) == pytest.approx(result.avg_first_response_time)
+    assert result.avg_first_response_time == pytest.approx(1.4)
+    assert result.measured_count == 1
+
+
+@pytest.mark.asyncio
+async def test_detailed_summary_supports_pipeline_start_origin(tmp_path):
+    path = str(tmp_path / "pipeline-origin.db")
+    origin_recorder = SQLitePerformanceRecorder(db_path=path, time_origin="pipeline_start")
+    try:
+        origin_recorder.record(PerformanceRecord(
+            transaction_id="pipeline-origin",
+            speech_end_at=datetime.now(timezone.utc),
+            silence_threshold_time=0.5,
+            stt_after_threshold_time=0.1,
+            turn_end_gate_time=0.2,
+            stt_time=0.1,
+            stop_response_time=0.15,
+            before_llm_time=0.2,
+            llm_first_chunk_time=0.3,
+            llm_first_voice_chunk_time=0.4,
+            tts_first_chunk_time=0.6,
+        ))
+        origin_recorder.record_queue.join()
+        origin_query = SQLiteMetricsQuery(path, time_origin="pipeline_start")
+        result = await origin_query.query_detailed_summary("1h")
+    finally:
+        origin_recorder.close()
+    assert result.avg_first_response_time == pytest.approx(1.4)
+    assert result.avg_silence_detection_phase == pytest.approx(0.5)
+    assert result.avg_tts_phase == pytest.approx(0.2)
+
+
+@pytest.mark.asyncio
+async def test_detailed_summary_quick_response_stops_at_before_llm(recorder, query):
+    recorder.record(PerformanceRecord(
+        transaction_id=f"test_txn_{uuid4()}",
+        speech_end_at=datetime.now(timezone.utc),
+        silence_threshold_time=0.5,
+        stt_after_threshold_time=0.1,
+        turn_end_gate_time=0.2,
+        stt_time=0.1,
+        stop_response_time=0.15,
+        before_llm_time=0.2,
+        quick_response_text="please wait",
+    ))
+    recorder.record_queue.join()
+
+    result = await query.query_detailed_summary("1h")
+    assert result.avg_first_response_time == pytest.approx(1.0)
+    assert result.avg_processing_phase == 0
+    assert result.avg_tts_phase == 0
+
+
+@pytest.mark.asyncio
+async def test_detailed_summary_reports_coverage(recorder, query):
+    recorder.record(PerformanceRecord(transaction_id="old", tts_first_chunk_time=0.5))
+    recorder.record(PerformanceRecord(
+        transaction_id="measured",
+        speech_end_at=datetime.now(timezone.utc),
+        silence_threshold_time=0.2,
+        tts_first_chunk_time=0.5,
+    ))
+    recorder.record(PerformanceRecord(
+        transaction_id="error",
+        speech_end_at=datetime.now(timezone.utc),
+        tts_first_chunk_time=0.5,
+        error_info="failed",
+    ))
+    recorder.record_queue.join()
+
+    result = await query.query_detailed_summary("1h")
+    assert result.total_requests == 3
+    assert result.success_count == 2
+    assert result.error_count == 1
+    assert result.measured_count == 1
+
+
+@pytest.mark.asyncio
+async def test_detailed_summary_excludes_silence_only_record(recorder, query):
+    recorder.record(PerformanceRecord(
+        transaction_id="silence-only",
+        speech_end_at=datetime.now(timezone.utc),
+        silence_threshold_time=0.5,
+    ))
+    recorder.record_queue.join()
+
+    result = await query.query_detailed_summary("1h")
+    assert result.total_requests == 1
+    assert result.success_count == 1
+    assert result.measured_count == 0
+    assert result.avg_first_response_time is None
+
+
+@pytest.mark.asyncio
+async def test_query_logs_filters_and_includes_session_id(recorder, query):
+    records = [
+        PerformanceRecord(transaction_id="a", user_id="u1", session_id="s1", context_id="c1", request_text="hello tokyo"),
+        PerformanceRecord(transaction_id="b", user_id="u1", session_id="s2", context_id="c1", response_text="hello osaka", error_info="boom"),
+        PerformanceRecord(transaction_id="c", user_id="u2", session_id="s1", context_id="c2", tool_calls='[{"name":"weather"}]'),
+    ]
+    for record in records:
+        recorder.record(record)
+    recorder.record_queue.join()
+
+    result = await query.query_logs(10, user_id="u1", session_id="s1", keyword="tokyo", has_error=False)
+    assert len(result) == 1
+    assert len(result[0].logs) == 1
+    assert result[0].logs[0].session_id == "s1"
+    assert (await query.query_logs(10, has_error=True))[0].logs[0].transaction_id == "b"
+    assert (await query.query_logs(10, keyword="weather"))[0].logs[0].transaction_id == "c"
+
+
+@pytest.mark.asyncio
+async def test_log_filters_are_applied_before_limit(recorder, query):
+    for index in range(5):
+        recorder.record(PerformanceRecord(transaction_id=f"other-{index}", session_id="other"))
+    recorder.record(PerformanceRecord(transaction_id="target", session_id="target"))
+    recorder.record_queue.join()
+    result = await query.query_logs(1, session_id="target")
+    assert result[0].logs[0].transaction_id == "target"
