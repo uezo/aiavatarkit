@@ -3,9 +3,10 @@ import logging
 import os
 from typing import List
 import uuid
-from fastapi import APIRouter, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, status, BackgroundTasks
 from pydantic import BaseModel, Field
 from ..eval.dialog import DialogEvaluator, Scenario
+from .auth import create_api_key_dependency
 
 logger = logging.getLogger(__name__)
 
@@ -109,3 +110,13 @@ class EvaluationAPI:
                 )
 
         return router
+
+
+def setup_evaluation_api(
+    app: FastAPI,
+    *,
+    evaluator: DialogEvaluator = None,
+    api_key: str = None
+):
+    deps = [Depends(create_api_key_dependency(api_key))] if api_key else []
+    app.include_router(EvaluationAPI(evaluator=evaluator).get_router(), dependencies=deps)

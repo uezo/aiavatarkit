@@ -2371,61 +2371,52 @@ Now writing... ✍️
 
 ## ⚙️ Administration
 
-AIAvatarKit provides a built-in admin panel for monitoring, controlling, and evaluating your AI avatar from a web browser.
+AIAvatarKit provides a built-in admin panel for monitoring, configuring, and evaluating your AI avatar from a web browser.
 
 ### Admin Panel
 
-Set up the admin panel with a single function call. Once configured, access it at `/admin` on your server.
+Set up the Admin Panel with a single function call. Once configured, access it at `/admin/` on your server.
 
 ```python
-from aiavatar.admin import setup_admin_panel
+import os
+
+from aiavatar.admin import BasicAdminAuthenticator, setup_admin_panel
 
 setup_admin_panel(
     app,
     adapter=aiavatar_app,
-    evaluator=evaluator,                    # Optional: If omitted, the pipeline LLM settings are used
-    character_service=character_service,    # Optional: If using CharacterService
-    character_id=YOUR_CHARACTER_ID,         # Optional: Required if character_service is set
-    api_key="your-api-key"                  # Optional: If omitted, no authentication is required
+    authenticator=BasicAdminAuthenticator(
+        os.environ["ADMIN_USERNAME"],
+        os.environ["ADMIN_PASSWORD"],
+    ),
 )
 ```
 
-The admin panel includes:
+The Admin Panel includes:
 
-- **Metrics** — Real-time performance metrics for the STS pipeline
-- **Logs** — Conversation logs with voice playback
-- **Control** — Send speech and conversation messages to the avatar
+- **Metrics** — First-response statistics and a detailed latency breakdown measured from the end of the user's speech
+- **Logs** — Searchable conversation messages grouped by context, with session filtering, voice playback, and per-turn timing details
 - **Config** — Adjust pipeline, VAD, STT, LLM, TTS, and adapter settings at runtime
-- **Evaluation** — Run dialog evaluation scenarios
-- **Character** — Manage character info, weekly schedule, daily schedules, diaries, and users (requires `character_service`)
+- **Evaluation** — Run dialog evaluation scenarios when an evaluator is available
+- **Light/Dark themes** — Follow the operating system theme or switch it manually
 
-To protect the admin panel with Basic authentication:
+Evaluation is configured automatically when the pipeline uses `ChatGPTService`. For other LLM services, pass a `DialogEvaluator` through the optional `evaluator` argument.
 
-```python
-setup_admin_panel(
-    app,
-    adapter=aiavatar_app,
-    api_key="your-api-key",
-    basic_auth_username="admin",
-    basic_auth_password="your-password",
-)
-```
+The same authenticator protects the HTML, static assets, and `/admin/api` endpoints. The frontend does not use a separate API key. In addition to `BasicAdminAuthenticator`, `authenticator` accepts any synchronous or asynchronous callable that receives a FastAPI `Request`, allowing integration with an SSO session or an authenticated reverse proxy.
 
-You can also supply your own HTML to fully customize the admin page:
+Passing `authenticator=None` disables authentication and should be limited to local development. Use HTTPS when using Basic authentication in production.
+
+Character and Control features are not part of the new Admin Panel. The previous UI and APIs remain available as an independent legacy package when an existing application still needs them:
 
 ```python
-custom_html = open("my_admin.html").read()
-
-setup_admin_panel(
-    app,
-    adapter=aiavatar_app,
-    html=custom_html,       # Use your own HTML instead of the built-in template
-)
+from aiavatar.admin_legacy import setup_admin_panel
 ```
+
+See the [Admin Panel documentation](aiavatar/admin/README.md) for authentication examples, screen and API specifications, component responsibilities, time semantics, and frontend development instructions.
 
 ### REST API
 
-All admin panel features are also available as REST API endpoints. See the interactive API documentation at `/docs` on your server for full details on request/response schemas.
+Admin Panel operations are available under `/admin/api` and use the same authentication as the UI. See the interactive API documentation at `/docs` for request and response schemas, or the [Admin Panel API summary](aiavatar/admin/README.md#api) for an overview.
 
 ### 📈 Observability
 

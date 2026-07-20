@@ -99,6 +99,7 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
                         created_at TIMESTAMPTZ,
                         transaction_id TEXT,
                         user_id TEXT,
+                        session_id TEXT,
                         context_id TEXT,
                         voice_length REAL,
                         speech_end_at TIMESTAMPTZ,
@@ -134,6 +135,8 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
 
                 # Add user_id column if not exist (migration v0.3.2 -> 0.3.3)
                 await self.add_column_if_not_exist(conn, "user_id")
+
+                await self.add_column_if_not_exist(conn, "session_id")
 
                 # Add transaction_id column if not exist (migration v0.3.3 -> 0.3.4)
                 await self.add_column_if_not_exist(conn, "transaction_id")
@@ -175,8 +178,13 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
 
                 # Create index
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_created_at ON performance_records (created_at)")
+                await conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_performance_event_at "
+                    "ON performance_records ((COALESCE(speech_end_at, created_at)))"
+                )
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_transaction_id ON performance_records (transaction_id)")
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON performance_records (user_id)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_session_id ON performance_records (session_id)")
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_context_id ON performance_records (context_id)")
 
                 self._db_initialized = True

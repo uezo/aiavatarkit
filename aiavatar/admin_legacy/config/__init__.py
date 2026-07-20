@@ -1,8 +1,9 @@
 import re
 from typing import Dict, List, Union
-from fastapi import APIRouter
+from fastapi import Depends, FastAPI
 from ...sts.pipeline import STSPipeline
 from ...adapter.base import Adapter
+from ..auth import create_api_key_dependency
 from .adapter import AdapterConfigAPI
 from .pipeline import PipelineConfigAPI
 from .vad import VadConfigAPI
@@ -26,12 +27,15 @@ def _adapter_key(adapter: Adapter) -> str:
     return name.lower()
 
 
-def create_config_router(
+def setup_config_api(
+    app: FastAPI,
     *,
     adapter: Union[Adapter, List[Adapter], Dict[str, Adapter], None] = None,
     sts: STSPipeline = None,
-) -> tuple[APIRouter, Dict[str, Adapter]]:
-    """Build Config routes and return them with the mutable adapter registry."""
+    api_key: str = None
+) -> Dict[str, Adapter]:
+    """Set up config API routes and return the adapters dict (mutable)."""
+    deps = [Depends(create_api_key_dependency(api_key))] if api_key else []
 
     if isinstance(adapter, dict):
         _adapters = adapter
@@ -42,18 +46,18 @@ def create_config_router(
     else:
         _adapters = {}
 
-    router = APIRouter()
-    router.include_router(AdapterConfigAPI(adapters=_adapters).get_router())
+    adapter_router = AdapterConfigAPI(adapters=_adapters).get_router()
+    app.include_router(adapter_router, dependencies=deps)
 
     _sts = sts or (next(iter(_adapters.values())).sts if _adapters else None)
 
     if _sts is None:
         raise ValueError("Either 'sts' or 'adapter' must be provided")
 
-    router.include_router(PipelineConfigAPI(pipeline=_sts).get_router())
-    router.include_router(VadConfigAPI(vad=_sts.vad).get_router())
-    router.include_router(SttConfigAPI(stt=_sts.stt).get_router())
-    router.include_router(LlmConfigAPI(llm=_sts.llm).get_router())
-    router.include_router(TtsConfigAPI(tts=_sts.tts).get_router())
+    app.include_router(PipelineConfigAPI(pipeline=_sts).get_router(), dependencies=deps)
+    app.include_router(VadConfigAPI(vad=_sts.vad).get_router(), dependencies=deps)
+    app.include_router(SttConfigAPI(stt=_sts.stt).get_router(), dependencies=deps)
+    app.include_router(LlmConfigAPI(llm=_sts.llm).get_router(), dependencies=deps)
+    app.include_router(TtsConfigAPI(tts=_sts.tts).get_router(), dependencies=deps)
 
-    return router, _adapters
+    return _adapters

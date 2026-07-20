@@ -16,6 +16,7 @@ VALID_TIME_ORIGINS = {
 class PerformanceRecord:
     transaction_id: str
     user_id: str = None
+    session_id: str = None
     context_id: str = None
     stt_name: str = None
     llm_name: str = None

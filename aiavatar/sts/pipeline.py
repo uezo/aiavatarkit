@@ -351,6 +351,7 @@ class STSPipeline:
             performance = PerformanceRecord(
                 transaction_id=request.transaction_id,
                 user_id=request.user_id,
+                session_id=request.session_id,
                 stt_name=self.stt.__class__.__name__,
                 llm_name=self.llm.__class__.__name__,
                 tts_name=self.tts.__class__.__name__

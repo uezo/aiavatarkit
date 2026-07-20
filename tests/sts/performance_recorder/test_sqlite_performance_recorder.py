@@ -198,8 +198,10 @@ def test_init_db_creates_indexes(recorder, db_path):
         rows = cursor.fetchall()
         index_names = {row[0] for row in rows}
         assert "idx_created_at" in index_names
+        assert "idx_performance_event_at" in index_names
         assert "idx_transaction_id" in index_names
         assert "idx_user_id" in index_names
+        assert "idx_session_id" in index_names
         assert "idx_context_id" in index_names
     finally:
         conn.close()
@@ -227,3 +229,36 @@ def test_default_db_path():
         # Cleanup default db file
         if os.path.exists(default_path):
             os.remove(default_path)
+
+
+def test_migrates_session_id_without_backfill(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("""
+            CREATE TABLE performance_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TIMESTAMP,
+                transaction_id TEXT,
+                context_id TEXT
+            )
+        """)
+        conn.execute("INSERT INTO performance_records (transaction_id) VALUES ('legacy')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    recorder = SQLitePerformanceRecorder(db_path=str(db_path))
+    recorder.close()
+    conn = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(performance_records)")}
+        legacy_session = conn.execute(
+            "SELECT session_id FROM performance_records WHERE transaction_id = 'legacy'"
+        ).fetchone()[0]
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(performance_records)")}
+    finally:
+        conn.close()
+    assert "session_id" in columns
+    assert legacy_session is None
+    assert "idx_session_id" in indexes
