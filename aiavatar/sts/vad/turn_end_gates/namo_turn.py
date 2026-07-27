@@ -2,7 +2,8 @@ import asyncio
 import logging
 import os
 import threading
-from typing import Any, Optional
+import unicodedata
+from typing import Any, Iterable, Optional
 
 import numpy as np
 import onnxruntime as ort
@@ -64,7 +65,11 @@ class NamoTurnEndGate(TurnEndGate):
         model_filename: str = "model_quant.onnx",
         tokenizer: Any = None,
         session: Any = None,
+        # Minimum probability for class 1 ("End of Turn").
+        # Higher values make the gate more likely to classify an utterance as not end of turn.
         threshold: float = 0.5,
+        # Exact phrases that should end the turn without running the model.
+        force_end_phrases: Optional[Iterable[str]] = None,
         max_length: Optional[int] = None,
         truncation_side: str = "left",
         timeout: Optional[float] = 1.5,
@@ -77,6 +82,12 @@ class NamoTurnEndGate(TurnEndGate):
         self.language = language
         self.repo_id = repo_id or get_namo_repo_id(language)
         self.threshold = threshold
+        self.force_end_phrases = list(force_end_phrases or [])
+        self.normalized_force_end_phrases = {
+            normalized
+            for phrase in self.force_end_phrases
+            if (normalized := self._normalize_phrase(phrase))
+        }
         self.no_text_should_end = no_text_should_end
         self.max_length = max_length if max_length is not None else (8192 if language is None else 512)
         self.truncation_side = truncation_side
@@ -120,6 +131,15 @@ class NamoTurnEndGate(TurnEndGate):
             kwargs["providers"] = providers
         return ort.InferenceSession(model_path, **kwargs)
 
+    @staticmethod
+    def _normalize_phrase(text: str) -> str:
+        normalized = unicodedata.normalize("NFKC", str(text)).casefold()
+        return "".join(
+            ch
+            for ch in normalized
+            if not ch.isspace() and unicodedata.category(ch)[0] not in {"P", "S"}
+        )
+
     def _predict(self, text: str) -> tuple[int, float]:
         inputs = self.tokenizer(
             text,
@@ -135,8 +155,8 @@ class NamoTurnEndGate(TurnEndGate):
             outputs = self.session.run(None, feed_dict)
         probabilities = self._softmax(np.asarray(outputs[0])[0])
         predicted_label = int(np.argmax(probabilities))
-        confidence = float(np.max(probabilities))
-        return predicted_label, confidence
+        end_probability = float(probabilities[1])
+        return predicted_label, end_probability
 
     def _softmax(self, x: np.ndarray, axis: Optional[int] = None) -> np.ndarray:
         if axis is None:
@@ -174,21 +194,36 @@ class NamoTurnEndGate(TurnEndGate):
                 timeout=None if self.no_text_should_end else self.timeout,
             )
 
-        predicted_label, confidence = await asyncio.to_thread(self._predict, normalized_text)
-        should_end = predicted_label == 1 and confidence >= self.threshold
+        phrase_text = self._normalize_phrase(normalized_text)
+        if phrase_text in self.normalized_force_end_phrases:
+            if self.debug:
+                logger.info(
+                    "Namo Turn: PASS force_end_phrase session=%s, text=%r, normalized=%r",
+                    session_id,
+                    normalized_text,
+                    phrase_text,
+                )
+            return TurnEndDecision(
+                should_end=True,
+                confidence=1.0,
+                reason="namo_force_end_phrase",
+            )
+
+        predicted_label, end_probability = await asyncio.to_thread(self._predict, normalized_text)
+        should_end = end_probability >= self.threshold
         if self.debug:
             logger.info(
-                "Namo Turn: %s session=%s, label=%s, confidence=%.3f, threshold=%.3f, text=%r",
+                "Namo Turn: %s session=%s, label=%s, end_probability=%.3f, threshold=%.3f, text=%r",
                 "PASS complete" if should_end else "WAIT incomplete",
                 session_id,
                 predicted_label,
-                confidence,
+                end_probability,
                 self.threshold,
                 normalized_text,
             )
         return TurnEndDecision(
             should_end=should_end,
-            confidence=confidence,
+            confidence=end_probability,
             reason="namo_end_of_turn" if should_end else "namo_not_end_of_turn",
             timeout=None if should_end else self.timeout,
         )
