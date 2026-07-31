@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import AsyncExitStack
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import json
@@ -73,6 +74,7 @@ class STSPipeline:
         skip_tts_channels: List[str] = None,
         debug: bool = False
     ):
+        self._lifecycle = AsyncExitStack()
         self.debug = debug
         self.use_invoke_queue = use_invoke_queue
 
@@ -185,7 +187,7 @@ class STSPipeline:
         self._process_llm_chunk = self.process_llm_chunk_default
 
         # Performance recorder
-        if performance_recorder:
+        if performance_recorder is not None:
             self.performance_recorder = performance_recorder
         else:
             if self.db_pool_provider:
@@ -193,12 +195,20 @@ class STSPipeline:
                 self.performance_recorder = PostgreSQLPerformanceRecorder(connection_str=self.db_pool_provider.connection_str)
             else:
                 self.performance_recorder = SQLitePerformanceRecorder(db_path=db_connection_str)
+            self._lifecycle.push_async_callback(
+                asyncio.to_thread,
+                self.performance_recorder.close,
+            )
 
         # Voice recorder
-        self.voice_recorder = voice_recorder or FileVoiceRecorder(
-            record_dir=voice_recorder_dir,
-            sample_rate=stt_sample_rate
-        )
+        if voice_recorder is not None:
+            self.voice_recorder = voice_recorder
+        else:
+            self.voice_recorder = FileVoiceRecorder(
+                record_dir=voice_recorder_dir,
+                sample_rate=stt_sample_rate,
+            )
+            self._lifecycle.push_async_callback(self.voice_recorder.stop)
         self.voice_recorder_enabled = voice_recorder_enabled
         self.voice_recorder_response_audio_format = "wav"
 
@@ -800,5 +810,5 @@ class STSPipeline:
         await self.vad.finalize_session(context_id)
 
     async def shutdown(self):
-        self.performance_recorder.close()
-        await self.voice_recorder.stop()
+        """Close resources constructed and owned by this pipeline."""
+        await self._lifecycle.aclose()
