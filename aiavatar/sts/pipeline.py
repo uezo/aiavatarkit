@@ -7,7 +7,7 @@ import logging
 import re
 from time import time
 import traceback
-from typing import AsyncGenerator, Dict, Tuple, List, Optional
+from typing import AsyncGenerator, Collection, Dict, FrozenSet, Tuple, List, Optional, Union
 from uuid import uuid4
 from ..database import PoolProvider
 from .models import STSRequest, STSResponse
@@ -30,8 +30,72 @@ logger = logging.getLogger(__name__)
 
 LANGUAGE_PATTERN = re.compile(r"""\[(?:lang|language):([a-zA-Z-]+)\]|<(?:lang|language)\s[^>]*code=["']([a-zA-Z-]+)["']""")
 
+ChannelTagRule = Union[str, Tuple[str, str]]
+InsertChannelTagConfig = Union[bool, List[ChannelTagRule]]
+
+
+class ResponseHandler:
+    def __init__(self, can_handle: callable, handle_response: callable, stop_response: callable):
+        self.can_handle = can_handle
+        self.handle_response = handle_response
+        self.stop_response = stop_response
+
 
 class STSPipeline:
+    @property
+    def insert_channel_tag(self) -> InsertChannelTagConfig:
+        if isinstance(self._insert_channel_tag, list):
+            return list(self._insert_channel_tag)
+        return self._insert_channel_tag
+
+    @insert_channel_tag.setter
+    def insert_channel_tag(self, config: InsertChannelTagConfig):
+        if isinstance(config, bool):
+            self._insert_channel_tag = config
+            self._channel_tag_names = {}
+            return
+
+        if not isinstance(config, list):
+            raise TypeError("insert_channel_tag must be a bool or a list of channel tag rules")
+
+        normalized_rules: List[ChannelTagRule] = []
+        channel_tag_names: Dict[str, str] = {}
+        for rule in config:
+            if isinstance(rule, str):
+                source_channel = rule
+                tag_name = rule
+                normalized_rule: ChannelTagRule = rule
+            elif isinstance(rule, tuple) and len(rule) == 2:
+                source_channel, tag_name = rule
+                normalized_rule = rule
+            else:
+                raise TypeError(
+                    "insert_channel_tag rules must be channel names or "
+                    "(channel, tag_name) tuples"
+                )
+
+            if not isinstance(source_channel, str) or not source_channel:
+                raise ValueError("insert_channel_tag channel names must be non-empty strings")
+            if not isinstance(tag_name, str) or not tag_name:
+                raise ValueError("insert_channel_tag tag names must be non-empty strings")
+            if source_channel in channel_tag_names:
+                raise ValueError(
+                    f"insert_channel_tag contains duplicate channel: {source_channel}"
+                )
+
+            normalized_rules.append(normalized_rule)
+            channel_tag_names[source_channel] = tag_name
+
+        self._insert_channel_tag = normalized_rules
+        self._channel_tag_names = channel_tag_names
+
+    def _resolve_channel_tag_name(self, channel: Optional[str]) -> Optional[str]:
+        if not channel or self._insert_channel_tag is False:
+            return None
+        if self._insert_channel_tag is True:
+            return channel
+        return self._channel_tag_names.get(channel)
+
     def __init__(
         self,
         *,
@@ -70,7 +134,7 @@ class STSPipeline:
         invoke_queue_idle_timeout: float = 10.0,
         invoke_timeout: float = 60.0,
         use_invoke_queue: bool = False,
-        insert_channel_tag: bool = False,
+        insert_channel_tag: InsertChannelTagConfig = False,
         skip_tts_channels: List[str] = None,
         debug: bool = False
     ):
@@ -110,23 +174,7 @@ class STSPipeline:
             sample_rate=vad_sample_rate,
             debug=debug
         )
-
-        @self.vad.on_speech_detected
-        async def on_speech_detected(data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
-            async for response in self.invoke(STSRequest(
-                session_id=session_id,
-                user_id=self.vad.get_session_data(session_id, "user_id"),
-                context_id=self.vad.get_session_data(session_id, "context_id"),
-                channel=self.vad.get_session_data(session_id, "channel"),
-                text=text,
-                audio_data=data,
-                audio_duration=recorded_duration,
-                system_prompt_params=self.vad.get_session_data(session_id, "system_prompt_params"),
-                metadata=metadata,
-            )):
-                if response.type == "start":
-                    self.vad.set_session_data(session_id, "context_id", response.context_id)
-                await self.handle_response(response)
+        self.vad.on_speech_detected(self.on_speech_detected)
 
         # Speech-to-Text
         self.stt = stt or GoogleSpeechRecognizer(
@@ -182,8 +230,7 @@ class STSPipeline:
         self.timestamp_prefix = timestamp_prefix
 
         # Response handler
-        self.handle_response = self.handle_response_default
-        self.stop_response = self.stop_response_default
+        self.response_handlers: List[ResponseHandler] = []
         self._process_llm_chunk = self.process_llm_chunk_default
 
         # Performance recorder
@@ -260,24 +307,77 @@ class STSPipeline:
         self._validate_request = func
         return func
 
-    def on_before_llm(self, func):
-        self._on_before_llm_handlers.append(func)
-        return func
+    @staticmethod
+    def _normalize_hook_channels(
+        channels: Optional[Union[str, Collection[str]]]
+    ) -> Optional[FrozenSet[str]]:
+        if channels is None:
+            return None
 
-    def on_before_tts(self, func):
-        self._on_before_tts_handlers.append(func)
-        return func
+        normalized = (
+            frozenset([channels])
+            if isinstance(channels, str)
+            else frozenset(channels)
+        )
+        if not normalized:
+            raise ValueError("channels must not be empty")
+        if any(not isinstance(channel, str) or not channel for channel in normalized):
+            raise ValueError("channels must contain non-empty strings")
+        return normalized
 
-    def on_accepted(self, func):
-        self._on_accepted_handlers.append(func)
-        return func
+    def _register_hook(self, handlers: list, func=None, *, channels=None):
+        normalized_channels = self._normalize_hook_channels(channels)
 
-    def on_finish(self, func):
-        self._on_finish_handlers.append(func)
-        return func
+        def register(handler):
+            handlers.append((normalized_channels, handler))
+            return handler
+
+        return register if func is None else register(func)
+
+    async def _execute_hooks(self, handlers: list, channel: Optional[str], *args):
+        for channels, handler in handlers:
+            if channels is None or channel in channels:
+                await handler(*args)
+
+    def on_before_llm(self, func=None, *, channels=None):
+        return self._register_hook(self._on_before_llm_handlers, func, channels=channels)
+
+    def on_before_tts(self, func=None, *, channels=None):
+        return self._register_hook(self._on_before_tts_handlers, func, channels=channels)
+
+    def on_accepted(self, func=None, *, channels=None):
+        return self._register_hook(self._on_accepted_handlers, func, channels=channels)
+
+    def on_finish(self, func=None, *, channels=None):
+        return self._register_hook(self._on_finish_handlers, func, channels=channels)
+
+    def add_response_handler(self, handler: ResponseHandler):
+        self.response_handlers.append(handler)
 
     async def process_audio_samples(self, samples: bytes, context_id: str):
         await self.vad.process_samples(samples, context_id)
+
+    async def on_speech_detected(self, data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
+        # Get response handler before loop
+        response_handler = self._resolve_handler(session_id)
+        if not response_handler:
+            logger.warning(f"No response handler found for invoke: session_id={session_id}")
+            return
+
+        async for response in self.invoke(STSRequest(
+            session_id=session_id,
+            user_id=self.vad.get_session_data(session_id, "user_id"),
+            context_id=self.vad.get_session_data(session_id, "context_id"),
+            channel=self.vad.get_session_data(session_id, "channel"),
+            text=text,
+            audio_data=data,
+            audio_duration=recorded_duration,
+            system_prompt_params=self.vad.get_session_data(session_id, "system_prompt_params"),
+            metadata=metadata,
+        )):
+            if response.type == "start":
+                self.vad.set_session_data(session_id, "context_id", response.context_id)
+            await response_handler.handle_response(response)
 
     def set_speech_recognizer(
         self,
@@ -305,11 +405,22 @@ class STSPipeline:
     async def process_llm_chunk_default(self, llm_stream_chunk: LLMResponse, session_id: str, user_id: str):
         return {}
 
-    async def handle_response_default(self, response: STSResponse):
-        logger.info(f"Handle response: {response}")
+    def _resolve_handler(self, session_id: str) -> ResponseHandler:
+        for h in self.response_handlers:
+            if h.can_handle(session_id):
+                return h
 
-    async def stop_response_default(self, session_id: str, context_id: str):
-        logger.info(f"Stop response: {session_id} / {context_id}")
+    async def handle_response(self, response: STSResponse):
+        if handler := self._resolve_handler(response.session_id):
+            await handler.handle_response(response)
+        else:
+            logger.warning(f"No response handler found: session_id={response.session_id}")
+
+    async def stop_response(self, session_id: str, context_id: str):
+        if handler := self._resolve_handler(session_id):
+            await handler.stop_response(session_id, context_id)
+        else:
+            logger.warning(f"No stop handler found: session_id={session_id}")
 
     def is_awake(self, request: STSRequest, last_request_at: datetime) -> bool:
         now = datetime.now(timezone.utc)
@@ -348,6 +459,7 @@ class STSPipeline:
                 raise ValueError("session_id is required but not provided")
 
             start_time = time()
+            hook_channel = request.channel
             # Notify client that request is accepted (fire and forget to avoid blocking pipeline latency)
             asyncio.create_task(self.handle_response(STSResponse(
                 type="accepted",
@@ -355,8 +467,7 @@ class STSPipeline:
                 transaction_id=request.transaction_id,
                 metadata={"block_barge_in": request.block_barge_in}
             )))
-            for handler in self._on_accepted_handlers:
-                await handler(request)
+            await self._execute_hooks(self._on_accepted_handlers, hook_channel, request)
 
             performance = PerformanceRecord(
                 transaction_id=request.transaction_id,
@@ -414,8 +525,8 @@ class STSPipeline:
                 recognized_text = ""    # Request without both text and audio (e.g. image only)
 
             # Insert channel tag
-            if self.insert_channel_tag and request.channel:
-                channel_tag = f"<channel name='{request.channel}' />"
+            if channel_tag_name := self._resolve_channel_tag_name(request.channel):
+                channel_tag = f"<channel name='{channel_tag_name}' />"
                 request.text = f"{channel_tag}{recognized_text}" if recognized_text else channel_tag
             else:
                 request.text = recognized_text
@@ -503,8 +614,7 @@ class STSPipeline:
             )
 
             # LLM
-            for handler in self._on_before_llm_handlers:
-                await handler(request)
+            await self._execute_hooks(self._on_before_llm_handlers, hook_channel, request)
             performance.before_llm_time = time() - start_time
             performance.quick_response_text = request.quick_response_text
 
@@ -563,8 +673,7 @@ class STSPipeline:
                         performance.response_voice_text = voice_text
                         if performance.llm_first_voice_chunk_time == 0:
                             performance.llm_first_voice_chunk_time = time() - start_time
-                            for handler in self._on_before_tts_handlers:
-                                await handler(request)
+                            await self._execute_hooks(self._on_before_tts_handlers, hook_channel, request)
                     performance.llm_time = time() - start_time
 
                     # Parse language
@@ -672,8 +781,7 @@ class STSPipeline:
                 await self.voice_recorder.record(ResponseVoices(
                     request.transaction_id, response_audios, self.voice_recorder_response_audio_format
                 ))
-            for handler in self._on_finish_handlers:
-                await handler(request, final_response)
+            await self._execute_hooks(self._on_finish_handlers, hook_channel, request, final_response)
             yield final_response
         
         except Exception as iex:

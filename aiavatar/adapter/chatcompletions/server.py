@@ -11,6 +11,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from ...database import PoolProvider
 from ...sts import STSPipeline
+from ...sts.pipeline import InsertChannelTagConfig
 from ...sts.models import STSRequest, STSResponse
 from ...sts.vad import SpeechDetectorDummy
 from ...sts.stt import SpeechRecognizerDummy
@@ -117,7 +118,7 @@ class AIAvatarChatCompletionsServer(Adapter):
         channel_context_bridge: ChannelContextBridge = None,
         channel_id: str = "chatcompletions",
         session_timeout: float = 3600,
-        insert_channel_tag: bool = False,
+        insert_channel_tag: InsertChannelTagConfig = False,
         response_content_field: str = "voice_text",
 
         # Debug
@@ -159,6 +160,9 @@ class AIAvatarChatCompletionsServer(Adapter):
 
         self.debug = debug
         self.channel_id = channel_id
+        self.sessions: Dict[str, STSRequest] = {}
+        if self.channel_id not in self.sts.skip_tts_channels:
+            self.sts.skip_tts_channels.append(self.channel_id)
         self.session_timeout = session_timeout
         self.response_content_field = response_content_field
         self.channel_context_bridge = channel_context_bridge or SQLiteChannelContextBridge(
@@ -242,7 +246,7 @@ class AIAvatarChatCompletionsServer(Adapter):
 
         return STSRequest(
             type="start",
-            session_id=str(uuid4()),
+            session_id=f"{self.channel_id}_{uuid4()}",
             user_id=channel_user.user_id,
             context_id=user_context.context_id if user_context else None,
             text=text,
@@ -297,6 +301,18 @@ class AIAvatarChatCompletionsServer(Adapter):
             ],
         )
 
+    def _register_session(self, request: STSRequest):
+        self.sessions[request.session_id] = request
+
+    async def _finalize_session(self, session_id: str):
+        try:
+            await self.sts.finalize(session_id)
+        finally:
+            try:
+                await self.sts.session_state_manager.clear_session(session_id)
+            finally:
+                self.sessions.pop(session_id, None)
+
     def get_api_router(self, path: str = "/v1/chat/completions"):
         router = APIRouter()
 
@@ -315,60 +331,71 @@ class AIAvatarChatCompletionsServer(Adapter):
             created = int(time.time())
 
             if not chat_request.stream:
-                return await self._invoke_non_streaming(
-                    sts_request,
-                    completion_id=completion_id,
-                    created=created,
-                    model=chat_request.model,
-                )
+                self._register_session(sts_request)
+                try:
+                    return await self._invoke_non_streaming(
+                        sts_request,
+                        completion_id=completion_id,
+                        created=created,
+                        model=chat_request.model,
+                    )
+                finally:
+                    await self._finalize_session(sts_request.session_id)
 
             async def stream_response():
-                yield self._make_chunk(
-                    completion_id=completion_id,
-                    created=created,
-                    model=chat_request.model,
-                    delta=ChatCompletionDelta(role="assistant"),
-                ).model_dump_json(exclude_none=True)
+                self._register_session(sts_request)
+                try:
+                    yield self._make_chunk(
+                        completion_id=completion_id,
+                        created=created,
+                        model=chat_request.model,
+                        delta=ChatCompletionDelta(role="assistant"),
+                    ).model_dump_json(exclude_none=True)
 
-                final_context_id = sts_request.context_id
-                async for response in self.sts.invoke(sts_request):
-                    for on_resp in self._on_response_handlers:
-                        await on_resp(None, response)
+                    final_context_id = sts_request.context_id
+                    async for response in self.sts.invoke(sts_request):
+                        for on_resp in self._on_response_handlers:
+                            await on_resp(None, response)
 
-                    if response.type == "chunk":
-                        yield self._make_chunk(
-                            completion_id=completion_id,
-                            created=created,
-                            model=chat_request.model,
-                            delta=ChatCompletionDelta(content=self._get_response_content(response)),
-                        ).model_dump_json(exclude_none=True)
-                    elif response.type == "final":
-                        final_context_id = response.context_id
-                    elif response.type == "error":
-                        yield json.dumps({
-                            "error": response.metadata or {"message": "Error in STS pipeline"}
-                        }, ensure_ascii=False)
-                    elif response.type == "stop":
-                        await self.stop_response(response.session_id, response.context_id)
+                        if response.type == "chunk":
+                            yield self._make_chunk(
+                                completion_id=completion_id,
+                                created=created,
+                                model=chat_request.model,
+                                delta=ChatCompletionDelta(content=self._get_response_content(response)),
+                            ).model_dump_json(exclude_none=True)
+                        elif response.type == "final":
+                            final_context_id = response.context_id
+                        elif response.type == "error":
+                            yield json.dumps({
+                                "error": response.metadata or {"message": "Error in STS pipeline"}
+                            }, ensure_ascii=False)
+                        elif response.type == "stop":
+                            await self.stop_response(response.session_id, response.context_id)
 
-                if final_context_id:
-                    await self.channel_context_bridge.upsert_context(UserContext(
-                        user_id=sts_request.user_id,
-                        context_id=final_context_id,
-                    ))
+                    if final_context_id:
+                        await self.channel_context_bridge.upsert_context(UserContext(
+                            user_id=sts_request.user_id,
+                            context_id=final_context_id,
+                        ))
 
-                yield self._make_chunk(
-                    completion_id=completion_id,
-                    created=created,
-                    model=chat_request.model,
-                    delta=ChatCompletionDelta(),
-                    finish_reason="stop",
-                ).model_dump_json(exclude_none=True)
-                yield "[DONE]"
+                    yield self._make_chunk(
+                        completion_id=completion_id,
+                        created=created,
+                        model=chat_request.model,
+                        delta=ChatCompletionDelta(),
+                        finish_reason="stop",
+                    ).model_dump_json(exclude_none=True)
+                    yield "[DONE]"
+                finally:
+                    await self._finalize_session(sts_request.session_id)
 
             return EventSourceResponse(stream_response())
 
         return router
+
+    def can_handle(self, session_id: str) -> bool:
+        return session_id in self.sessions
 
     async def handle_response(self, response: STSResponse):
         pass

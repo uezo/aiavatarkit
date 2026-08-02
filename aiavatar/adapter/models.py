@@ -20,7 +20,6 @@ class AIAvatarRequest(BaseModel):
     system_prompt_params: Optional[Dict] = None
     allow_merge: bool = True
     wait_in_queue: bool = False
-    channel: Optional[str] = None
     metadata: Optional[Dict] = None
 
 

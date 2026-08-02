@@ -149,6 +149,8 @@ class AIAvatarHttpServer(Adapter):
 
         # API server auth
         api_key: str = None,
+        # Channel
+        channel: str = "http",
         # Debug
         debug: bool = False            
     ):
@@ -195,6 +197,7 @@ class AIAvatarHttpServer(Adapter):
 
         # Call base after self.sts is set
         super().__init__(self.sts)
+        self.sessions: Dict[str, int] = {}
 
         # Optional components
         self.speaker_registry = speaker_registry
@@ -205,6 +208,9 @@ class AIAvatarHttpServer(Adapter):
         # API Key
         self.api_key = api_key
         self._bearer_scheme = HTTPBearer(auto_error=False)
+
+        # Channel
+        self.channel = channel
 
     def get_config(self) -> dict:
         return {
@@ -218,6 +224,25 @@ class AIAvatarHttpServer(Adapter):
                 detail="Invalid or missing API Key",
             )
         return credentials.credentials
+
+    def _register_session(self, session_id: str):
+        self.sessions[session_id] = self.sessions.get(session_id, 0) + 1
+
+    def _unregister_session(self, session_id: str):
+        remaining = self.sessions.get(session_id, 0) - 1
+        if remaining > 0:
+            self.sessions[session_id] = remaining
+        else:
+            self.sessions.pop(session_id, None)
+
+    async def invoke(self, request: STSRequest):
+        request.channel = self.channel
+        self._register_session(request.session_id)
+        try:
+            async for response in self.sts.invoke(request):
+                yield response
+        finally:
+            self._unregister_session(request.session_id)
 
     def get_api_router(self, path: str = "/chat", stt: SpeechRecognizer = None, tts: SpeechSynthesizer = None):
         router = APIRouter()
@@ -270,63 +295,67 @@ class AIAvatarHttpServer(Adapter):
                 await on_req(request)
 
             async def stream_response():
-                if request.audio_data:
-                    request.audio_data = base64.b64decode(request.audio_data)
+                self._register_session(request.session_id)
+                try:
+                    if request.audio_data:
+                        request.audio_data = base64.b64decode(request.audio_data)
 
-                async for response in self.sts.invoke(STSRequest(
-                    type=request.type,
-                    session_id=request.session_id,
-                    user_id=request.user_id,
-                    context_id=request.context_id,
-                    text=request.text,
-                    audio_data=request.audio_data,
-                    files=request.files,
-                    system_prompt_params=request.system_prompt_params,
-                    wait_in_queue=request.wait_in_queue,
-                    channel=request.channel,
-                    metadata=request.metadata
-                )):
-                    aiavatar_response = AIAvatarResponse(
-                        type=response.type,
-                        session_id=response.session_id,
-                        user_id=response.user_id,
-                        context_id=response.context_id,
-                        text=response.text,
-                        voice_text=response.voice_text,
-                        audio_data=response.audio_data,
-                        metadata=response.metadata or {},
-                        structured_content=response.structured_content
-                    )
+                    async for response in self.sts.invoke(STSRequest(
+                        type=request.type,
+                        session_id=request.session_id,
+                        user_id=request.user_id,
+                        context_id=request.context_id,
+                        text=request.text,
+                        audio_data=request.audio_data,
+                        files=request.files,
+                        system_prompt_params=request.system_prompt_params,
+                        wait_in_queue=request.wait_in_queue,
+                        channel=self.channel,
+                        metadata=request.metadata
+                    )):
+                        aiavatar_response = AIAvatarResponse(
+                            type=response.type,
+                            session_id=response.session_id,
+                            user_id=response.user_id,
+                            context_id=response.context_id,
+                            text=response.text,
+                            voice_text=response.voice_text,
+                            audio_data=response.audio_data,
+                            metadata=response.metadata or {},
+                            structured_content=response.structured_content
+                        )
 
-                    # Callback for each response chunk
-                    for on_resp in self._on_response_handlers:
-                        await on_resp(aiavatar_response, response)
+                        # Callback for each response chunk
+                        for on_resp in self._on_response_handlers:
+                            await on_resp(aiavatar_response, response)
 
-                    if response.type == "chunk":
-                        # Language
-                        aiavatar_response.language = response.language
+                        if response.type == "chunk":
+                            # Language
+                            aiavatar_response.language = response.language
 
-                        # Face and Animation
-                        aiavatar_response.avatar_control_request = self.parse_avatar_control_request(response.text)
+                            # Face and Animation
+                            aiavatar_response.avatar_control_request = self.parse_avatar_control_request(response.text)
 
-                        # Voice
-                        if response.audio_data:
-                            b64_chunk = base64.b64encode(response.audio_data).decode("utf-8")
-                            aiavatar_response.audio_data = b64_chunk
+                            # Voice
+                            if response.audio_data:
+                                b64_chunk = base64.b64encode(response.audio_data).decode("utf-8")
+                                aiavatar_response.audio_data = b64_chunk
 
-                    if response.type == "tool_call":
-                        aiavatar_response.metadata["tool_call"] = response.tool_call.to_dict()
+                        if response.type == "tool_call":
+                            aiavatar_response.metadata["tool_call"] = response.tool_call.to_dict()
 
-                    elif response.type == "final":
-                        vision_source = self.parse_vision_source(response.text)
-                        if vision_source:
-                            aiavatar_response.type = "vision"
-                            aiavatar_response.metadata = {"source": vision_source}
+                        elif response.type == "final":
+                            vision_source = self.parse_vision_source(response.text)
+                            if vision_source:
+                                aiavatar_response.type = "vision"
+                                aiavatar_response.metadata = {"source": vision_source}
 
-                    elif response.type == "stop":
-                        await self.stop_response(response)
+                        elif response.type == "stop":
+                            await self.stop_response(response.session_id, response.context_id)
 
-                    yield aiavatar_response.model_dump_json()
+                        yield aiavatar_response.model_dump_json()
+                finally:
+                    self._unregister_session(request.session_id)
 
             return EventSourceResponse(stream_response())
 
@@ -343,44 +372,50 @@ class AIAvatarHttpServer(Adapter):
                 await on_req(request)
 
             message_id = f"message_{uuid4()}"
+            session_id = request.conversation_id or f"sess_temp_{message_id}"
             async def stream_response():
-                created_at_int = None
-                async for response in self.sts.invoke(STSRequest(
-                    type="start",
-                    session_id=request.conversation_id or f"sess_temp_{message_id}",
-                    user_id=request.user,
-                    context_id=request.conversation_id,
-                    text=request.query,
-                    files=request.files,
-                    system_prompt_params=request.inputs
-                )):
-                    if not created_at_int:
-                        created_at_int = int(time.time())
+                self._register_session(session_id)
+                try:
+                    created_at_int = None
+                    async for response in self.sts.invoke(STSRequest(
+                        type="start",
+                        session_id=session_id,
+                        user_id=request.user,
+                        context_id=request.conversation_id,
+                        text=request.query,
+                        files=request.files,
+                        system_prompt_params=request.inputs,
+                        channel=self.channel
+                    )):
+                        if not created_at_int:
+                            created_at_int = int(time.time())
 
-                    # Callback for each response chunk
-                    for on_resp in self._on_response_handlers:
-                        await on_resp(None, response)
+                        # Callback for each response chunk
+                        for on_resp in self._on_response_handlers:
+                            await on_resp(None, response)
 
-                    if response.type == "chunk":
-                        chat_messages_response = PostChatMessagesResponse(
-                            event="message_replace" if response.metadata.get("is_guardrail_triggered") is True else "message",
-                            message_id=message_id,
-                            conversation_id=response.context_id,
-                            answer=response.text,
-                            created_at=created_at_int
-                        )
-                        yield chat_messages_response.model_dump_json()
+                        if response.type == "chunk":
+                            chat_messages_response = PostChatMessagesResponse(
+                                event="message_replace" if response.metadata.get("is_guardrail_triggered") is True else "message",
+                                message_id=message_id,
+                                conversation_id=response.context_id,
+                                answer=response.text,
+                                created_at=created_at_int
+                            )
+                            yield chat_messages_response.model_dump_json()
 
-                    elif response.type == "final":
-                        chat_messages_response = PostChatMessagesResponse(
-                            event="message_end",
-                            message_id=message_id,
-                            conversation_id=response.context_id,
-                        )
-                        yield chat_messages_response.model_dump_json()
+                        elif response.type == "final":
+                            chat_messages_response = PostChatMessagesResponse(
+                                event="message_end",
+                                message_id=message_id,
+                                conversation_id=response.context_id,
+                            )
+                            yield chat_messages_response.model_dump_json()
 
-                    elif response.type == "stop":
-                        await self.stop_response(response)
+                        elif response.type == "stop":
+                            await self.stop_response(response.session_id, response.context_id)
+                finally:
+                    self._unregister_session(session_id)
 
             return EventSourceResponse(stream_response())
 
@@ -460,6 +495,9 @@ class AIAvatarHttpServer(Adapter):
             )
 
         return router
+
+    def can_handle(self, session_id: str) -> bool:
+        return session_id in self.sessions
 
     async def handle_response(self, response: STSResponse):
         # Do nothing here

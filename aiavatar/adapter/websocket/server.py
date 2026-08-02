@@ -8,7 +8,7 @@ from typing import List, Dict, Callable, Awaitable, Optional
 from fastapi import APIRouter, Header, HTTPException, WebSocket, WebSocketException, status
 from ...database import PoolProvider
 from ...sts.models import STSRequest, STSResponse
-from ...sts.pipeline import STSPipeline
+from ...sts.pipeline import STSPipeline, InsertChannelTagConfig
 from ...sts.vad import SpeechDetector
 from ...sts.stt import SpeechRecognizer
 from ...sts.stt.openai import OpenAISpeechRecognizer
@@ -91,7 +91,8 @@ class AIAvatarWebSocketServer(Adapter):
         # API server auth
         api_key: str = None,
         # Channel
-        insert_channel_tag: bool = False,
+        channel: str = "websocket",
+        insert_channel_tag: InsertChannelTagConfig = False,
         # Debug
         debug: bool = False,
     ):
@@ -155,18 +156,25 @@ class AIAvatarWebSocketServer(Adapter):
         # API Key
         self.api_key = api_key
 
+        # Channel
+        self.channel = channel
+
         # Mute immediately on barge-in
         if mute_on_barge_in:
             @self.sts.vad.on_recording_started
             async def mute_on_barge_in(session_id: str):
+                if not self.can_handle(session_id):
+                    return
                 await self.stop_response(session_id, "")
 
         # Debug
         self.debug = debug
         self.last_response = None
 
-        @self.sts.on_accepted
+        @self.sts.on_accepted(channels=self.channel)
         async def on_accepted(request: STSRequest):
+            if not self.can_handle(request.session_id):
+                return
             barge_in_enabled = self.sts.vad.get_session_data(request.session_id, "barge_in_enabled")
             if barge_in_enabled is not False:
                 return
@@ -237,8 +245,7 @@ class AIAvatarWebSocketServer(Adapter):
                 self.sts.vad.set_session_data(request.session_id, "user_id", request.user_id, True)
             if request.context_id:
                 self.sts.vad.set_session_data(request.session_id, "context_id", request.context_id, True)
-            if request.channel:
-                self.sts.vad.set_session_data(request.session_id, "channel", request.channel, True)
+            self.sts.vad.set_session_data(request.session_id, "channel", self.channel, True)
             if request.metadata:
                 self._apply_session_config(request.session_id, request.metadata, create_session=True)
             session_data.data["metadata"] = request.metadata
@@ -279,7 +286,7 @@ class AIAvatarWebSocketServer(Adapter):
                 system_prompt_params=request.system_prompt_params,
                 allow_merge=request.allow_merge,
                 wait_in_queue=request.wait_in_queue,
-                channel=request.channel,
+                channel=self.channel,
                 metadata=request.metadata
             )):
                 if r.type == "start":
@@ -321,8 +328,14 @@ class AIAvatarWebSocketServer(Adapter):
                     aiavatar_response.model_dump_json()
                 )
 
+    def can_handle(self, session_id: str) -> bool:
+        return self.sessions.get(session_id) is not None
+
     async def handle_response(self, response: STSResponse):
         session_data = self.sessions.get(response.session_id)
+        if not session_data:
+            logger.warning(f"Session not found for response (WebSocket): {response.session_id}")
+            return
 
         # On accepted: finalize old transaction and update active_transaction_id
         if response.type == "accepted" and response.transaction_id and session_data:
@@ -436,7 +449,7 @@ class AIAvatarWebSocketServer(Adapter):
                 aiavatar_response.metadata = {"source": vision_source}
 
         elif response.type == "stop":
-            await self.stop_response(response)
+            await self.stop_response(response.session_id, response.context_id)
 
         await self.send_response(aiavatar_response)
 

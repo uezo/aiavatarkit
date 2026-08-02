@@ -1,16 +1,22 @@
 import re
 from abc import ABC, abstractmethod
+import logging
 from typing import Any, Callable, Awaitable, List, Optional
 from ..sts.models import STSResponse
-from ..sts.pipeline import STSPipeline
+from ..sts.pipeline import STSPipeline, ResponseHandler
 from .models import AIAvatarRequest, AIAvatarResponse, AvatarControlRequest
+
+logger = logging.getLogger(__name__)
 
 
 class Adapter(ABC):
     def __init__(self, sts: STSPipeline):
         self.sts = sts
-        self.sts.handle_response = self.handle_response
-        self.sts.stop_response = self.stop_response
+        self.sts.add_response_handler(ResponseHandler(
+            can_handle=self.can_handle,
+            handle_response=self.handle_response,
+            stop_response=self.stop_response
+        ))
 
         # Control tag pattern: receives (tag, attr) and returns a regex with two capture groups
         self.control_tag_pattern = r'\[{tag}:(\w+)\]|<{tag}\s[^>]*{attr}=["\'](\w+)["\']'
@@ -37,6 +43,10 @@ class Adapter(ABC):
             except Exception:
                 pass
         return updated
+
+    def can_handle(self, session_id) -> bool:
+        logger.warning(f"Adapter {self.__class__.__name__} doesn't handle any responses. Implement `can_handle` and return `True` when the session_id is owned by this adapter.")
+        return False
 
     @abstractmethod
     async def handle_response(self, response: STSResponse):

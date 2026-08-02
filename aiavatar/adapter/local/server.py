@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import warnings
-from typing import List
+from typing import Dict, List
 from ...database import PoolProvider
 from ...sts.models import STSRequest, STSResponse
 from ...sts.pipeline import STSPipeline
@@ -74,6 +74,8 @@ class AIAvatarLocalServer(Adapter):
         invoke_timeout: float = 60.0,
         use_invoke_queue: bool = False,
 
+        # Channel
+        channel: str = "local",
         # Debug
         debug: bool = False,
     ):
@@ -129,14 +131,20 @@ class AIAvatarLocalServer(Adapter):
 
         # Call base after self.sts is set
         super().__init__(self.sts)
+        self.sessions: Dict[str, None] = {}
 
         # Client communication queue
         self.response_queue = response_queue
+
+        # Channel
+        self.channel = channel
 
         # Mute immediately on barge-in
         if mute_on_barge_in:
             @self.sts.vad.on_recording_started
             async def mute_on_barge_in(session_id: str):
+                if not self.can_handle(session_id):
+                    return
                 await self.stop_response(session_id, "")
 
         # Debug
@@ -159,7 +167,8 @@ class AIAvatarLocalServer(Adapter):
         for on_session_start in self._on_session_start_handlers:
             await on_session_start(request, None)
 
-        await self.handle_response(STSResponse(
+        self.sessions[request.session_id] = None
+        await self.sts.handle_response(STSResponse(
             type="connected",
             session_id=request.session_id,
             user_id=request.user_id,
@@ -174,9 +183,12 @@ class AIAvatarLocalServer(Adapter):
         )
 
     def set_session_data(self, session_id: str, key: str, value: any, create_session: bool = False):
+        if create_session:
+            self.sessions[session_id] = None
         self.sts.vad.set_session_data(session_id, key, value, create_session)
 
     async def send_request(self, request: AIAvatarRequest):
+        self.sessions[request.session_id] = None
         async for r in self.sts.invoke(STSRequest(
             type=request.type,
             session_id=request.session_id,
@@ -188,13 +200,16 @@ class AIAvatarLocalServer(Adapter):
             system_prompt_params=request.system_prompt_params,
             allow_merge=request.allow_merge,
             wait_in_queue=request.wait_in_queue,
-            channel=request.channel,
+            channel=self.channel,
             metadata=request.metadata
         )):
-            await self.handle_response(r)
+            await self.sts.handle_response(r)
 
     async def handle_microphone_data(self, audio_bytes, session_id):
         await self.sts.vad.process_samples(samples=audio_bytes, session_id=session_id)
+
+    def can_handle(self, session_id: str) -> bool:
+        return session_id in self.sessions
 
     async def handle_response(self, response: STSResponse):
         aiavatar_response = AIAvatarResponse(

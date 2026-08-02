@@ -34,6 +34,9 @@ class RecordingAdapter(Adapter):
         async for response in self.sts.invoke(request):
             await self.handle_response(response)
 
+    def can_handle(self, session_id: str) -> bool:
+        return True
+
     async def handle_response(self, response: STSResponse):
         if response.type == "start":
             self.final_user_id = response.user_id

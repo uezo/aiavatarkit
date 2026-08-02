@@ -33,6 +33,7 @@ class LinebotChannelLinkTool(Tool):
         channel_id: str,
         client_secret: str,
         base_url: str,
+        channel: str = "linebot",
         channel_context_bridge: ChannelContextBridge = None,
         success_html: str = None,
         error_html: str = None,
@@ -48,6 +49,7 @@ class LinebotChannelLinkTool(Tool):
         self.channel_id = channel_id
         self.client_secret = client_secret
         self.base_url = base_url.rstrip("/")
+        self.channel = channel
         self.callback_path = "/login-callback"
         self.channel_context_bridge = channel_context_bridge
         self.success_html = success_html or self.DEFAULT_SUCCESS_HTML
@@ -163,7 +165,7 @@ class LinebotChannelLinkTool(Tool):
 
             user_id, line_user_id = result
             await self.channel_context_bridge.link_channel_user(
-                channel_id="linebot",
+                channel_id=self.channel,
                 channel_user_id=line_user_id,
                 user_id=user_id,
             )
