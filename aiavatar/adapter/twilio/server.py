@@ -14,13 +14,13 @@ from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse, Connect
 from ...database import PoolProvider
 from ...sts.models import STSRequest, STSResponse
-from ...sts.pipeline import STSPipeline
-from ...sts.vad import SpeechDetector, SpeechDetectorDummy
-from ...sts.stt import SpeechRecognizer, SpeechRecognizerDummy
+from ...sts.pipeline import STSPipeline, InsertChannelTagConfig
+from ...sts.vad import SpeechDetector
+from ...sts.stt import SpeechRecognizer
 from ...sts.stt.openai import OpenAISpeechRecognizer
 from ...sts.llm import LLMService
 from ...sts.llm.context_manager import ContextManager
-from ...sts.tts import SpeechSynthesizer, SpeechSynthesizerDummy
+from ...sts.tts import SpeechSynthesizer
 from ...sts.session_state_manager import SessionStateManager
 from ...sts.performance_recorder import PerformanceRecorder
 from ...sts.voice_recorder import VoiceRecorder
@@ -140,11 +140,8 @@ class AIAvatarTwilioServer(Adapter):
         auth_token: str = None,
         phone_number: str = None,
         webhook_base_url: str = None,
+        twilio_client: Client = None,
         channel: str = "phone",
-
-        # SMS
-        enable_sms: bool = False,
-        sms_sts: STSPipeline = None,
 
         # Timeout operations
         first_utterance_timeout: float = 10.0,
@@ -157,8 +154,8 @@ class AIAvatarTwilioServer(Adapter):
         max_turn_prompt_prefix: str = None,
 
         # Channel
-        insert_channel_tag: bool = False,
-        skip_tts_channels: List[str] = ["sms"],
+        insert_channel_tag: InsertChannelTagConfig = False,
+        skip_tts_channels: List[str] = None,
 
         # Debug
         debug: bool = False,
@@ -217,7 +214,6 @@ class AIAvatarTwilioServer(Adapter):
         self._on_connect: Callable[[AIAvatarRequest, TwilioSessionData], Awaitable[None]] = None
         self._on_disconnect: Callable[[TwilioSessionData], Awaitable[None]] = None
         self._on_dtmf: Callable[[str, str], Awaitable[None]] = None
-        self._on_sms_received: Callable[[TwilioSMSMessage], Awaitable[None]] = None
         self._resolve_phone_number: Callable[[str], Awaitable[Optional[str]]] = None
 
         # Audio
@@ -228,34 +224,9 @@ class AIAvatarTwilioServer(Adapter):
 
         # Twilio
         self.phone_number = phone_number
-        self.twilio_client = Client(account_sid, auth_token) if account_sid and auth_token else None
+        self.twilio_client = twilio_client or (Client(account_sid, auth_token) if account_sid and auth_token else None)
         self.webhook_base_url: str = webhook_base_url
         self._outbound_call_data: Dict[str, dict] = {}
-
-        # SMS pipeline
-        if sms_sts:
-            self.sms_sts = sms_sts
-        elif enable_sms:
-            self.sms_sts = STSPipeline(
-                vad=SpeechDetectorDummy(),
-                stt=SpeechRecognizerDummy(),
-                llm=self.sts.llm,
-                tts=SpeechSynthesizerDummy(),
-                timestamp_interval_seconds=self.sts.timestamp_interval_seconds,
-                timestamp_prefix=self.sts.timestamp_prefix,
-                timestamp_timezone=self.sts.timestamp_timezone,
-                db_pool_provider=self.sts.db_pool_provider,
-                session_state_manager=self.sts.session_state_manager,
-                performance_recorder=self.sts.performance_recorder,
-                voice_recorder_enabled=False,
-                debug=self.sts.debug,
-            )
-        else:
-            self.sms_sts = None
-
-        if self.sms_sts:
-            self.sms_sts.handle_response = self._handle_sms_response
-            self.sms_sts.stop_response = self._stop_sms_response
 
         # Timeout operations
         self.first_utterance_timeout = first_utterance_timeout
@@ -269,8 +240,10 @@ class AIAvatarTwilioServer(Adapter):
         self._turn_counts: Dict[str, int] = {}
 
         if max_turn_count > 0:
-            @self.sts.on_before_llm
+            @self.sts.on_before_llm(channels=self.channel)
             async def count_turns(request: STSRequest):
+                if not self.can_handle(request.session_id):
+                    return
                 context_id = request.context_id
 
                 # Skip increment for merged requests (redo of cancelled turn)
@@ -299,21 +272,23 @@ class AIAvatarTwilioServer(Adapter):
         if mute_on_barge_in:
             @self.sts.vad.on_recording_started
             async def mute_on_barge_in(session_id: str):
+                if not self.can_handle(session_id):
+                    return
                 # Reset marks so idle timer works correctly after barge-in
-                if session_id in self.sessions:
-                    self.sessions[session_id].last_mark = ""
-                    self.sessions[session_id].hang_mark = ""
+                self.sessions[session_id].last_mark = ""
+                self.sessions[session_id].hang_mark = ""
                 await self.stop_response(session_id, "")
 
         # Debug
         self.debug = debug
         self.last_response = None
 
-        @self.sts.on_accepted
+        @self.sts.on_accepted(channels=self.channel)
         async def on_accepted(request: STSRequest):
+            if not self.can_handle(request.session_id):
+                return
             # Disable first utterance timeout once user has spoken
-            if request.session_id in self.sessions:
-                self.sessions[request.session_id].is_first_utterance_timeout_invoked = True
+            self.sessions[request.session_id].is_first_utterance_timeout_invoked = True
 
             barge_in_enabled = self.sts.vad.get_session_data(request.session_id, "barge_in_enabled")
             if barge_in_enabled is not False:
@@ -355,10 +330,6 @@ class AIAvatarTwilioServer(Adapter):
 
     def on_hangup_timeout(self, func: Callable[[str], Awaitable[None]]):
         self._on_hangup_timeout = func
-        return func
-
-    def on_sms_received(self, func: Callable[[TwilioSMSMessage], Awaitable[None]]):
-        self._on_sms_received = func
         return func
 
     def resolve_phone_number(self, func: Callable[[str], Awaitable[Optional[str]]]):
@@ -462,7 +433,15 @@ class AIAvatarTwilioServer(Adapter):
         return session_data
 
     # Response
+    def can_handle(self, session_id: str) -> bool:
+        return self.sessions.get(session_id) is not None
+
     async def handle_response(self, response: STSResponse):
+        session_data = self.sessions.get(response.session_id)
+        if not session_data:
+            logger.warning(f"Session not found for response (Twilio): {response.session_id}")
+            return
+
         aiavatar_response = AIAvatarResponse(
             type=response.type,
             session_id=response.session_id,
@@ -478,11 +457,6 @@ class AIAvatarTwilioServer(Adapter):
         # Callback for each response chunk (base class)
         for on_resp in self._on_response_handlers:
             await on_resp(aiavatar_response, response)
-
-        session_data = self.sessions.get(response.session_id)
-        if not session_data:
-            logger.warning(f"Session not found for response: {response.session_id}")
-            return
 
         # Reset idle timer during response processing to prevent timeout
         # from misfiring while LLM/TTS is working.
@@ -597,6 +571,7 @@ class AIAvatarTwilioServer(Adapter):
     # Invoke pipeline
     async def invoke(self, request: STSRequest):
         try:
+            request.channel = self.channel
             async for response in self.sts.invoke(request):
                 await self.sts.handle_response(response)
                 if response.context_id:
@@ -638,26 +613,9 @@ class AIAvatarTwilioServer(Adapter):
 
         return call.sid
 
-    # Response (SMS)
-    async def _handle_sms_response(self, response: STSResponse):
-        pass
-
-    async def _stop_sms_response(self, session_id: str, context_id: str):
-        pass
-
-    # Outbound SMS
-    async def send_sms(self, to: str, body: str, from_: str = None) -> str:
-        from_number = from_ or self.phone_number
-        if not from_number:
-            raise ValueError("phone_number is required for sending SMS. Set it in the constructor or pass from_ parameter.")
-        if not self.twilio_client:
-            raise ValueError("twilio_client is not configured. Set account_sid and auth_token in the constructor.")
-        message = self.twilio_client.messages.create(body=body, from_=from_number, to=to)
-        return message.sid
-
     # FastAPI Router
     def get_router(self):
-        # Endpoints: /voice, /ws, /call/make, /sms, /sms/send
+        # Endpoints: /voice, /ws, /call/make
         websocket_url = self.webhook_base_url.replace("https://", "wss://").replace("http://", "ws://") + "/ws"
 
         router = APIRouter()
@@ -752,8 +710,208 @@ class AIAvatarTwilioServer(Adapter):
             )
             return MakeCallResponse(call_sid=call_sid)
 
-        # SMS
-        @router.post("/sms")
+        return router
+
+
+class AIAvatarTwilioSMSServer(Adapter):
+    def __init__(
+        self,
+        *,
+        sts: STSPipeline,
+        account_sid: str = None,
+        auth_token: str = None,
+        phone_number: str = None,
+        twilio_client: Client = None,
+        channel: str = "sms",
+        debug: bool = False,
+    ):
+        if sts is None:
+            raise ValueError("sts is required for AIAvatarTwilioSMSServer")
+
+        super().__init__(sts)
+        self.sessions: Dict[str, TwilioSMSMessage] = {}
+        self._on_sms_received: Callable[[TwilioSMSMessage], Awaitable[None]] = None
+
+        self.phone_number = phone_number
+        self.twilio_client = twilio_client or (Client(account_sid, auth_token) if account_sid and auth_token else None)
+        self.channel = channel
+        self.debug = debug
+        self.last_response = None
+
+        # SMS responses do not need synthesized audio.
+        if self.channel not in self.sts.skip_tts_channels:
+            self.sts.skip_tts_channels.append(self.channel)
+
+    def get_config(self) -> dict:
+        return {
+            "debug": self.debug,
+        }
+
+    def on_sms_received(self, func: Callable[[TwilioSMSMessage], Awaitable[None]]):
+        self._on_sms_received = func
+        return func
+
+    def can_handle(self, session_id: str) -> bool:
+        return session_id in self.sessions
+
+    async def _invoke_request(
+        self,
+        request: AIAvatarRequest,
+        message: TwilioSMSMessage,
+        *,
+        notify_received: bool,
+        resolve_session: bool,
+    ):
+        self.sessions[request.session_id] = message
+
+        try:
+            if notify_received and self._on_sms_received:
+                await self._on_sms_received(message)
+
+            if resolve_session:
+                for on_session_start in self._on_session_start_handlers:
+                    await on_session_start(request, message)
+
+            for on_request in self._on_request_handlers:
+                await on_request(request)
+
+            async for response in self.sts.invoke(STSRequest(
+                type=request.type,
+                session_id=request.session_id,
+                user_id=request.user_id,
+                context_id=request.context_id,
+                text=request.text,
+                files=request.files,
+                system_prompt_params=request.system_prompt_params,
+                allow_merge=request.allow_merge,
+                wait_in_queue=request.wait_in_queue,
+                channel=self.channel,
+                metadata=request.metadata,
+                skip_quick_response=True,
+            )):
+                await self.sts.handle_response(response)
+        finally:
+            await self._finalize_session(request.session_id)
+
+    async def process_message(self, message: TwilioSMSMessage, session_id: str = None):
+        request = AIAvatarRequest(
+            type="start",
+            session_id=session_id or f"twilio_sms_{uuid4()}",
+            user_id=message.from_number,
+            text=message.body,
+        )
+        await self._invoke_request(
+            request,
+            message,
+            notify_received=True,
+            resolve_session=True,
+        )
+
+    async def handle_push_request(
+        self,
+        *,
+        user_id: str,
+        text: str,
+        to: str,
+        context_id: str = None,
+        from_: str = None,
+        session_id: str = None,
+    ):
+        if not to:
+            raise ValueError("to is required for sending SMS")
+        from_number = from_ or self.phone_number
+        if not from_number:
+            raise ValueError("phone_number is required for sending SMS. Set it in the constructor or pass from_ parameter.")
+        if not self.twilio_client:
+            raise ValueError("twilio_client is not configured. Set account_sid and auth_token in the constructor.")
+
+        request = AIAvatarRequest(
+            type="start",
+            session_id=session_id or f"twilio_sms_{uuid4()}",
+            user_id=user_id,
+            context_id=context_id,
+            text=text,
+        )
+        target = TwilioSMSMessage(
+            message_sid="",
+            from_number=to,
+            to_number=from_number,
+            body=text,
+        )
+        await self._invoke_request(
+            request,
+            target,
+            notify_received=False,
+            resolve_session=False,
+        )
+
+    async def _finalize_session(self, session_id: str):
+        try:
+            await self.sts.finalize(session_id)
+        finally:
+            try:
+                await self.sts.session_state_manager.clear_session(session_id)
+            finally:
+                self.sessions.pop(session_id, None)
+
+    async def handle_response(self, response: STSResponse):
+        message = self.sessions.get(response.session_id)
+        if not message:
+            logger.warning(f"Session not found for response (Twilio SMS): {response.session_id}")
+            return
+
+        aiavatar_response = AIAvatarResponse(
+            type=response.type,
+            session_id=response.session_id,
+            user_id=response.user_id,
+            context_id=response.context_id,
+            text=response.text,
+            voice_text=response.voice_text,
+            language=response.language,
+            audio_data=response.audio_data,
+            metadata=response.metadata or {},
+            structured_content=response.structured_content,
+        )
+
+        for on_response in self._on_response_handlers:
+            await on_response(aiavatar_response, response)
+
+        if response.type == "final":
+            body = aiavatar_response.voice_text or aiavatar_response.text
+            if body:
+                await self.send_sms(
+                    to=message.from_number,
+                    body=body,
+                    from_=message.to_number,
+                )
+
+        if self.debug:
+            self.last_response = aiavatar_response
+
+    async def stop_response(self, session_id: str, context_id: str):
+        # A pending SMS has not been handed off to Twilio yet, so there is
+        # nothing to stop at the transport layer.
+        pass
+
+    async def send_sms(self, to: str, body: str, from_: str = None) -> str:
+        from_number = from_ or self.phone_number
+        if not from_number:
+            raise ValueError("phone_number is required for sending SMS. Set it in the constructor or pass from_ parameter.")
+        if not self.twilio_client:
+            raise ValueError("twilio_client is not configured. Set account_sid and auth_token in the constructor.")
+
+        message = await asyncio.to_thread(
+            self.twilio_client.messages.create,
+            body=body,
+            from_=from_number,
+            to=to,
+        )
+        return message.sid
+
+    def get_router(self, path: str = "/sms"):
+        router = APIRouter()
+
+        @router.post(path)
         async def incoming_sms(request: Request):
             form_data = await request.form()
             message = TwilioSMSMessage(
@@ -763,11 +921,17 @@ class AIAvatarTwilioServer(Adapter):
                 body=form_data.get("Body", ""),
             )
             logger.info(f"Incoming SMS from: {message.from_number} (MessageSid: {message.message_sid})")
-            if self._on_sms_received:
-                asyncio.create_task(self._on_sms_received(message))
+
+            async def process_in_background():
+                try:
+                    await self.process_message(message)
+                except Exception:
+                    logger.exception(f"Error processing incoming SMS: {message.message_sid}")
+
+            asyncio.create_task(process_in_background())
             return HTMLResponse(content="<Response></Response>", media_type="application/xml")
 
-        @router.post("/sms/send", response_model=SendSMSResponse)
+        @router.post(path + "/send", response_model=SendSMSResponse)
         async def send_sms_endpoint(request_body: SendSMSRequest):
             message_sid = await self.send_sms(to=request_body.to, body=request_body.body)
             return SendSMSResponse(message_sid=message_sid)

@@ -30,6 +30,7 @@ from linebot.v3.webhooks import (
 )
 from ...database import PoolProvider
 from ...sts import STSPipeline
+from ...sts.pipeline import InsertChannelTagConfig
 from ...sts.models import STSRequest, STSResponse
 from ...sts.vad import SpeechDetectorDummy
 from ...sts.stt import SpeechRecognizerDummy
@@ -38,7 +39,7 @@ from ...sts.llm.context_manager import ContextManager
 from ...sts.tts import SpeechSynthesizerDummy
 from ...sts.session_state_manager import SessionStateManager
 from ...sts.performance_recorder import PerformanceRecorder
-from ..models import AvatarControlRequest
+from ..models import AIAvatarResponse, AvatarControlRequest
 from .. import Adapter
 from ..channel_context_bridge import UserContext, ChannelContextBridge, SQLiteChannelContextBridge
 
@@ -57,6 +58,12 @@ class GetChannelUserResponse(BaseModel):
 class PushTextRequest(BaseModel):
     text: str
     files: Optional[list] = None
+
+
+class LineBotResponseTarget:
+    def __init__(self, *, reply_token: str = None, push_to: str = None):
+        self.reply_token = reply_token
+        self.push_to = push_to
 
 
 class AIAvatarLineBotServer(Adapter):
@@ -98,7 +105,8 @@ class AIAvatarLineBotServer(Adapter):
         # API server auth
         api_key: str = None,
         # Channel
-        insert_channel_tag: bool = False,
+        channel: str = "linebot",
+        insert_channel_tag: InsertChannelTagConfig = False,
         # Debug
         debug: bool = False
     ):
@@ -131,6 +139,12 @@ class AIAvatarLineBotServer(Adapter):
 
         # Call base after self.sts is set
         super().__init__(self.sts)
+        self.sessions: Dict[str, LineBotResponseTarget] = {}
+
+        # Channel
+        self.channel = channel
+        if self.channel not in self.sts.skip_tts_channels:
+            self.sts.skip_tts_channels.append(self.channel)
 
         # Debug
         self.debug = debug
@@ -255,29 +269,50 @@ class AIAvatarLineBotServer(Adapter):
                 image_url = f"{self.image_download_url_base}/image/{image_id}"
             files = [{"url": image_url}]
 
-        request = STSRequest(
-            session_id=str(uuid4()),
+        await self.handle_reply_request(
+            reply_token=event.reply_token,
             user_id=user_id,
             context_id=context_id,
             text=text,
             files=files,
-            channel="linebot",
-            metadata={}
         )
 
-        if self._preprocess_request:
-            await self._preprocess_request(request)
+    async def handle_reply_request(
+        self,
+        *,
+        reply_token: str,
+        user_id: str,
+        text: str,
+        files: list = None,
+        context_id: Optional[str] = None,
+    ):
+        request = STSRequest(
+            session_id=f"linebot_{uuid4()}",
+            user_id=user_id,
+            context_id=context_id,
+            text=text,
+            files=files,
+            channel=self.channel,
+            metadata={}
+        )
+        self.sessions[request.session_id] = LineBotResponseTarget(reply_token=reply_token)
 
-        async for response in self.sts.invoke(request):
-            if not response.metadata:
-                response.metadata = {}
-            response.metadata["reply_token"] = event.reply_token
-            if response.type == "final" and response.context_id:
-                await self.channel_context_bridge.upsert_context(UserContext(
-                    user_id=user_id,
-                    context_id=response.context_id,
-                ))
-            await self.sts.handle_response(response)
+        try:
+            if self._preprocess_request:
+                await self._preprocess_request(request)
+
+            async for response in self.sts.invoke(request):
+                if not response.metadata:
+                    response.metadata = {}
+                response.metadata["reply_token"] = reply_token
+                if response.type == "final" and response.context_id:
+                    await self.channel_context_bridge.upsert_context(UserContext(
+                        user_id=user_id,
+                        context_id=response.context_id,
+                    ))
+                await self.sts.handle_response(response)
+        finally:
+            await self._finalize_session(request.session_id)
 
     async def handle_push_request(self, user_id: str, text: str, files: list = None, context_id: Optional[str] = None):
         # Resolve current context_id if not provided
@@ -290,7 +325,7 @@ class AIAvatarLineBotServer(Adapter):
         line_user_id = None
         users = await self.channel_context_bridge.find_channel_users(user_id=user_id)
         for u in users:
-            if u.channel_id == "linebot":
+            if u.channel_id == self.channel:
                 line_user_id = u.channel_user_id
                 break
         if not line_user_id:
@@ -299,20 +334,21 @@ class AIAvatarLineBotServer(Adapter):
 
         # Build request for pipeline
         request = STSRequest(
-            session_id=str(uuid4()),
+            session_id=f"linebot_{uuid4()}",
             user_id=user_id,
             context_id=context_id,
             text=text,
             files=files,
-            channel="linebot",
+            channel=self.channel,
             metadata={}
         )
+        self.sessions[request.session_id] = LineBotResponseTarget(push_to=line_user_id)
 
         # Preprocess and invoke
-        if self._preprocess_request:
-            await self._preprocess_request(request)
-
         try:
+            if self._preprocess_request:
+                await self._preprocess_request(request)
+
             async for response in self.sts.invoke(request):
                 if not response.metadata:
                     response.metadata = {}
@@ -327,6 +363,8 @@ class AIAvatarLineBotServer(Adapter):
         except Exception as ex:
             logger.exception(f"Error at handle_push_request: {ex}")
             await self.send_push_message(line_user_id, self.default_error_message)
+        finally:
+            await self._finalize_session(request.session_id)
 
     # Processors
     async def process_webhook(self, request_body: str, signature: str):
@@ -337,7 +375,7 @@ class AIAvatarLineBotServer(Adapter):
     async def process_event(self, event: Event):
         try:
             if event_handler := self._event_handlers.get(event.type) or self._default_event_handler:
-                channel_user = await self.channel_context_bridge.get_channel_user("linebot", event.source.user_id, auto_create=True)
+                channel_user = await self.channel_context_bridge.get_channel_user(self.channel, event.source.user_id, auto_create=True)
                 user_context = await self.channel_context_bridge.get_context(channel_user.user_id)
                 await event_handler(
                     event=event,
@@ -381,37 +419,71 @@ class AIAvatarLineBotServer(Adapter):
         self._process_avatar_control_request = func
         return func
 
+    def can_handle(self, session_id: str) -> bool:
+        return session_id in self.sessions
+
     async def handle_response(self, response: STSResponse):
+        response_target = self.sessions.get(response.session_id)
+        if not response_target:
+            logger.warning(f"Session not found for response (LINE Bot): {response.session_id}")
+            return
+
+        if response.type == "final" and self._preprocess_response:
+            await self._preprocess_response(response)
+
+        aiavatar_response = AIAvatarResponse(
+            type=response.type,
+            session_id=response.session_id,
+            user_id=response.user_id,
+            context_id=response.context_id,
+            text=response.text,
+            voice_text=response.voice_text,
+            language=response.language,
+            audio_data=response.audio_data,
+            metadata=response.metadata or {},
+            structured_content=response.structured_content,
+        )
+
+        for on_response in self._on_response_handlers:
+            await on_response(aiavatar_response, response)
+
         if response.type == "final":
-            # Message
-            if self._preprocess_response:
-                await self._preprocess_response(response)
+            message_text = aiavatar_response.voice_text or aiavatar_response.text
+            if not message_text:
+                return
 
-            push_to = response.metadata.get("push_to") if response.metadata else None
-
-            if push_to:
+            if response_target.push_to:
                 # Build push message
                 message_request = PushMessageRequest(
-                    to=push_to,
-                    messages=[TextMessage(text=response.voice_text)]
+                    to=response_target.push_to,
+                    messages=[TextMessage(text=message_text)]
                 )
             else:
                 # Build reply message
                 message_request = ReplyMessageRequest(
-                    replyToken=response.metadata["reply_token"],
-                    messages=[TextMessage(text=response.voice_text)]
+                    replyToken=response_target.reply_token,
+                    messages=[TextMessage(text=message_text)]
                 )
 
             # Facial expression
-            avatar_control_request = self.parse_avatar_control_request(response.text)
+            avatar_control_request = self.parse_avatar_control_request(aiavatar_response.text)
             if self._process_avatar_control_request:
                 await self._process_avatar_control_request(avatar_control_request, message_request)
 
             # Send message
-            if push_to:
+            if response_target.push_to:
                 await self.line_api.push_message(message_request)
             else:
                 await self.line_api.reply_message(message_request)
+
+    async def _finalize_session(self, session_id: str):
+        try:
+            await self.sts.finalize(session_id)
+        finally:
+            try:
+                await self.sts.session_state_manager.clear_session(session_id)
+            finally:
+                self.sessions.pop(session_id, None)
 
     async def stop_response(self, session_id: str, context_id: str):
         # Do nothing here
@@ -445,7 +517,7 @@ class AIAvatarLineBotServer(Adapter):
             if self.api_key:
                 self.api_key_auth(credentials)
 
-            channel_user = await self.channel_context_bridge.get_channel_user("linebot", line_user_id)
+            channel_user = await self.channel_context_bridge.get_channel_user(self.channel, line_user_id)
             if not channel_user:
                 raise HTTPException(status_code=404, detail="Channel user not found")
 
@@ -467,7 +539,7 @@ class AIAvatarLineBotServer(Adapter):
             if self.api_key:
                 self.api_key_auth(credentials)
 
-            await self.channel_context_bridge.delete_channel_user("linebot", line_user_id)
+            await self.channel_context_bridge.delete_channel_user(self.channel, line_user_id)
 
             return JSONResponse(content={"result": "success"})
 

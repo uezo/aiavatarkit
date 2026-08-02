@@ -53,6 +53,9 @@ class AIAvatarTestServer(Adapter):
     def __init__(self, recorder):
         self.sts = Pipeline(recorder)
 
+    def can_handle(self, session_id):
+        return False
+
     async def handle_response(self, response):
         pass
 
