@@ -5,6 +5,7 @@ import pytest
 from aiavatar.adapter.models import AIAvatarRequest
 from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer, WebSocketSessionData
 from aiavatar.sts.models import STSResponse
+from aiavatar.sts.vad import SpeechDetectorDummy
 
 
 class FakeVAD:
@@ -24,8 +25,8 @@ class FakeVAD:
 
 
 class FakePipeline:
-    def __init__(self):
-        self.vad = FakeVAD()
+    def __init__(self, vad=None):
+        self.vad = vad or FakeVAD()
         self.response_handlers = []
         self.accepted_hook_channels = []
         self.invoked_requests = []
@@ -123,3 +124,33 @@ async def test_adapter_channel_ignores_client_value_and_sets_pipeline_channel():
     assert all("channel" not in payload for payload in session_start_payloads)
     assert pipeline.vad.get_session_data("session-1", "channel") == "m5stack"
     assert pipeline.invoked_requests[0].channel == "m5stack"
+
+
+@pytest.mark.asyncio
+async def test_dummy_vad_supports_invoke_only_websocket_sessions():
+    pipeline = FakePipeline(vad=SpeechDetectorDummy())
+    server = AIAvatarWebSocketServer(sts=pipeline, channel="websocket_ss")
+    session_data = WebSocketSessionData()
+    websocket = FakeWebSocket(
+        {
+            "type": "start",
+            "session_id": "session-1",
+            "user_id": "user-1",
+            "context_id": "context-1",
+        },
+        {
+            "type": "invoke",
+            "session_id": "session-1",
+            "user_id": "user-1",
+            "text": "hello",
+        },
+    )
+
+    await server.process_websocket(websocket, session_data)
+    await server.process_websocket(websocket, session_data)
+
+    assert pipeline.vad.get_session_data("session-1", "user_id") == "user-1"
+    assert pipeline.vad.get_session_data("session-1", "context_id") == "context-1"
+    assert pipeline.vad.get_session_data("session-1", "channel") == "websocket_ss"
+    assert pipeline.invoked_requests[0].context_id == "context-1"
+    assert pipeline.invoked_requests[0].channel == "websocket_ss"
