@@ -1,11 +1,8 @@
 import base64
-import logging
 from typing import Dict, List
 from . import SpeechSynthesizer
+from .postprocessor import TTSPostprocessor
 from .preprocessor import TTSPreprocessor
-
-
-logger = logging.getLogger(__name__)
 
 
 class GoogleSpeechSynthesizer(SpeechSynthesizer):
@@ -21,6 +18,8 @@ class GoogleSpeechSynthesizer(SpeechSynthesizer):
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
         preprocessors: List[TTSPreprocessor] = None,
+        postprocessors: List[TTSPostprocessor] = None,
+        sample_rate: int = None,
         cache_dir: str = None,
         cache_ext: str = "pcm",
         debug: bool = False
@@ -31,6 +30,8 @@ class GoogleSpeechSynthesizer(SpeechSynthesizer):
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
             preprocessors=preprocessors,
+            postprocessors=postprocessors,
+            sample_rate=sample_rate,
             cache_dir=cache_dir,
             cache_ext=cache_ext,
             debug=debug
@@ -48,17 +49,7 @@ class GoogleSpeechSynthesizer(SpeechSynthesizer):
         config["audio_format"] = self.audio_format
         return config
 
-    async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
-        if not text or not text.strip():
-            return bytes()
-
-        if self.debug:
-            logger.info(f"Speech synthesize: {text}")
-
-        # Preprocess
-        processed_text = await self.preprocess(text, style_info, language)
-
-        # Set language and speaker
+    def _build_request(self, text: str, language: str = None):
         voice = {"languageCode": self.default_language, "name": self.speaker}
         if language:
             if language.startswith("zh-"):
@@ -68,21 +59,25 @@ class GoogleSpeechSynthesizer(SpeechSynthesizer):
 
         url = f"https://texttospeech.googleapis.com/v1/text:synthesize?key={self.google_api_key}"
         json_body = {
-            "input": {"text": processed_text},
+            "input": {"text": text},
             "voice": voice,
             "audioConfig": {"audioEncoding": self.audio_format}
         }
+        return url, json_body
 
-        # Check cache
-        cache_key = self.make_cache_key(url=url, json_body=json_body)
-        if cached := await self.read_cache(cache_key):
-            return cached
+    async def make_synthesis_cache_key(
+        self,
+        text: str,
+        style_info: dict = None,
+        language: str = None,
+    ) -> str:
+        url, json_body = self._build_request(text, language)
+        return self.make_cache_key(url=url, json_body=json_body)
 
-        # Synthesize
+    async def generate(self, text: str, style_info: dict = None, language: str = None) -> bytes:
+        url, json_body = self._build_request(text, language)
         # https://cloud.google.com/text-to-speech/docs/voices
         resp = await self.http_client.post(url=url, json=json_body)
         resp_json = resp.json()
 
-        audio_data = base64.b64decode(resp_json["audioContent"])
-        await self.write_cache(cache_key, audio_data)
-        return audio_data
+        return base64.b64decode(resp_json["audioContent"])

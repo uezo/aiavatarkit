@@ -3,12 +3,13 @@ import asyncio
 import hashlib
 import json as json_mod
 import os
-from typing import Dict, List, Callable, Optional
+from typing import Dict, List, Callable, Optional, final
 import inspect
 import aiofiles
 import httpx
 import logging
 from .preprocessor import TTSPreprocessor
+from .postprocessor import TTSPostprocessor, WavSampleRatePostprocessor
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,8 @@ class SpeechSynthesizer(ABC):
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
         preprocessors: List[TTSPreprocessor] = None,
+        postprocessors: List[TTSPostprocessor] = None,
+        sample_rate: int = None,
         follow_redirects: bool = False,
         cache_dir: str = None,
         cache_ext: str = "wav",
@@ -37,6 +40,11 @@ class SpeechSynthesizer(ABC):
         )
         self.style_mapper = style_mapper or {}
         self.preprocessors = preprocessors or []
+        self.postprocessors = [
+            *(postprocessors or []),
+            WavSampleRatePostprocessor(),
+        ]
+        self.sample_rate = sample_rate
         self.cache_dir = cache_dir
         self.cache_ext = cache_ext
         self.debug = debug
@@ -54,8 +62,33 @@ class SpeechSynthesizer(ABC):
     async def preprocess(self, text: str, style_info: dict = None, language: str = None):
         processed_text = text
         for p in self.preprocessors:
-            processed_text = await p.process(processed_text, style_info, language)
+            kwargs = {
+                "style_info": style_info,
+                "language": language,
+            }
+            try:
+                parameters = inspect.signature(p.process).parameters.values()
+                if any(
+                    parameter.name == "synthesizer"
+                    or parameter.kind == inspect.Parameter.VAR_KEYWORD
+                    for parameter in parameters
+                ):
+                    kwargs["synthesizer"] = self
+            except (TypeError, ValueError):
+                pass
+            processed_text = await p.process(processed_text, **kwargs)
         return processed_text
+
+    async def postprocess(self, audio: bytes) -> bytes:
+        if not audio:
+            return audio
+        processed_audio = audio
+        for p in self.postprocessors:
+            processed_audio = await p.process(
+                processed_audio,
+                synthesizer=self,
+            )
+        return processed_audio
 
     def make_cache_key(
         self,
@@ -77,6 +110,13 @@ class SpeechSynthesizer(ABC):
             h.update(json_mod.dumps(json_body, sort_keys=True).encode())
         if data:
             h.update(data)
+        postprocess_config = [
+            config
+            for processor in self.postprocessors
+            if (config := processor.get_cache_config(self)) is not None
+        ]
+        if postprocess_config:
+            h.update(json_mod.dumps(postprocess_config, sort_keys=True).encode())
         return h.hexdigest()
 
     async def read_cache(self, cache_key: str) -> Optional[bytes]:
@@ -95,13 +135,64 @@ class SpeechSynthesizer(ABC):
         async with aiofiles.open(os.path.join(self.cache_dir, f"{cache_key}.{self.cache_ext}"), "wb") as f:
             await f.write(data)
 
-    @abstractmethod
+    @final
     async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
+        """Run the common preprocessing, caching, generation, and postprocessing flow."""
+        if not text or not text.strip():
+            return bytes()
+
+        if self.sample_rate is not None and (
+            not isinstance(self.sample_rate, int)
+            or isinstance(self.sample_rate, bool)
+            or self.sample_rate <= 0
+        ):
+            raise ValueError("sample_rate must be a positive integer")
+
+        if self.debug:
+            logger.info(f"Speech synthesize: {text}")
+
+        processed_text = await self.preprocess(text, style_info, language)
+        cache_key = None
+        if self.cache_dir:
+            cache_key = await self.make_synthesis_cache_key(
+                processed_text,
+                style_info,
+                language,
+            )
+            if cached := await self.read_cache(cache_key):
+                return cached
+
+        audio = await self.generate(processed_text, style_info, language)
+        audio = await self.postprocess(audio)
+        await self.write_cache(cache_key, audio)
+        return audio
+
+    async def make_synthesis_cache_key(
+        self,
+        text: str,
+        style_info: dict = None,
+        language: str = None,
+    ) -> Optional[str]:
+        """Return a cache key for already-preprocessed synthesis input."""
+        synthesizer_type = f"{type(self).__module__}.{type(self).__qualname__}"
+        return self.make_cache_key(
+            url=f"tts://{synthesizer_type}",
+            json_body={
+                "text": text,
+                "style_info": style_info,
+                "language": language,
+            },
+        )
+
+    @abstractmethod
+    async def generate(self, text: str, style_info: dict = None, language: str = None) -> bytes:
+        """Generate audio from text that has already passed through preprocessors."""
         pass
 
     def get_config(self) -> dict:
         return {
             "style_mapper": self.style_mapper,
+            "sample_rate": self.sample_rate,
             "timeout": getattr(self.http_client.timeout, "read", None) if self.http_client else None,
             "debug": self.debug,
         }
@@ -148,6 +239,8 @@ class SpeechSynthesizerDummy(SpeechSynthesizer):
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
         preprocessors: List[TTSPreprocessor] = None,
+        postprocessors: List[TTSPostprocessor] = None,
+        sample_rate: int = None,
         follow_redirects: bool = False,
         cache_dir: str = None,
         cache_ext: str = "wav",
@@ -159,6 +252,9 @@ class SpeechSynthesizerDummy(SpeechSynthesizer):
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
             preprocessors=preprocessors,
+            postprocessors=postprocessors,
+            sample_rate=sample_rate,
+            follow_redirects=follow_redirects,
             cache_dir=cache_dir,
             cache_ext=cache_ext,
             debug=debug
@@ -166,7 +262,15 @@ class SpeechSynthesizerDummy(SpeechSynthesizer):
         self.synthesized_bytes = synthesized_bytes
         self.wait_sec = wait_sec
 
-    async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
+    async def make_synthesis_cache_key(
+        self,
+        text: str,
+        style_info: dict = None,
+        language: str = None,
+    ) -> Optional[str]:
+        return None
+
+    async def generate(self, text: str, style_info: dict = None, language: str = None) -> bytes:
         await asyncio.sleep(self.wait_sec)
         return self.synthesized_bytes
 
@@ -181,34 +285,31 @@ def create_instant_synthesizer(
     max_keepalive_connections: int = 20,
     timeout: float = 10,
     preprocessors: List[TTSPreprocessor] = None,
+    postprocessors: List[TTSPostprocessor] = None,
+    sample_rate: int = None,
     follow_redirects: bool = False,
     cache_dir: str = None,
     cache_ext: str = "wav",
     debug = False
 ) -> SpeechSynthesizer:
     class InstantSynthesizer(SpeechSynthesizer):
-        async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
-            if not text or not text.strip():
-                return bytes()
-
-            logger.info(f"Speech synthesize: {text}")
-
-            # Preprocess
-            processed_text = await self.preprocess(text, style_info, language)
-
-            # Make HTTP request
+        def _make_http_request(
+            self,
+            text: str,
+            style_info: dict = None,
+            language: str = None,
+        ) -> httpx.Request:
             if request_maker:
-                http_request = request_maker(processed_text, style_info, language)
+                return request_maker(text, style_info, language)
             else:
-                # Replace placeholders with processed_text and language
                 def replace_placeholders(obj: dict, text: str, lang: str):
                     return {k: v.format(text=text, language=lang or "") if isinstance(v, str) else v for k, v in obj.items()}
 
-                dynamic_params = replace_placeholders(params, processed_text, language) if params else None
-                dynamic_headers = replace_placeholders(headers, processed_text, language) if headers else None
-                dynamic_json = replace_placeholders(json, processed_text, language) if json else None
+                dynamic_params = replace_placeholders(params, text, language) if params else None
+                dynamic_headers = replace_placeholders(headers, text, language) if headers else None
+                dynamic_json = replace_placeholders(json, text, language) if json else None
 
-                http_request = httpx.Request(
+                return httpx.Request(
                     method=method,
                     url=url,
                     params=dynamic_params,
@@ -216,30 +317,30 @@ def create_instant_synthesizer(
                     json=dynamic_json
                 )
 
-            # Check cache
-            cache_key = self.make_cache_key(
+        async def make_synthesis_cache_key(
+            self,
+            text: str,
+            style_info: dict = None,
+            language: str = None,
+        ) -> Optional[str]:
+            http_request = self._make_http_request(text, style_info, language)
+            return self.make_cache_key(
                 url=str(http_request.url),
                 headers=dict(http_request.headers),
                 data=http_request.content,
             )
-            if cached := await self.read_cache(cache_key):
-                return cached
 
-            # Synthesize
+        async def generate(self, text: str, style_info: dict = None, language: str = None) -> bytes:
+            http_request = self._make_http_request(text, style_info, language)
             http_response = await self.http_client.send(http_request)
             http_response.raise_for_status()
 
-            # Parse HTTP response and return audio bytes
             if response_parser:
                 result = response_parser(http_response)
                 if inspect.iscoroutine(result):
                     result = await result
-                else:
-                    result = result
             else:
                 result = http_response.content
-
-            await self.write_cache(cache_key, result)
             return result
 
     return InstantSynthesizer(
@@ -248,6 +349,8 @@ def create_instant_synthesizer(
         max_keepalive_connections=max_keepalive_connections,
         timeout=timeout,
         preprocessors=preprocessors,
+        postprocessors=postprocessors,
+        sample_rate=sample_rate,
         follow_redirects=follow_redirects,
         cache_dir=cache_dir,
         cache_ext=cache_ext,
