@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import asyncio
 from collections import deque
 import logging
-from typing import AsyncGenerator, List, Callable, Awaitable, Optional, Any
+from typing import AsyncGenerator, Dict, List, Callable, Awaitable, Optional, Any
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,7 @@ class SpeechDetector(ABC):
         self._on_recording_started: List[Callable[[str], Awaitable[None]]] = []
         self._on_voiced: List[Callable[[str], Awaitable[None]]] = []
         self._should_trigger_recording_started: Optional[Callable[[Optional[str], Any], bool]] = None
+        self._session_data: Dict[str, Dict[str, Any]] = {}
         # Parameters for on_recording_started trigger
         self.on_recording_started_min_duration = on_recording_started_min_duration
         self.on_recording_started_min_text_length = on_recording_started_min_text_length
@@ -150,6 +151,28 @@ class SpeechDetector(ABC):
                 pass
         return updated
 
+    def get_session_data(self, session_id: str, key: str) -> Any:
+        """Return a value stored for a detector session."""
+        session_data = self._session_data.get(session_id)
+        if session_data is not None:
+            return session_data.get(key)
+
+    def set_session_data(
+        self,
+        session_id: str,
+        key: str,
+        value: Any,
+        create_session: bool = False,
+    ) -> None:
+        """Store a value for a detector session, optionally creating it."""
+        if create_session:
+            session_data = self._session_data.setdefault(session_id, {})
+        else:
+            session_data = self._session_data.get(session_id)
+
+        if session_data is not None:
+            session_data[key] = value
+
     @abstractmethod
     async def process_samples(self, samples: bytes, session_id: str = None):
         pass
@@ -171,4 +194,4 @@ class SpeechDetectorDummy(SpeechDetector):
         pass
 
     async def finalize_session(self, session_id):
-        pass
+        self._session_data.pop(session_id, None)
