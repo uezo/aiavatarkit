@@ -39,6 +39,7 @@ class SQLitePerformanceRecorder(PerformanceRecorder):
                         user_id TEXT,
                         session_id TEXT,
                         context_id TEXT,
+                        channel TEXT,
                         voice_length REAL,
                         speech_end_at TIMESTAMP,
                         silence_threshold_time REAL,
@@ -81,6 +82,9 @@ class SQLitePerformanceRecorder(PerformanceRecorder):
 
                 if "session_id" not in columns:
                     conn.execute("ALTER TABLE performance_records ADD COLUMN session_id TEXT")
+
+                if "channel" not in columns:
+                    conn.execute("ALTER TABLE performance_records ADD COLUMN channel TEXT")
 
                 # Add transaction_id column if not exist (migration v0.3.3 -> 0.3.4)
                 if "transaction_id" not in columns:

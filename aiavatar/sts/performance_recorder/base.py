@@ -43,6 +43,7 @@ class PerformanceRecord:
     stt_after_threshold_time: Optional[float] = None
     turn_end_gate_time: Optional[float] = None
     turn_end_gate_held: Optional[bool] = None
+    channel: str = None
 
 
 class PerformanceRecorder(ABC):

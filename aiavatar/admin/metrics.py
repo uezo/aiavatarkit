@@ -38,12 +38,32 @@ class TimelineResponse(BaseModel):
     buckets: List[TimelineBucketResponse]
 
 
-class SummaryResponse(DetailedMetrics):
-    period: str
+class SummaryMetricsResponse(DetailedMetrics):
     total_requests: int
     p50_first_response_time: Optional[float] = None
     p95_first_response_time: Optional[float] = None
     p99_first_response_time: Optional[float] = None
+
+
+class SummaryResponse(SummaryMetricsResponse):
+    period: str
+
+
+class ChannelMetricsResponse(BaseModel):
+    channel: Optional[str] = None
+    pipeline_summary: SummaryMetricsResponse
+    speech_summary: SummaryMetricsResponse
+    pipeline_buckets: List[TimelineBucketResponse]
+    speech_buckets: List[TimelineBucketResponse]
+
+
+class MetricsByChannelResponse(BaseModel):
+    period: str
+    interval: str
+    total_requests: int
+    success_count: int
+    error_count: int
+    channels: List[ChannelMetricsResponse]
 
 
 class MetricsAPI:
@@ -80,6 +100,31 @@ class MetricsAPI:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ex))
             except Exception:
                 logger.exception("Error querying detailed metrics summary")
+                raise HTTPException(status_code=500, detail="Could not query metrics")
+
+        @router.get(
+            "/metrics/by-channel",
+            response_model=MetricsByChannelResponse,
+            tags=["Admin Metrics"],
+        )
+        async def get_metrics_by_channel(
+            period: str = Query("24h"),
+            interval: str = Query("1h"),
+        ) -> MetricsByChannelResponse:
+            try:
+                channels = await self.query.query_metrics_by_channel(period, interval)
+                return MetricsByChannelResponse(
+                    period=period,
+                    interval=interval,
+                    total_requests=sum(item.pipeline_summary.total_requests for item in channels),
+                    success_count=sum(item.pipeline_summary.success_count for item in channels),
+                    error_count=sum(item.pipeline_summary.error_count for item in channels),
+                    channels=[ChannelMetricsResponse(**asdict(item)) for item in channels],
+                )
+            except ValueError as ex:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ex))
+            except Exception:
+                logger.exception("Error querying metrics by channel")
                 raise HTTPException(status_code=500, detail="Could not query metrics")
 
         return router

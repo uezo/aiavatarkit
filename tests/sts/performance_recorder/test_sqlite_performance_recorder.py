@@ -36,6 +36,7 @@ def test_record_single(recorder, db_path, unique_transaction_id):
         transaction_id=unique_transaction_id,
         user_id="test_user",
         context_id="test_context",
+        channel="websocket",
         stt_name="test_stt",
         llm_name="test_llm",
         tts_name="test_tts",
@@ -63,6 +64,7 @@ def test_record_single(recorder, db_path, unique_transaction_id):
         assert row is not None
         assert row["user_id"] == "test_user"
         assert row["context_id"] == "test_context"
+        assert row["channel"] == "websocket"
         assert row["request_text"] == "Hello, world!"
         assert row["response_text"] == "Hi there!"
         assert row["stt_name"] == "test_stt"
@@ -136,6 +138,7 @@ def test_record_with_none_values(recorder, db_path, unique_transaction_id):
         assert row is not None
         assert row["user_id"] is None
         assert row["context_id"] is None
+        assert row["channel"] is None
         assert row["request_text"] is None
         assert row["response_text"] is None
     finally:
@@ -231,7 +234,7 @@ def test_default_db_path():
             os.remove(default_path)
 
 
-def test_migrates_session_id_without_backfill(tmp_path):
+def test_migrates_session_id_and_channel_without_backfill(tmp_path):
     db_path = tmp_path / "legacy.db"
     conn = sqlite3.connect(db_path)
     try:
@@ -256,9 +259,14 @@ def test_migrates_session_id_without_backfill(tmp_path):
         legacy_session = conn.execute(
             "SELECT session_id FROM performance_records WHERE transaction_id = 'legacy'"
         ).fetchone()[0]
+        legacy_channel = conn.execute(
+            "SELECT channel FROM performance_records WHERE transaction_id = 'legacy'"
+        ).fetchone()[0]
         indexes = {row[1] for row in conn.execute("PRAGMA index_list(performance_records)")}
     finally:
         conn.close()
     assert "session_id" in columns
+    assert "channel" in columns
     assert legacy_session is None
+    assert legacy_channel is None
     assert "idx_session_id" in indexes

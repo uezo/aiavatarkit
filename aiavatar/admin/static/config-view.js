@@ -10,7 +10,7 @@ const components = [
 
 export function renderConfig(root, { api, setStatus }) {
   root.innerHTML = `
-    <section class="page-heading"><h2>Config</h2><p>Runtime settings for the active pipeline and adapters.</p></section>
+    <section class="page-heading"><h2>Config</h2></section>
     <div class="config-grid" data-grid></div>`;
   const grid = root.querySelector("[data-grid]");
   let stopped = false;

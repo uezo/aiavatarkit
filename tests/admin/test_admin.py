@@ -81,6 +81,7 @@ def test_new_admin_uses_one_replaceable_authenticator_and_new_routes(tmp_path):
             user_id="user",
             session_id="session-new",
             context_id="context",
+            channel="websocket",
             request_text="hello admin",
             speech_end_at=datetime.now(timezone.utc),
             silence_threshold_time=0.1,
@@ -92,6 +93,15 @@ def test_new_admin_uses_one_replaceable_authenticator_and_new_routes(tmp_path):
             llm_first_chunk_time=0.4,
             llm_first_voice_chunk_time=0.5,
             tts_first_chunk_time=0.6,
+        ))
+        recorder.record(PerformanceRecord(
+            transaction_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+            session_id="session-text",
+            context_id="context-text",
+            channel="linebot",
+            request_text="hello text",
+            before_llm_time=0.1,
+            llm_first_chunk_time=0.2,
         ))
         recorder.record_queue.join()
 
@@ -108,6 +118,22 @@ def test_new_admin_uses_one_replaceable_authenticator_and_new_routes(tmp_path):
         assert client.get("/admin/assets/admin-app.js", auth=auth).status_code == 200
         assert client.get("/admin/api/capabilities", auth=auth).json() == {"evaluation": False}
         assert client.get("/admin/api/metrics/summary", auth=auth).status_code == 200
+        channel_metrics = client.get(
+            "/admin/api/metrics/by-channel?period=24h&interval=1h",
+            auth=auth,
+        )
+        assert channel_metrics.status_code == 200
+        metrics = channel_metrics.json()
+        assert metrics["total_requests"] == 2
+        by_channel = {item["channel"]: item for item in metrics["channels"]}
+        assert by_channel["linebot"]["pipeline_summary"]["avg_first_response_time"] == pytest.approx(0.2)
+        assert by_channel["linebot"]["speech_summary"]["measured_count"] == 0
+        assert by_channel["websocket"]["pipeline_summary"]["avg_first_response_time"] == pytest.approx(0.6)
+        assert by_channel["websocket"]["speech_summary"]["avg_first_response_time"] == pytest.approx(0.9)
+        assert client.get(
+            "/admin/api/metrics/by-channel?period=24h&interval=invalid",
+            auth=auth,
+        ).status_code == 400
         logs = client.get("/admin/api/logs?session_id=session-new", auth=auth)
         assert logs.status_code == 200
         log = logs.json()["groups"][0]["logs"][0]

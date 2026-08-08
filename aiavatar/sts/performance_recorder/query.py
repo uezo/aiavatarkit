@@ -128,6 +128,15 @@ class DetailedMetricsSummary:
     avg_tts_phase: Optional[float] = None
 
 
+@dataclass
+class ChannelMetrics:
+    channel: Optional[str]
+    pipeline_summary: DetailedMetricsSummary
+    speech_summary: DetailedMetricsSummary
+    pipeline_buckets: List[DetailedTimelineBucket]
+    speech_buckets: List[DetailedTimelineBucket]
+
+
 _DETAILED_PHASE_FIELDS = (
     "avg_silence_detection_phase",
     "avg_streaming_stt_finalization_phase",
@@ -253,28 +262,32 @@ def _build_summary(rows) -> MetricsSummary:
     )
 
 
-def _raw_phase_vector(row, time_origin: str):
-    """Return nine contiguous phases from speech end to first response.
+def _normalized_phase_vector(row, time_origin: str):
+    """Return nine phases ending at the first Pipeline content output.
 
-    Detailed rows are ordered as defined by ``_DETAILED_QUERY_SQL``. Records
-    without a speech-end timestamp, errors, or a first-response endpoint are
-    intentionally excluded from the detailed cohort.
+    The first output is a Quick Response when present, otherwise the first TTS
+    audio chunk, falling back to the first LLM chunk for text-only channels.
+    Rows without ``speech_end_at`` start at Pipeline invocation and therefore
+    have zero-valued pre-Pipeline phases.
     """
-    if row[12] or row[1] is None:
+    if row[12]:
         return None
 
     def positive(value):
         return max(float(value or 0), 0.0)
 
-    # Validate the actual stored endpoint before carrying missing intermediate
-    # boundaries forward. Otherwise a silence timing alone can be mistaken for
-    # a completed first-response measurement.
-    endpoint_index = 7 if row[11] else 10
-    if positive(row[endpoint_index]) <= 0:
+    if row[11] and positive(row[7]) > 0:
+        endpoint_index = 6  # before_llm_time
+    elif positive(row[10]) > 0:
+        endpoint_index = 9  # tts_first_chunk_time
+    elif positive(row[8]) > 0:
+        endpoint_index = 7  # llm_first_chunk_time
+    else:
         return None
 
-    stored_origin = time_origin
-    if time_origin == TIME_ORIGIN_USER_SPEECH_END:
+    has_speech_origin = row[1] is not None
+    stored_origin = time_origin if has_speech_origin else TIME_ORIGIN_PIPELINE_START
+    if has_speech_origin and time_origin == TIME_ORIGIN_USER_SPEECH_END:
         # Timing columns added before origin rebasing may coexist with newer
         # rows in the same table. A decreasing, explicitly stored VAD boundary
         # identifies an older pipeline-relative row without guessing from the
@@ -290,9 +303,9 @@ def _raw_phase_vector(row, time_origin: str):
             previous = current
 
     if stored_origin == TIME_ORIGIN_PIPELINE_START:
-        silence = positive(row[2])
-        streaming_stt = positive(row[3])
-        turn_end_gate = positive(row[4])
+        silence = positive(row[2]) if has_speech_origin else 0.0
+        streaming_stt = positive(row[3]) if has_speech_origin else 0.0
+        turn_end_gate = positive(row[4]) if has_speech_origin else 0.0
         pre_pipeline = silence + streaming_stt + turn_end_gate
         points = [
             0.0,
@@ -326,7 +339,6 @@ def _raw_phase_vector(row, time_origin: str):
     for index in range(1, len(points)):
         points[index] = max(points[index], points[index - 1])
 
-    endpoint_index = 6 if row[11] else 9
     if points[endpoint_index] <= 0:
         return None
     points = points[:endpoint_index + 1]
@@ -334,13 +346,33 @@ def _raw_phase_vector(row, time_origin: str):
     return [points[index + 1] - points[index] for index in range(9)]
 
 
+def _raw_phase_vector(row, time_origin: str):
+    """Return speech-end phases for the existing aggregate and Logs APIs."""
+    if row[1] is None:
+        return None
+    return _normalized_phase_vector(row, time_origin)
+
+
 def _phase_vector(row, time_origin: str):
     """Return the nine display phases used by aggregate metrics."""
     return _raw_phase_vector(row, time_origin)
 
 
-def _detailed_values(rows, time_origin: str):
-    vectors = [vector for row in rows if (vector := _phase_vector(row, time_origin)) is not None]
+def _pipeline_phase_vector(row, time_origin: str):
+    vector = _normalized_phase_vector(row, time_origin)
+    if vector is None:
+        return None
+    return [0.0, 0.0, 0.0, *vector[3:]]
+
+
+def _speech_phase_vector(row, time_origin: str):
+    if row[1] is None or row[2] is None:
+        return None
+    return _normalized_phase_vector(row, time_origin)
+
+
+def _detailed_values(rows, time_origin: str, vector_builder=_phase_vector):
+    vectors = [vector for row in rows if (vector := vector_builder(row, time_origin)) is not None]
     if not vectors:
         return 0, None, [None] * len(_DETAILED_PHASE_FIELDS), []
     phase_averages = [
@@ -351,14 +383,22 @@ def _detailed_values(rows, time_origin: str):
     return len(vectors), _safe_avg(first_response_times), phase_averages, first_response_times
 
 
-def _detailed_fields(rows, time_origin: str):
-    measured_count, average, phase_averages, first_response_times = _detailed_values(rows, time_origin)
+def _detailed_fields(rows, time_origin: str, vector_builder=_phase_vector):
+    measured_count, average, phase_averages, first_response_times = _detailed_values(
+        rows, time_origin, vector_builder
+    )
     values = dict(zip(_DETAILED_PHASE_FIELDS, phase_averages))
     values.update(measured_count=measured_count, avg_first_response_time=average)
     return values, first_response_times
 
 
-def _build_detailed_timeline(rows, interval_seconds: int, start_time: datetime, time_origin: str):
+def _build_detailed_timeline(
+    rows,
+    interval_seconds: int,
+    start_time: datetime,
+    time_origin: str,
+    vector_builder=_phase_vector,
+):
     data_buckets = {}
     for row in rows:
         data_buckets.setdefault(_bucket_key(row[0], interval_seconds), []).append(row)
@@ -371,7 +411,7 @@ def _build_detailed_timeline(rows, interval_seconds: int, start_time: datetime, 
         key = datetime.fromtimestamp(current_ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         bucket_rows = data_buckets.get(key, [])
         error_count = sum(1 for row in bucket_rows if row[12])
-        values, _ = _detailed_fields(bucket_rows, time_origin)
+        values, _ = _detailed_fields(bucket_rows, time_origin, vector_builder)
         result.append(DetailedTimelineBucket(
             timestamp=key,
             request_count=len(bucket_rows),
@@ -383,9 +423,9 @@ def _build_detailed_timeline(rows, interval_seconds: int, start_time: datetime, 
     return result
 
 
-def _build_detailed_summary(rows, time_origin: str):
+def _build_detailed_summary(rows, time_origin: str, vector_builder=_phase_vector):
     error_count = sum(1 for row in rows if row[12])
-    values, response_times = _detailed_fields(rows, time_origin)
+    values, response_times = _detailed_fields(rows, time_origin, vector_builder)
     sorted_times = sorted(response_times)
     return DetailedMetricsSummary(
         total_requests=len(rows),
@@ -396,6 +436,51 @@ def _build_detailed_summary(rows, time_origin: str):
         p99_first_response_time=percentile(sorted_times, 99),
         **values,
     )
+
+
+def _build_metrics_by_channel(
+    rows,
+    interval_seconds: int,
+    start_time: datetime,
+    time_origin: str,
+) -> List[ChannelMetrics]:
+    rows_by_channel = {}
+    for row in rows:
+        channel = (row[13] if len(row) > 13 else None) or None
+        rows_by_channel.setdefault(channel, []).append(row)
+
+    result = []
+    for channel, channel_rows in sorted(
+        rows_by_channel.items(),
+        key=lambda item: (item[0] is None, item[0] or ""),
+    ):
+        speech_rows = [row for row in channel_rows if row[1] is not None]
+        pipeline_summary = _build_detailed_summary(
+            channel_rows, time_origin, _pipeline_phase_vector
+        )
+        speech_summary = _build_detailed_summary(
+            speech_rows, time_origin, _speech_phase_vector
+        )
+        result.append(ChannelMetrics(
+            channel=channel,
+            pipeline_summary=pipeline_summary,
+            speech_summary=speech_summary,
+            pipeline_buckets=_build_detailed_timeline(
+                channel_rows,
+                interval_seconds,
+                start_time,
+                time_origin,
+                _pipeline_phase_vector,
+            ) if pipeline_summary.measured_count else [],
+            speech_buckets=_build_detailed_timeline(
+                speech_rows,
+                interval_seconds,
+                start_time,
+                time_origin,
+                _speech_phase_vector,
+            ) if speech_summary.measured_count else [],
+        ))
+    return result
 
 
 @dataclass
@@ -450,7 +535,7 @@ _DETAILED_QUERY_SQL = """
 SELECT COALESCE(speech_end_at, created_at) AS event_at,
        speech_end_at, silence_threshold_time, stt_after_threshold_time, turn_end_gate_time,
        stt_time, stop_response_time, before_llm_time, llm_first_chunk_time, llm_first_voice_chunk_time,
-       tts_first_chunk_time, quick_response_text, error_info
+       tts_first_chunk_time, quick_response_text, error_info, channel
 FROM performance_records
 WHERE COALESCE(speech_end_at, created_at) >= ?
 ORDER BY event_at
@@ -481,6 +566,10 @@ class MetricsQuery(ABC):
 
     @abstractmethod
     async def query_detailed_summary(self, period: str) -> DetailedMetricsSummary:
+        pass
+
+    @abstractmethod
+    async def query_metrics_by_channel(self, period: str, interval: str) -> List[ChannelMetrics]:
         pass
 
     @abstractmethod
@@ -666,6 +755,15 @@ class SQLiteMetricsQuery(MetricsQuery):
         rows = await asyncio.to_thread(self._fetch_detailed_rows, start_time)
         return _build_detailed_summary(rows, self.time_origin)
 
+    async def query_metrics_by_channel(self, period: str, interval: str) -> List[ChannelMetrics]:
+        if interval not in VALID_INTERVALS:
+            raise ValueError(f"Invalid interval: {interval}. Must be one of {VALID_INTERVALS}")
+        start_time = datetime.now(timezone.utc) - parse_period(period)
+        rows = await asyncio.to_thread(self._fetch_detailed_rows, start_time)
+        return _build_metrics_by_channel(
+            rows, INTERVAL_SECONDS[interval], start_time, self.time_origin
+        )
+
     async def query_logs(
         self,
         limit: int,
@@ -738,7 +836,7 @@ class PostgreSQLMetricsQuery(MetricsQuery):
         SELECT COALESCE(speech_end_at, created_at) AS event_at,
                speech_end_at, silence_threshold_time, stt_after_threshold_time, turn_end_gate_time,
                stt_time, stop_response_time, before_llm_time, llm_first_chunk_time, llm_first_voice_chunk_time,
-               tts_first_chunk_time, quick_response_text, error_info
+               tts_first_chunk_time, quick_response_text, error_info, channel
         FROM performance_records
         WHERE COALESCE(speech_end_at, created_at) >= $1
         ORDER BY event_at
@@ -749,7 +847,7 @@ class PostgreSQLMetricsQuery(MetricsQuery):
             "event_at", "speech_end_at", "silence_threshold_time", "stt_after_threshold_time",
             "turn_end_gate_time", "stt_time", "stop_response_time", "before_llm_time",
             "llm_first_chunk_time", "llm_first_voice_chunk_time", "tts_first_chunk_time",
-            "quick_response_text", "error_info",
+            "quick_response_text", "error_info", "channel",
         )
         return [tuple(record[column] for column in columns) for record in records]
 
@@ -823,6 +921,15 @@ class PostgreSQLMetricsQuery(MetricsQuery):
         start_time = datetime.now(timezone.utc) - parse_period(period)
         rows = await self._fetch_detailed_rows(start_time)
         return _build_detailed_summary(rows, self.time_origin)
+
+    async def query_metrics_by_channel(self, period: str, interval: str) -> List[ChannelMetrics]:
+        if interval not in VALID_INTERVALS:
+            raise ValueError(f"Invalid interval: {interval}. Must be one of {VALID_INTERVALS}")
+        start_time = datetime.now(timezone.utc) - parse_period(period)
+        rows = await self._fetch_detailed_rows(start_time)
+        return _build_metrics_by_channel(
+            rows, INTERVAL_SECONDS[interval], start_time, self.time_origin
+        )
 
     async def query_logs(
         self,
