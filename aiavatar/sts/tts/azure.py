@@ -1,9 +1,7 @@
-import logging
 from typing import Dict, List
 from . import SpeechSynthesizer
+from .postprocessor import TTSPostprocessor
 from .preprocessor import TTSPreprocessor
-
-logger = logging.getLogger(__name__)
 
 
 class AzureSpeechSynthesizer(SpeechSynthesizer):
@@ -20,6 +18,8 @@ class AzureSpeechSynthesizer(SpeechSynthesizer):
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
         preprocessors: List[TTSPreprocessor] = None,
+        postprocessors: List[TTSPostprocessor] = None,
+        sample_rate: int = None,
         cache_dir: str = None,
         cache_ext: str = "wav",
         debug: bool = False
@@ -30,6 +30,8 @@ class AzureSpeechSynthesizer(SpeechSynthesizer):
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
             preprocessors=preprocessors,
+            postprocessors=postprocessors,
+            sample_rate=sample_rate,
             cache_dir=cache_dir,
             cache_ext=cache_ext,
             debug=debug
@@ -48,16 +50,7 @@ class AzureSpeechSynthesizer(SpeechSynthesizer):
         config["audio_format"] = self.audio_format
         return config
 
-    async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
-        if not text or not text.strip():
-            return bytes()
-
-        if self.debug:
-            logger.info(f"Speech synthesize: {text}")
-
-        # Preprocess
-        processed_text = await self.preprocess(text, style_info, language)
-
+    def _build_request(self, text: str, language: str = None):
         headers = {
             "X-Microsoft-OutputFormat": self.audio_format,
             "Content-Type": "application/ssml+xml",
@@ -65,19 +58,23 @@ class AzureSpeechSynthesizer(SpeechSynthesizer):
         }
 
         speaker = self.voice_map[language or self.default_language]
-        ssml_text = f"<speak version='1.0' xml:lang='{language or self.default_language}'><voice xml:lang='{language or self.default_language}' name='{speaker}'>{processed_text}</voice></speak>"
+        ssml_text = f"<speak version='1.0' xml:lang='{language or self.default_language}'><voice xml:lang='{language or self.default_language}' name='{speaker}'>{text}</voice></speak>"
         data = ssml_text.encode("utf-8")
 
         url = f"https://{self.azure_region}.tts.speech.microsoft.com/cognitiveservices/v1"
+        return url, headers, data
 
-        # Check cache
-        cache_key = self.make_cache_key(url=url, headers=headers, data=data)
-        if cached := await self.read_cache(cache_key):
-            return cached
+    async def make_synthesis_cache_key(
+        self,
+        text: str,
+        style_info: dict = None,
+        language: str = None,
+    ) -> str:
+        url, headers, data = self._build_request(text, language)
+        return self.make_cache_key(url=url, headers=headers, data=data)
 
-        # Synthesize
+    async def generate(self, text: str, style_info: dict = None, language: str = None) -> bytes:
+        url, headers, data = self._build_request(text, language)
         # https://learn.microsoft.com/ja-jp/azure/ai-services/speech-service/language-support?tabs=tts
         resp = await self.http_client.post(url=url, headers=headers, data=data)
-
-        await self.write_cache(cache_key, resp.content)
         return resp.content

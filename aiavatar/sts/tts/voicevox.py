@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, List
 from . import SpeechSynthesizer
+from .postprocessor import TTSPostprocessor
 from .preprocessor import TTSPreprocessor
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,8 @@ class VoicevoxSpeechSynthesizer(SpeechSynthesizer):
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
         preprocessors: List[TTSPreprocessor] = None,
+        postprocessors: List[TTSPostprocessor] = None,
+        sample_rate: int = None,
         cache_dir: str = None,
         cache_ext: str = "wav",
         debug: bool = False
@@ -27,6 +30,8 @@ class VoicevoxSpeechSynthesizer(SpeechSynthesizer):
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
             preprocessors=preprocessors,
+            postprocessors=postprocessors,
+            sample_rate=sample_rate,
             cache_dir=cache_dir,
             cache_ext=cache_ext,
             debug=debug
@@ -46,36 +51,36 @@ class VoicevoxSpeechSynthesizer(SpeechSynthesizer):
         response.raise_for_status()
         return response.json()
 
-    async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
-        if not text or not text.strip():
-            return bytes()
-
-        if self.debug:
-            logger.info(f"Speech synthesize: {text}")
-
-        # Preprocess
-        processed_text = await self.preprocess(text, style_info, language)
-
+    def _get_speaker(self, style_info: dict = None) -> int:
         speaker = self.speaker
-
-        # Apply style
         if style := self.parse_style(style_info):
             speaker = int(style)
+        return speaker
+
+    async def make_synthesis_cache_key(
+        self,
+        text: str,
+        style_info: dict = None,
+        language: str = None,
+    ) -> str:
+        speaker = self._get_speaker(style_info)
+        return self.make_cache_key(
+            url=self.base_url + "/synthesis",
+            params={"speaker": speaker},
+            data=text.encode(),
+        )
+
+    async def generate(self, text: str, style_info: dict = None, language: str = None) -> bytes:
+        speaker = self._get_speaker(style_info)
+        if self.parse_style(style_info):
             logger.info(f"Apply style: {speaker}")
 
         url = self.base_url + "/synthesis"
         params = {"speaker": speaker}
 
-        # Check cache (audio_query is deterministic for text + speaker)
-        cache_key = self.make_cache_key(url=url, params=params, data=processed_text.encode())
-        if cached := await self.read_cache(cache_key):
-            return cached
-
         # Make query
-        audio_query = await self.get_audio_query(processed_text, speaker)
+        audio_query = await self.get_audio_query(text, speaker)
 
         # Synthesize
         response = await self.http_client.post(url=url, params=params, json=audio_query)
-
-        await self.write_cache(cache_key, response.content)
         return response.content

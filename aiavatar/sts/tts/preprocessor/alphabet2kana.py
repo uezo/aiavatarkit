@@ -101,7 +101,14 @@ class AlphabetToKanaPreprocessor(TTSPreprocessor):
     def alphabet_length(self, value: int):
         self._alphabet_length = value
 
-    async def process(self, text: str, style_info: dict = None, language: str = None) -> str:
+    async def process(
+        self,
+        text: str,
+        style_info: dict = None,
+        language: str = None,
+        *,
+        synthesizer=None,
+    ) -> str:
         if language and not language.startswith("ja"):
             if self.debug:
                 logger.info(f"Skip AlphabetToKana for non-Japanese text: {language}")

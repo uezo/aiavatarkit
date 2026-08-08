@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, List
 from . import SpeechSynthesizer
+from .postprocessor import TTSPostprocessor
 from .preprocessor import TTSPreprocessor
 
 try:
@@ -29,6 +30,10 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
         preprocessors: List[TTSPreprocessor] = None,
+        postprocessors: List[TTSPostprocessor] = None,
+        sample_rate: int = None,
+        cache_dir: str = None,
+        cache_ext: str = "wav",
         debug: bool = False
     ):
         super().__init__(
@@ -37,6 +42,10 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
             preprocessors=preprocessors,
+            postprocessors=postprocessors,
+            sample_rate=sample_rate,
+            cache_dir=cache_dir,
+            cache_ext=cache_ext,
             debug=debug
         )
         self.service_name = service_name
@@ -83,18 +92,13 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
             self.service_name = name
             self.speaker = speaker
 
-    async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
-        if not text or not text.strip():
-            return bytes()
-
-        if self.debug:
-            logger.info(f"Speech synthesize: {text}")
-
-        # Preprocess
-        processed_text = await self.preprocess(text, style_info, language)
-
-        # Make basic params
-        request_json = {"text": processed_text}
+    def _build_request_json(
+        self,
+        text: str,
+        style_info: dict = None,
+        language: str = None,
+    ) -> dict:
+        request_json = {"text": text}
         if self.service_name:
             request_json["service_name"] = self.service_name
         if self.speaker:
@@ -105,26 +109,43 @@ class SpeechGatewaySpeechSynthesizer(SpeechSynthesizer):
         # Apply style
         if style := self.parse_style(style_info):
             request_json["style"] = style
-            if self.debug:
-                logger.info(f"Apply style: {style}")
 
         # Apply speed
         if speed := (style_info or {}).get("info", {}).get("speed"):
             request_json["speed"] = speed
-            if self.debug:
-                logger.info(f"Apply speed: {speed}")
 
         # Apply language
         if language and language != "ja-JP":
-            logger.info(f"Apply language: {language}")
             request_json["language"] = language
-            del request_json["service_name"]
-            del request_json["speaker"]
+            request_json.pop("service_name", None)
+            request_json.pop("speaker", None)
 
         # Apply audio format
         if self.audio_format:
             request_json["audio_format"] = self.audio_format
-            if self.debug:
+        return request_json
+
+    async def make_synthesis_cache_key(
+        self,
+        text: str,
+        style_info: dict = None,
+        language: str = None,
+    ) -> str:
+        request_json = self._build_request_json(text, style_info, language)
+        url = "local://speech-gateway" if self.use_local_gateway else self.tts_url
+        return self.make_cache_key(url=url, json_body=request_json)
+
+    async def generate(self, text: str, style_info: dict = None, language: str = None) -> bytes:
+        request_json = self._build_request_json(text, style_info, language)
+
+        if self.debug:
+            if "style" in request_json:
+                logger.info(f"Apply style: {request_json['style']}")
+            if "speed" in request_json:
+                logger.info(f"Apply speed: {request_json['speed']}")
+            if language and language != "ja-JP":
+                logger.info(f"Apply language: {language}")
+            if self.audio_format:
                 logger.info(f"Apply audio format: {self.audio_format}")
 
         # Synthesize

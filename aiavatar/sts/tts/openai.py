@@ -1,9 +1,8 @@
-import logging
 from typing import Dict, List
-from . import SpeechSynthesizer
-from .preprocessor import TTSPreprocessor
 
-logger = logging.getLogger(__name__)
+from . import SpeechSynthesizer
+from .postprocessor import TTSPostprocessor
+from .preprocessor import TTSPreprocessor
 
 
 class OpenAISpeechSynthesizer(SpeechSynthesizer):
@@ -17,10 +16,12 @@ class OpenAISpeechSynthesizer(SpeechSynthesizer):
         instructions: str = None,
         style_mapper: Dict[str, str] = None,
         audio_format: str = "wav",
+        sample_rate: int = None,
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
         preprocessors: List[TTSPreprocessor] = None,
+        postprocessors: List[TTSPostprocessor] = None,
         cache_dir: str = None,
         cache_ext: str = "wav",
         debug: bool = False
@@ -31,6 +32,8 @@ class OpenAISpeechSynthesizer(SpeechSynthesizer):
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
             preprocessors=preprocessors,
+            postprocessors=postprocessors,
+            sample_rate=sample_rate,
             cache_dir=cache_dir,
             cache_ext=cache_ext,
             debug=debug
@@ -51,17 +54,7 @@ class OpenAISpeechSynthesizer(SpeechSynthesizer):
         config["base_url"] = self.base_url
         return config
 
-    async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
-        if not text or not text.strip():
-            return bytes()
-
-        if self.debug:
-            logger.info(f"Speech synthesize: {text}")
-
-        # Preprocess
-        processed_text = await self.preprocess(text, style_info, language)
-
-        # Headers and params
+    def _build_request(self, text: str):
         if "azure" in self.base_url:
             url = self.base_url
             headers = {"api-key": self.openai_api_key}
@@ -72,19 +65,23 @@ class OpenAISpeechSynthesizer(SpeechSynthesizer):
         json_body = {
             "model": self.model,
             "voice": self.speaker,
-            "input": processed_text,
+            "input": text,
             "instructions": self.instructions,
             # "speed": self.speed,
-            "response_format": "wav"
+            "response_format": self.audio_format
         }
+        return url, headers, json_body
 
-        # Check cache
-        cache_key = self.make_cache_key(url=url, headers=headers, json_body=json_body)
-        if cached := await self.read_cache(cache_key):
-            return cached
+    async def make_synthesis_cache_key(
+        self,
+        text: str,
+        style_info: dict = None,
+        language: str = None,
+    ) -> str:
+        url, headers, json_body = self._build_request(text)
+        return self.make_cache_key(url=url, headers=headers, json_body=json_body)
 
-        # Synthesize
+    async def generate(self, text: str, style_info: dict = None, language: str = None) -> bytes:
+        url, headers, json_body = self._build_request(text)
         resp = await self.http_client.post(url=url, headers=headers, json=json_body)
-
-        await self.write_cache(cache_key, resp.content)
         return resp.content

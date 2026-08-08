@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 import aiofiles
 
 from . import SpeechSynthesizer
+from .postprocessor import TTSPostprocessor
 from .preprocessor import TTSPreprocessor
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,8 @@ class VoisonaSpeechSynthesizer(SpeechSynthesizer):
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
         preprocessors: List[TTSPreprocessor] = None,
+        postprocessors: List[TTSPostprocessor] = None,
+        sample_rate: int = None,
         cache_dir: str = None,
         cache_ext: str = "wav",
         debug: bool = False
@@ -42,6 +45,8 @@ class VoisonaSpeechSynthesizer(SpeechSynthesizer):
             max_keepalive_connections=max_keepalive_connections,
             timeout=timeout,
             preprocessors=preprocessors,
+            postprocessors=postprocessors,
+            sample_rate=sample_rate,
             cache_dir=cache_dir,
             cache_ext=cache_ext,
             debug=debug
@@ -162,19 +167,15 @@ class VoisonaSpeechSynthesizer(SpeechSynthesizer):
         os.makedirs(self.output_dir, exist_ok=True)
         return os.path.join(self.output_dir, f"aiavatar-voisona-{uuid_mod.uuid4().hex}.wav")
 
-    async def synthesize(self, text: str, style_info: dict = None, language: str = None) -> bytes:
-        if not text or not text.strip():
-            return bytes()
-
-        if self.debug:
-            logger.info(f"Speech synthesize: {text}")
-
-        processed_text = await self.preprocess(text, style_info, language)
-
+    async def _resolve_synthesis(
+        self,
+        text: str,
+        style_info: dict = None,
+        language: str = None,
+    ):
         speaker = self.speaker
         if style := self.parse_style(style_info):
             speaker = style
-            logger.info(f"Apply style: {speaker}")
 
         voice_library = await self.get_voice_library(speaker)
         synthesis_language = language or self.default_language
@@ -183,18 +184,39 @@ class VoisonaSpeechSynthesizer(SpeechSynthesizer):
 
         url = f"{self.base_url}/speech-syntheses"
         cache_payload = {
-            "text": processed_text,
+            "text": text,
             "language": synthesis_language,
             "voice_name": voice_library["voice_name"],
             "voice_version": voice_library["voice_version"],
             "global_parameters": self.global_parameters,
         }
-        cache_key = self.make_cache_key(
+        return url, cache_payload
+
+    async def make_synthesis_cache_key(
+        self,
+        text: str,
+        style_info: dict = None,
+        language: str = None,
+    ) -> str:
+        url, cache_payload = await self._resolve_synthesis(
+            text,
+            style_info,
+            language,
+        )
+        return self.make_cache_key(
             url=url,
             json_body={k: v for k, v in cache_payload.items() if v is not None}
         )
-        if cached := await self.read_cache(cache_key):
-            return cached
+
+    async def generate(self, text: str, style_info: dict = None, language: str = None) -> bytes:
+        if style := self.parse_style(style_info):
+            logger.info(f"Apply style: {style}")
+
+        url, cache_payload = await self._resolve_synthesis(
+            text,
+            style_info,
+            language,
+        )
 
         output_file_path = self._make_output_path()
         request_uuid = None
@@ -214,7 +236,6 @@ class VoisonaSpeechSynthesizer(SpeechSynthesizer):
             async with aiofiles.open(output_file_path, "rb") as f:
                 audio = await f.read()
 
-            await self.write_cache(cache_key, audio)
             return audio
         finally:
             if request_uuid and self.delete_request:

@@ -62,7 +62,14 @@ class PatternMatchPreprocessor(TTSPreprocessor):
             compiled_pattern = re.compile(escaped_pattern)
         self.compiled_patterns.append((compiled_pattern, replacement))
 
-    async def process(self, text: str, style_info: dict = None, language: str = None) -> str:
+    async def process(
+        self,
+        text: str,
+        style_info: dict = None,
+        language: str = None,
+        *,
+        synthesizer=None,
+    ) -> str:
         converted = text
         for compiled_pattern, replacement in self.compiled_patterns:
             try:
