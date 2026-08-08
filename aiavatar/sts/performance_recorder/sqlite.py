@@ -132,6 +132,10 @@ class SQLitePerformanceRecorder(PerformanceRecorder):
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON performance_records (user_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_session_id ON performance_records (session_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_context_id ON performance_records (context_id)")
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_channel_context_id "
+                    "ON performance_records (channel, context_id)"
+                )
 
         finally:
             conn.close()

@@ -298,6 +298,13 @@ async def test_query_summary_with_data(recorder, query, test_marker):
             stt_time=0.1 * (i + 1),
             tts_first_chunk_time=0.5 * (i + 1),
         ))
+    recorder.record(PerformanceRecord(
+        transaction_id=f"sibling-{uuid4()}",
+        user_id=test_marker,
+        context_id=context_id,
+        channel="another-channel",
+        request_text="Sibling request",
+    ))
 
     recorder.record_queue.join()
 
@@ -402,18 +409,20 @@ async def test_metrics_by_channel_includes_text_and_speech_rows(recorder, query,
 async def test_query_logs_with_data(recorder, query, test_marker):
     """Test logs query with actual data"""
     context_id = f"ctx_{uuid4()}"
+    channel = f"channel_{uuid4()}"
     for i in range(3):
         recorder.record(PerformanceRecord(
             transaction_id=f"test_txn_{uuid4()}",
             user_id=test_marker,
             context_id=context_id,
+            channel=channel,
             request_text=f"Request {i}",
             response_text=f"Response {i}",
         ))
 
     recorder.record_queue.join()
 
-    result = await query.query_logs(100)
+    result = await query.query_logs(100, channel=channel)
 
     # Find our group by context_id
     our_group = None
@@ -423,7 +432,8 @@ async def test_query_logs_with_data(recorder, query, test_marker):
             break
 
     assert our_group is not None
-    assert len(our_group.logs) == 3
+    assert len(our_group.logs) == 4
+    assert {log.channel for log in our_group.logs} == {channel, "another-channel"}
 
 
 @pytest.mark.asyncio

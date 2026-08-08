@@ -97,7 +97,7 @@ def test_new_admin_uses_one_replaceable_authenticator_and_new_routes(tmp_path):
         recorder.record(PerformanceRecord(
             transaction_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
             session_id="session-text",
-            context_id="context-text",
+            context_id="context",
             channel="linebot",
             request_text="hello text",
             before_llm_time=0.1,
@@ -138,6 +138,12 @@ def test_new_admin_uses_one_replaceable_authenticator_and_new_routes(tmp_path):
         assert logs.status_code == 200
         log = logs.json()["groups"][0]["logs"][0]
         assert log["session_id"] == "session-new"
+        assert log["channel"] == "websocket"
+        linebot_logs = client.get("/admin/api/logs?channel=linebot", auth=auth)
+        assert linebot_logs.status_code == 200
+        context_logs = linebot_logs.json()["groups"][0]["logs"]
+        assert {item["session_id"] for item in context_logs} == {"session-new", "session-text"}
+        assert {item["channel"] for item in context_logs} == {"websocket", "linebot"}
         timing = log["timing_breakdown"]
         assert timing["total_first_response"] == pytest.approx(0.9)
         assert [

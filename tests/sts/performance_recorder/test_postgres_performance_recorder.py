@@ -239,6 +239,7 @@ async def test_init_db_creates_indexes(recorder):
         assert "idx_transaction_id" in index_names
         assert "idx_user_id" in index_names
         assert "idx_context_id" in index_names
+        assert "idx_channel_context_id" in index_names
     finally:
         await conn.close()
 

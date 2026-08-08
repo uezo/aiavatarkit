@@ -188,6 +188,10 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON performance_records (user_id)")
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_session_id ON performance_records (session_id)")
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_context_id ON performance_records (context_id)")
+                await conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_channel_context_id "
+                    "ON performance_records (channel, context_id)"
+                )
 
                 self._db_initialized = True
 

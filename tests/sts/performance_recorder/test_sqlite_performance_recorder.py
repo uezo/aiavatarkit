@@ -206,6 +206,7 @@ def test_init_db_creates_indexes(recorder, db_path):
         assert "idx_user_id" in index_names
         assert "idx_session_id" in index_names
         assert "idx_context_id" in index_names
+        assert "idx_channel_context_id" in index_names
     finally:
         conn.close()
 
@@ -270,3 +271,4 @@ def test_migrates_session_id_and_channel_without_backfill(tmp_path):
     assert legacy_session is None
     assert legacy_channel is None
     assert "idx_session_id" in indexes
+    assert "idx_channel_context_id" in indexes
