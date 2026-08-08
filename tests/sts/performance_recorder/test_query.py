@@ -683,18 +683,28 @@ async def test_metrics_by_channel_separates_pipeline_and_speech_latency(recorder
 @pytest.mark.asyncio
 async def test_query_logs_filters_and_includes_session_id(recorder, query):
     records = [
-        PerformanceRecord(transaction_id="a", user_id="u1", session_id="s1", context_id="c1", request_text="hello tokyo"),
-        PerformanceRecord(transaction_id="b", user_id="u1", session_id="s2", context_id="c1", response_text="hello osaka", error_info="boom"),
-        PerformanceRecord(transaction_id="c", user_id="u2", session_id="s1", context_id="c2", tool_calls='[{"name":"weather"}]'),
+        PerformanceRecord(transaction_id="a", user_id="u1", session_id="s1", context_id="c1", channel="linebot", request_text="hello tokyo"),
+        PerformanceRecord(transaction_id="b", user_id="u1", session_id="s2", context_id="c1", channel="websocket", response_text="hello osaka", error_info="boom"),
+        PerformanceRecord(transaction_id="c", user_id="u2", session_id="s1", context_id="c2", channel="phone", tool_calls='[{"name":"weather"}]'),
     ]
     for record in records:
         recorder.record(record)
     recorder.record_queue.join()
 
-    result = await query.query_logs(10, user_id="u1", session_id="s1", keyword="tokyo", has_error=False)
+    result = await query.query_logs(
+        10,
+        user_id="u1",
+        session_id="s1",
+        channel="linebot",
+        keyword="tokyo",
+        has_error=False,
+    )
     assert len(result) == 1
     assert len(result[0].logs) == 1
     assert result[0].logs[0].session_id == "s1"
+    assert result[0].logs[0].channel == "linebot"
+    channel_result = await query.query_logs(10, channel="linebot")
+    assert {log.transaction_id for log in channel_result[0].logs} == {"a", "b"}
     assert (await query.query_logs(10, has_error=True))[0].logs[0].transaction_id == "b"
     assert (await query.query_logs(10, keyword="weather"))[0].logs[0].transaction_id == "c"
 

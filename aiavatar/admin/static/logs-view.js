@@ -68,6 +68,7 @@ function renderLog(log, { voiceRecorderEnabled, playVoice }) {
   meta.className = "meta";
   const values = [
     `time: ${log.created_at || "—"}`,
+    `channel: ${log.channel || "Unclassified"}`,
     `session: ${log.session_id || "—"}`,
     `user: ${log.user_id || "—"}`,
     `context: ${log.context_id || "—"}`,
@@ -157,6 +158,7 @@ export function renderLogs(root, { api, setStatus }) {
       <div class="field grow"><label for="logs-user">User ID</label><input id="logs-user" name="user_id" autocomplete="off"></div>
       <div class="field grow"><label for="logs-session">Session ID</label><input id="logs-session" name="session_id" autocomplete="off"></div>
       <div class="field grow"><label for="logs-context">Context ID</label><input id="logs-context" name="context_id" autocomplete="off"></div>
+      <div class="field grow"><label for="logs-channel">Channel</label><input id="logs-channel" name="channel" autocomplete="off"></div>
       <div class="field grow"><label for="logs-keyword">Keyword</label><input id="logs-keyword" name="keyword" autocomplete="off" placeholder="request, response, error, tool call"></div>
       <div class="field"><label for="logs-error">Error</label><select id="logs-error" name="has_error"><option value="">All</option><option value="true">With error</option><option value="false">Without error</option></select></div>
       <div class="field"><label for="logs-limit">Limit</label><input id="logs-limit" name="limit" type="number" min="1" max="10000" value="200"></div>
@@ -299,7 +301,7 @@ export function renderLogs(root, { api, setStatus }) {
   async function load(event) {
     event?.preventDefault();
     const params = new URLSearchParams();
-    for (const name of ["user_id", "session_id", "context_id", "keyword", "has_error", "limit"]) {
+    for (const name of ["user_id", "session_id", "context_id", "channel", "keyword", "has_error", "limit"]) {
       const value = form.elements[name].value.trim();
       if (value) params.set(name, value);
     }

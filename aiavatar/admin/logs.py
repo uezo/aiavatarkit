@@ -34,6 +34,7 @@ class ConversationLogResponse(BaseModel):
     user_id: Optional[str] = None
     session_id: Optional[str] = None
     context_id: Optional[str] = None
+    channel: Optional[str] = None
     tts_first_chunk_time: Optional[float] = None
     before_llm_time: Optional[float] = None
     quick_response_text: Optional[str] = None
@@ -72,6 +73,7 @@ class LogsAPI:
             user_id: Optional[str] = Query(None),
             session_id: Optional[str] = Query(None),
             context_id: Optional[str] = Query(None),
+            channel: Optional[str] = Query(None),
             has_error: Optional[bool] = Query(None),
             keyword: Optional[str] = Query(None, max_length=500),
         ) -> LogsResponse:
@@ -81,6 +83,7 @@ class LogsAPI:
                     user_id=user_id,
                     session_id=session_id,
                     context_id=context_id,
+                    channel=channel,
                     has_error=has_error,
                     keyword=keyword,
                 )

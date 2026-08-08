@@ -500,6 +500,7 @@ class ConversationLog:
     error_info: Optional[str] = None
     tool_calls: Optional[str] = None
     timing_breakdown: Optional["TurnTimingBreakdown"] = None
+    channel: Optional[str] = None
 
 
 @dataclass
@@ -546,8 +547,8 @@ SELECT COALESCE(speech_end_at, created_at) AS event_at,
        transaction_id, user_id, session_id, context_id, tts_first_chunk_time, before_llm_time, quick_response_text,
        request_text, request_files, response_text, response_voice_text, error_info, tool_calls,
        speech_end_at, silence_threshold_time, stt_after_threshold_time, turn_end_gate_time,
-       stt_time, stop_response_time, llm_first_chunk_time, llm_first_voice_chunk_time
-FROM performance_records
+       stt_time, stop_response_time, llm_first_chunk_time, llm_first_voice_chunk_time, channel
+FROM performance_records AS records
 """
 
 
@@ -580,6 +581,7 @@ class MetricsQuery(ABC):
         user_id: str = None,
         session_id: str = None,
         context_id: str = None,
+        channel: str = None,
         has_error: bool = None,
         keyword: str = None,
     ) -> List[ConversationGroup]:
@@ -617,6 +619,7 @@ def _group_logs(rows, time_origin: str) -> List[ConversationGroup]:
             user_id=row[2],
             session_id=row[3],
             context_id=row[4],
+            channel=row[22],
             tts_first_chunk_time=row[5],
             before_llm_time=row[6],
             quick_response_text=row[7],
@@ -702,15 +705,29 @@ class SQLiteMetricsQuery(MetricsQuery):
         user_id: str = None,
         session_id: str = None,
         context_id: str = None,
+        channel: str = None,
         has_error: bool = None,
         keyword: str = None,
     ):
         clauses = []
         params = []
-        for column, value in (("user_id", user_id), ("session_id", session_id), ("context_id", context_id)):
+        for column, value in (
+            ("user_id", user_id),
+            ("session_id", session_id),
+            ("context_id", context_id),
+        ):
             if value:
                 clauses.append(f"{column} = ?")
                 params.append(value)
+        if channel:
+            clauses.append(
+                "COALESCE(records.context_id, '') IN ("
+                "SELECT COALESCE(channel_records.context_id, '') "
+                "FROM performance_records AS channel_records "
+                "WHERE channel_records.channel = ?"
+                ")"
+            )
+            params.append(channel)
         if has_error is True:
             clauses.append("error_info IS NOT NULL AND error_info <> ''")
         elif has_error is False:
@@ -771,11 +788,19 @@ class SQLiteMetricsQuery(MetricsQuery):
         user_id: str = None,
         session_id: str = None,
         context_id: str = None,
+        channel: str = None,
         has_error: bool = None,
         keyword: str = None,
     ) -> List[ConversationGroup]:
         rows = await asyncio.to_thread(
-            self._fetch_logs, limit, user_id, session_id, context_id, has_error, keyword
+            self._fetch_logs,
+            limit,
+            user_id,
+            session_id,
+            context_id,
+            channel,
+            has_error,
+            keyword,
         )
         return _group_logs(rows, self.time_origin)
 
@@ -857,6 +882,7 @@ class PostgreSQLMetricsQuery(MetricsQuery):
         user_id: str = None,
         session_id: str = None,
         context_id: str = None,
+        channel: str = None,
         has_error: bool = None,
         keyword: str = None,
     ):
@@ -867,9 +893,22 @@ class PostgreSQLMetricsQuery(MetricsQuery):
             params.append(value)
             return f"${len(params)}"
 
-        for column, value in (("user_id", user_id), ("session_id", session_id), ("context_id", context_id)):
+        for column, value in (
+            ("user_id", user_id),
+            ("session_id", session_id),
+            ("context_id", context_id),
+        ):
             if value:
                 clauses.append(f"{column} = {bind(value)}")
+        if channel:
+            channel_marker = bind(channel)
+            clauses.append(
+                "COALESCE(records.context_id, '') IN ("
+                "SELECT COALESCE(channel_records.context_id, '') "
+                "FROM performance_records AS channel_records "
+                f"WHERE channel_records.channel = {channel_marker}"
+                ")"
+            )
         if has_error is True:
             clauses.append("error_info IS NOT NULL AND error_info <> ''")
         elif has_error is False:
@@ -895,6 +934,7 @@ class PostgreSQLMetricsQuery(MetricsQuery):
             "request_files", "response_text", "response_voice_text", "error_info", "tool_calls",
             "speech_end_at", "silence_threshold_time", "stt_after_threshold_time", "turn_end_gate_time",
             "stt_time", "stop_response_time", "llm_first_chunk_time", "llm_first_voice_chunk_time",
+            "channel",
         )
         return [tuple(record[column] for column in columns) for record in records]
 
@@ -938,11 +978,12 @@ class PostgreSQLMetricsQuery(MetricsQuery):
         user_id: str = None,
         session_id: str = None,
         context_id: str = None,
+        channel: str = None,
         has_error: bool = None,
         keyword: str = None,
     ) -> List[ConversationGroup]:
         rows = await self._fetch_filtered_logs(
-            limit, user_id, session_id, context_id, has_error, keyword
+            limit, user_id, session_id, context_id, channel, has_error, keyword
         )
         return _group_logs(rows, self.time_origin)
 

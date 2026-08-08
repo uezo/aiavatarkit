@@ -87,6 +87,7 @@ The following filters are available. All specified conditions are combined with 
 - User ID: exact match
 - Session ID: exact match
 - Context ID: exact match
+- Channel: exact transaction match; returns contexts containing at least one matching transaction
 - Keyword: searches request, response, voice response, quick response, error, and tool-call data
 - Error presence
 - Limit: 1–10,000; default 200
@@ -95,7 +96,7 @@ The limit applies to the number of messages retrieved. The messages are then gro
 
 The drawer displays:
 
-- Timestamp, Session ID, User ID, Context ID, and Transaction ID
+- Timestamp, Channel, Session ID, User ID, Context ID, and Transaction ID
 - Request, Response, Error, and Tool calls
 - First-response time and the detailed nine-phase breakdown for each turn
 - Request and Response audio playback
