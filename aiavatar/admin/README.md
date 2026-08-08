@@ -41,33 +41,42 @@ When `name` is omitted, a short name is derived from the Adapter class name. For
 
 ### Metrics
 
-The Metrics view shows the latency from the end of the user's speech to the first response.
+The Metrics view groups latency by the `channel` recorded on each Pipeline request. It does not combine latency averages across channels, so text-only and voice traffic do not distort each other's statistics.
 
 - Period: `1h`, `6h`, `24h`, `7d`, or `30d`
 - Interval: `1m`, `5m`, `15m`, `1h`, or `1d`
-- Summary: request count, error count, average, median, and P95
-- Chart: stacked average latency by phase for each time bucket
+- Overall summary: request, success, error, and channel counts
+- Per-channel summary: request count, error count, average, median, and P95 displayed latency
+- Per-channel chart: Speech latency when speech timing is available; otherwise Pipeline latency
 
-The detailed breakdown contains nine phases:
+The UI shows one latency chart per channel. A channel with measurable speech timing uses latency from speech end to first content output. A text-only channel instead uses latency from Pipeline invocation to first content output. The API returns both metric sets so other consumers can choose explicitly.
+
+The Pipeline form of the chart contains six phases:
+
+1. Input / STT
+2. Stop current response
+3. Before-LLM handlers
+4. LLM
+5. Processing
+6. TTS
+
+The Speech form prepends three speech phases to the same Pipeline phases:
 
 1. Silence detection
 2. Streaming STT finalization
 3. Turn-end gate
-4. STT
-5. Stop current response
-6. Before-LLM handlers
-7. LLM
-8. Processing
-9. TTS
 
-The endpoint for a normal response is the first TTS audio chunk. The endpoint for a Quick Response is `before_llm_time`. When an intermediate timing point is absent in an older record, its unknown interval is included in the next known phase so that the stack remains equal to the measured first-response time.
+The first content output endpoint is selected from existing timing fields in this order:
 
-The request count includes every record in the selected period. The detailed breakdown uses only records that meet all of the following conditions, and the UI reports this subset as coverage:
+1. Quick Response: `before_llm_time`
+2. Voice response: `tts_first_chunk_time`
+3. Text response fallback: `llm_first_chunk_time`
 
-- `speech_end_at` is present
-- The request has no error
-- A Quick Response or TTS first-chunk endpoint is present
-- The VAD and timing data can be interpreted
+No additional Pipeline start or first-output timestamps are persisted. When an intermediate timing point is absent, its unknown interval is included in the next known phase so that the stack remains equal to the measured latency.
+
+The request count includes every record in the selected period. Pipeline coverage includes successful records with one of the endpoints above, including records without `speech_end_at`. Speech coverage is the subset that also has usable speech-end and VAD timing. Failed requests and records without a usable endpoint remain in request/error counts but not in latency averages.
+
+New requests receive their channel from `STSRequest.channel`. Historical records without a channel are grouped as `Unclassified`.
 
 ### Logs
 
@@ -122,9 +131,9 @@ Metrics period selection and bucketing, as well as Logs display and ordering, us
 event_at = speech_end_at ?? created_at
 ```
 
-`speech_end_at` is the time at which the user's speech ended. `created_at`, which represents record persistence time, is used only as a fallback for older records without `speech_end_at`.
+`speech_end_at` is the time at which the user's speech ended. `created_at`, which represents record persistence time, is used as the event timestamp for text requests and as a fallback for older records without `speech_end_at`.
 
-For compatibility, the Logs API still returns this value in a field named `created_at`, but its value is the `event_at` defined above. Records without `speech_end_at` can appear in the log list, but they cannot be included in a detailed breakdown measured from the end of the user's speech.
+For compatibility, the Logs API still returns this value in a field named `created_at`, but its value is the `event_at` defined above. Records without `speech_end_at` can appear in the channel-specific Pipeline metrics and the log list, but not in the Speech breakdown. The existing aggregate Metrics endpoints and the per-turn Logs breakdown remain speech-based for compatibility.
 
 ## Authentication
 
@@ -179,6 +188,7 @@ All endpoints are under `/admin/api`.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/capabilities` | Return available optional features |
+| GET | `/metrics/by-channel?period=24h&interval=1h` | Return Pipeline and Speech metrics grouped by channel |
 | GET | `/metrics/summary?period=24h` | Return the Metrics summary |
 | GET | `/metrics/timeline?period=24h&interval=1h` | Return the detailed phase timeline |
 | GET | `/logs` | Return conversation messages matching the filters |
@@ -219,7 +229,7 @@ Database-specific behavior, timestamp selection, latency calculation, log filter
 | `static/index.html` | Provide the shared layout and load Chart.js and the application entry point |
 | `static/admin-app.js` | Load capabilities and manage navigation, view lifecycles, and global status |
 | `static/admin-api.js` | Provide the same-origin HTTP client for `/admin/api/` |
-| `static/metrics-view.js` | Render Metrics summary cards and the Chart.js chart |
+| `static/metrics-view.js` | Render overall counts and per-channel Pipeline and Speech charts |
 | `static/logs-view.js` | Render filters, the log table, details drawer, audio playback, and per-turn charts |
 | `static/config-view.js` | Load and arrange Config components |
 | `static/config-panel.js` | Generate configuration fields and save their values |

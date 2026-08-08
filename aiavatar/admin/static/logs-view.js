@@ -152,7 +152,7 @@ function renderGroupRow(group, openDrawer) {
 
 export function renderLogs(root, { api, setStatus }) {
   root.innerHTML = `
-    <section class="page-heading"><h2>Logs</h2><p>Search conversation messages. All conditions are combined.</p></section>
+    <section class="page-heading"><h2>Logs</h2></section>
     <form class="filter-grid">
       <div class="field grow"><label for="logs-user">User ID</label><input id="logs-user" name="user_id" autocomplete="off"></div>
       <div class="field grow"><label for="logs-session">Session ID</label><input id="logs-session" name="session_id" autocomplete="off"></div>

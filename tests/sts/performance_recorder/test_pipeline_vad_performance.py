@@ -61,6 +61,7 @@ async def test_pipeline_copies_optional_vad_performance(
         response
         async for response in pipeline.invoke(STSRequest(
             session_id="session",
+            channel="websocket",
             text="hello",
             metadata=metadata,
         ))
@@ -69,6 +70,7 @@ async def test_pipeline_copies_optional_vad_performance(
     assert responses[-1].type == "final"
     record = recorder.records[0]
     assert record.session_id == "session"
+    assert record.channel == "websocket"
     assert record.silence_threshold_time == expected_threshold
     if metadata is None:
         assert record.speech_end_at is None

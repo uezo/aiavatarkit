@@ -56,6 +56,7 @@ async def test_record_single(recorder, unique_transaction_id):
         transaction_id=unique_transaction_id,
         user_id="test_user",
         context_id="test_context",
+        channel="websocket",
         stt_name="test_stt",
         llm_name="test_llm",
         tts_name="test_tts",
@@ -81,6 +82,7 @@ async def test_record_single(recorder, unique_transaction_id):
         assert row is not None
         assert row["user_id"] == "test_user"
         assert row["context_id"] == "test_context"
+        assert row["channel"] == "websocket"
         assert row["request_text"] == "Hello, world!"
         assert row["response_text"] == "Hi there!"
         assert row["stt_name"] == "test_stt"
@@ -152,6 +154,7 @@ async def test_record_with_none_values(recorder, unique_transaction_id):
         assert row is not None
         assert row["user_id"] is None
         assert row["context_id"] is None
+        assert row["channel"] is None
         assert row["request_text"] is None
         assert row["response_text"] is None
     finally:
@@ -205,6 +208,13 @@ async def test_init_db_creates_table(recorder):
             """
         )
         assert row is not None
+        channel = await conn.fetchrow(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'performance_records' AND column_name = 'channel'
+            """
+        )
+        assert channel is not None
     finally:
         await conn.close()
 

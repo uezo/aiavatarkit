@@ -1,6 +1,6 @@
 export function renderEvaluation(root, { api, setStatus }) {
   root.innerHTML = `
-    <section class="page-heading"><h2>Evaluation</h2><p>Run a scenario set and retrieve its result.</p></section>
+    <section class="page-heading"><h2>Evaluation</h2></section>
     <section class="panel">
       <form><div class="field"><label for="evaluation-scenarios">Scenarios (JSON array)</label><textarea id="evaluation-scenarios" name="scenarios">[]</textarea></div>
       <div class="inline-error" data-error></div><button class="primary" type="submit">Start evaluation</button></form>

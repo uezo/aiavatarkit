@@ -622,6 +622,65 @@ async def test_detailed_summary_excludes_silence_only_record(recorder, query):
 
 
 @pytest.mark.asyncio
+async def test_metrics_by_channel_separates_pipeline_and_speech_latency(recorder, query):
+    recorder.record(PerformanceRecord(
+        transaction_id="text",
+        channel="linebot",
+        stop_response_time=0.05,
+        before_llm_time=0.1,
+        llm_first_chunk_time=0.25,
+    ))
+    recorder.record(PerformanceRecord(
+        transaction_id="voice",
+        channel="websocket",
+        speech_end_at=datetime.now(timezone.utc),
+        silence_threshold_time=0.1,
+        stt_after_threshold_time=0.1,
+        turn_end_gate_time=0.1,
+        stt_time=0.1,
+        stop_response_time=0.2,
+        before_llm_time=0.3,
+        llm_first_chunk_time=0.4,
+        llm_first_voice_chunk_time=0.5,
+        tts_first_chunk_time=0.6,
+    ))
+    recorder.record(PerformanceRecord(
+        transaction_id="partial-speech",
+        channel="partial",
+        speech_end_at=datetime.now(timezone.utc),
+        llm_first_chunk_time=0.2,
+    ))
+    recorder.record_queue.join()
+
+    result = await query.query_metrics_by_channel("1h", "1m")
+    by_channel = {metrics.channel: metrics for metrics in result}
+
+    text = by_channel["linebot"]
+    assert text.pipeline_summary.total_requests == 1
+    assert text.pipeline_summary.measured_count == 1
+    assert text.pipeline_summary.avg_first_response_time == pytest.approx(0.25)
+    assert text.pipeline_summary.avg_llm_phase == pytest.approx(0.15)
+    assert text.pipeline_summary.avg_tts_phase == 0
+    assert text.speech_summary.total_requests == 0
+    assert text.speech_summary.measured_count == 0
+    assert text.speech_buckets == []
+
+    partial = by_channel["partial"]
+    assert partial.pipeline_summary.measured_count == 1
+    assert partial.speech_summary.total_requests == 1
+    assert partial.speech_summary.measured_count == 0
+
+    voice = by_channel["websocket"]
+    assert voice.pipeline_summary.measured_count == 1
+    assert voice.pipeline_summary.avg_first_response_time == pytest.approx(0.6)
+    assert voice.pipeline_summary.avg_silence_detection_phase == 0
+    assert voice.pipeline_summary.avg_stt_phase == pytest.approx(0.1)
+    assert voice.speech_summary.measured_count == 1
+    assert voice.speech_summary.avg_first_response_time == pytest.approx(0.9)
+    assert voice.speech_summary.avg_silence_detection_phase == pytest.approx(0.1)
+
+
+@pytest.mark.asyncio
 async def test_query_logs_filters_and_includes_session_id(recorder, query):
     records = [
         PerformanceRecord(transaction_id="a", user_id="u1", session_id="s1", context_id="c1", request_text="hello tokyo"),

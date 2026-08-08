@@ -101,6 +101,7 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
                         user_id TEXT,
                         session_id TEXT,
                         context_id TEXT,
+                        channel TEXT,
                         voice_length REAL,
                         speech_end_at TIMESTAMPTZ,
                         silence_threshold_time REAL,
@@ -137,6 +138,7 @@ class PostgreSQLPerformanceRecorder(PerformanceRecorder):
                 await self.add_column_if_not_exist(conn, "user_id")
 
                 await self.add_column_if_not_exist(conn, "session_id")
+                await self.add_column_if_not_exist(conn, "channel")
 
                 # Add transaction_id column if not exist (migration v0.3.3 -> 0.3.4)
                 await self.add_column_if_not_exist(conn, "transaction_id")

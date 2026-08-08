@@ -28,6 +28,7 @@ def test_sqlite_fresh_schema_orders_timing_columns_from_speech_end(tmp_path):
         "user_id",
         "session_id",
         "context_id",
+        "channel",
         "voice_length",
         "speech_end_at",
         "silence_threshold_time",

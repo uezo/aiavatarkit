@@ -366,6 +366,36 @@ async def test_query_summary_excludes_errors(recorder, query, test_marker):
     assert error == 1
 
 
+# ========== channel metrics tests ==========
+
+@pytest.mark.asyncio
+async def test_metrics_by_channel_includes_text_and_speech_rows(recorder, query, test_marker):
+    recorder.record(PerformanceRecord(
+        transaction_id=f"text-{uuid4()}",
+        user_id=test_marker,
+        channel=test_marker,
+        llm_first_chunk_time=0.2,
+    ))
+    recorder.record(PerformanceRecord(
+        transaction_id=f"voice-{uuid4()}",
+        user_id=test_marker,
+        channel=test_marker,
+        speech_end_at=datetime.now(timezone.utc),
+        silence_threshold_time=0.1,
+        stt_after_threshold_time=0.1,
+        turn_end_gate_time=0.1,
+        tts_first_chunk_time=0.6,
+    ))
+    recorder.record_queue.join()
+
+    result = await query.query_metrics_by_channel("1h", "1m")
+    metrics = next(item for item in result if item.channel == test_marker)
+    assert metrics.pipeline_summary.total_requests == 2
+    assert metrics.pipeline_summary.measured_count == 2
+    assert metrics.speech_summary.total_requests == 1
+    assert metrics.speech_summary.measured_count == 1
+
+
 # ========== query_logs tests ==========
 
 @pytest.mark.asyncio
