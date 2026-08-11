@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -8,12 +9,17 @@ from ..adapter import Adapter
 from ..eval import DialogEvaluator
 from ..sts.llm.chatgpt import ChatGPTService
 from .auth import AdminAuthenticator, BasicAdminAuthenticator, create_auth_dependency
-from .config import _adapter_key, create_config_router
+from .config.runtime import create_runtime_config_router
 from .evaluation import EvaluationAPI
 from .logs import LogsAPI
 from .metrics import MetricsAPI
 
 _STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _adapter_key(adapter: Adapter) -> str:
+    name = re.sub(r"^AIAvatar|Server$", "", adapter.__class__.__name__)
+    return name.lower()
 
 
 class AdminPanel:
@@ -88,8 +94,11 @@ def setup_admin_panel(
         ).get_router(),
         prefix="/api",
     )
-    config_router, adapters = create_config_router(adapter=adapter)
-    router.include_router(config_router, prefix="/api")
+    adapters = {_adapter_key(adapter): adapter}
+    router.include_router(
+        create_runtime_config_router(adapters),
+        prefix="/api",
+    )
     if evaluator is not None:
         router.include_router(EvaluationAPI(evaluator).get_router(), prefix="/api")
 
