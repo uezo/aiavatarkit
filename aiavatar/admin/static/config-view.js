@@ -1,53 +1,36 @@
-import { createConfigPanel } from "./config-panel.js";
-
-const components = [
-  ["Pipeline", "config/pipeline"],
-  ["VAD", "config/vad"],
-  ["STT", "config/stt"],
-  ["LLM", "config/llm"],
-  ["TTS", "config/tts"],
-];
+import { createRuntimeConfigPanel } from "./config-panel.js";
 
 export function renderConfig(root, { api, setStatus }) {
   root.innerHTML = `
-    <section class="page-heading"><h2>Config</h2></section>
+    <section class="page-heading">
+      <h2>Config</h2>
+      <p>Changes apply to the running process only and are not persisted.</p>
+    </section>
     <div class="config-grid" data-grid></div>`;
   const grid = root.querySelector("[data-grid]");
   let stopped = false;
 
-  async function load() {
-    setStatus("Loading configuration…");
+  async function load(appliedStatus = null) {
+    if (appliedStatus === null) setStatus("Loading configuration…");
     try {
-      const [componentResults, adapters] = await Promise.all([
-        Promise.all(components.map(async ([title, endpoint]) => [title, endpoint, await api.get(endpoint)])),
-        api.get("config/adapters"),
-      ]);
+      const schema = await api.get("config/runtime");
       if (stopped) return;
       grid.replaceChildren();
-      for (const [title, endpoint, response] of componentResults) {
-        grid.append(createConfigPanel({
-          title: response.type ? `${title} · ${response.type}` : title,
-          endpoint,
-          config: response.config,
+      for (const section of schema.sections) {
+        grid.append(createRuntimeConfigPanel({
+          section,
           api,
           setStatus,
+          onApplied: status => load(status),
         }));
       }
-      for (const adapter of adapters) {
-        grid.append(createConfigPanel({
-          title: `Adapter · ${adapter.name} (${adapter.type})`,
-          endpoint: `config/adapter/${encodeURIComponent(adapter.name)}`,
-          config: adapter.config,
-          api,
-          setStatus,
-        }));
-      }
-      setStatus();
+      setStatus(appliedStatus ?? "");
     } catch (error) {
       setStatus(error.message, true);
       grid.innerHTML = `<div class="panel empty">Configuration could not be loaded.</div>`;
     }
   }
+
   load();
   return () => { stopped = true; };
 }

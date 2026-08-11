@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
+import threading
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
 from aiavatar.adapter.base import Adapter
@@ -9,24 +11,39 @@ from aiavatar.admin import BasicAdminAuthenticator, setup_admin_panel
 from aiavatar.admin_legacy import setup_admin_panel as setup_legacy_admin_panel
 from aiavatar.sts.performance_recorder.sqlite import SQLitePerformanceRecorder
 from aiavatar.sts.performance_recorder import PerformanceRecord
+from aiavatar.sts.tts import SpeechSynthesizerRouter
+from aiavatar.sts.tts.openai import OpenAISpeechSynthesizer
+from aiavatar.sts.tts.voicevox import VoicevoxSpeechSynthesizer
+from aiavatar.sts.vad.silero import SileroSpeechDetector
+from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
 
 
 class Configurable:
-    def __init__(self):
-        self.enabled = True
+    def __init__(
+        self,
+        enabled: bool = True,
+        sample_rate: int = 16000,
+        api_key: str = None,
+        max_tokens: int = 100,
+        language: str | None = None,
+    ):
+        self.enabled = enabled
+        self.sample_rate = sample_rate
+        self.api_key = api_key
+        self.max_tokens = max_tokens
+        self.language = language
 
     def get_config(self):
-        return {"enabled": self.enabled}
+        raise AssertionError("Admin must read actual members instead of get_config()")
 
     def set_config(self, config):
-        if config.get("enabled") is not None:
-            self.enabled = config["enabled"]
-        return {"enabled": self.enabled}
+        raise AssertionError("Admin must update actual members instead of set_config()")
 
 
 class Pipeline(Configurable):
-    def __init__(self, recorder):
+    def __init__(self, recorder, debug: bool = False):
         super().__init__()
+        self.debug = debug
         self.performance_recorder = recorder
         self.voice_recorder_enabled = False
         self.voice_recorder = None
@@ -50,8 +67,9 @@ class VoiceRecorderFake:
 
 
 class AIAvatarTestServer(Adapter):
-    def __init__(self, recorder):
+    def __init__(self, recorder, response_audio_chunk_size: int = 0):
         self.sts = Pipeline(recorder)
+        self.response_audio_chunk_size = response_audio_chunk_size
 
     def can_handle(self, session_id):
         return False
@@ -61,6 +79,45 @@ class AIAvatarTestServer(Adapter):
 
     async def stop_response(self, session_id, context_id):
         pass
+
+
+def test_admin_routes_take_priority_over_root_static_files(tmp_path):
+    recorder = SQLitePerformanceRecorder(str(tmp_path / "root-mount.db"))
+    try:
+        ui_dir = tmp_path / "ui"
+        ui_dir.mkdir()
+        (ui_dir / "index.html").write_text("WebSocket UI", encoding="utf-8")
+
+        app = FastAPI()
+        setup_admin_panel(
+            app,
+            adapter=AIAvatarTestServer(recorder),
+            authenticator=BasicAdminAuthenticator("admin", "secret"),
+        )
+        app.mount("/", StaticFiles(directory=ui_dir, html=True), name="ui")
+        client = TestClient(app)
+
+        assert client.get("/").text == "WebSocket UI"
+        assert client.get("/admin").status_code == 401
+        assert client.get("/admin/assets/admin-app.js").status_code == 401
+        assert client.get("/admin/api/capabilities").status_code == 401
+
+        auth = ("admin", "secret")
+        assert client.get(
+            "/admin",
+            auth=auth,
+            follow_redirects=False,
+        ).status_code == 307
+        assert client.get("/admin/", auth=auth).status_code == 200
+        assert client.get(
+            "/admin/assets/admin-app.js",
+            auth=auth,
+        ).status_code == 200
+        assert client.get("/admin/api/capabilities", auth=auth).json() == {
+            "evaluation": False,
+        }
+    finally:
+        recorder.close()
 
 
 def test_new_admin_uses_one_replaceable_authenticator_and_new_routes(tmp_path):
@@ -116,7 +173,9 @@ def test_new_admin_uses_one_replaceable_authenticator_and_new_routes(tmp_path):
         assert page.status_code == 200
         assert "assets/admin-app.js" in page.text
         assert client.get("/admin/assets/admin-app.js", auth=auth).status_code == 200
-        assert client.get("/admin/api/capabilities", auth=auth).json() == {"evaluation": False}
+        assert client.get("/admin/api/capabilities", auth=auth).json() == {
+            "evaluation": False,
+        }
         assert client.get("/admin/api/metrics/summary", auth=auth).status_code == 200
         channel_metrics = client.get(
             "/admin/api/metrics/by-channel?period=24h&interval=1h",
@@ -183,6 +242,201 @@ def test_new_admin_accepts_custom_authenticator(tmp_path):
         assert client.get("/admin/api/capabilities").status_code == 401
         assert client.get("/admin/api/capabilities", headers={"X-SSO-User": "uezo"}).status_code == 200
     finally:
+        recorder.close()
+
+
+def test_new_admin_updates_safe_members_without_persisting(tmp_path):
+    recorder = SQLitePerformanceRecorder(str(tmp_path / "member-config.db"))
+    try:
+        app = FastAPI()
+        adapter = AIAvatarTestServer(recorder)
+        setup_admin_panel(app, adapter=adapter)
+        client = TestClient(app)
+
+        schema = client.get("/admin/api/config/runtime").json()
+        sections = {section["name"]: section for section in schema["sections"]}
+        assert set(sections) == {
+            "pipeline", "vad", "stt", "llm", "tts", "adapter:test",
+        }
+        vad = sections["vad"]
+        assert vad["component"] == "Configurable"
+        fields = {field["name"]: field for field in vad["fields"]}
+        assert fields["enabled"]["value"] is True
+        assert "sample_rate" not in fields
+        assert fields["api_key"]["secret"] is True
+        assert fields["api_key"]["value"] is None
+        assert fields["max_tokens"]["secret"] is False
+        assert fields["language"]["nullable"] is True
+
+        invalid = client.post(
+            "/admin/api/config/runtime/vad",
+            json={"config": {"enabled": False, "max_tokens": 1.5}},
+        )
+        assert invalid.status_code == 400
+        assert adapter.sts.vad.enabled is True
+
+        response = client.post(
+            "/admin/api/config/runtime/vad",
+            json={"config": {"enabled": False}},
+        )
+        assert response.status_code == 200
+        assert response.json() == {"updated": ["enabled"]}
+        assert adapter.sts.vad.enabled is False
+
+        language_response = client.post(
+            "/admin/api/config/runtime/vad",
+            json={"config": {"language": "en"}},
+        )
+        assert language_response.status_code == 200
+        assert adapter.sts.vad.language == "en"
+        refreshed = client.get("/admin/api/config/runtime").json()
+        refreshed_vad = next(
+            section for section in refreshed["sections"] if section["name"] == "vad"
+        )
+        refreshed_fields = {
+            field["name"]: field for field in refreshed_vad["fields"]
+        }
+        assert refreshed_fields["language"]["nullable"] is True
+
+        clear_language_response = client.post(
+            "/admin/api/config/runtime/vad",
+            json={"config": {"language": None}},
+        )
+        assert clear_language_response.status_code == 200
+        assert adapter.sts.vad.language is None
+
+        secret_response = client.post(
+            "/admin/api/config/runtime/vad",
+            json={"config": {"api_key": "volatile-test-key"}},
+        )
+        assert secret_response.status_code == 200
+        assert adapter.sts.vad.api_key == "volatile-test-key"
+        assert "volatile-test-key" not in client.get(
+            "/admin/api/config/runtime"
+        ).text
+
+        refreshed = client.get("/admin/api/config/runtime").json()
+        refreshed_vad = next(
+            section for section in refreshed["sections"] if section["name"] == "vad"
+        )
+        refreshed_fields = {
+            field["name"]: field for field in refreshed_vad["fields"]
+        }
+        assert refreshed_fields["enabled"]["value"] is False
+    finally:
+        recorder.close()
+
+
+def test_vad_threshold_change_applies_to_new_sessions(monkeypatch, tmp_path):
+    class FakeVadIterator:
+        def __init__(self, model, threshold, sampling_rate):
+            self.model = model
+            self.threshold = threshold
+            self.sampling_rate = sampling_rate
+
+        def reset_states(self):
+            pass
+
+    def initialize_fake_model_pool(self, *_):
+        self.model_pool = [object()]
+        self.model_locks = [threading.Lock()]
+        self.VADIteratorClass = FakeVadIterator
+
+    monkeypatch.setattr(
+        SileroSpeechDetector,
+        "_init_silero_model",
+        initialize_fake_model_pool,
+    )
+    vad = SileroStreamSpeechDetector(
+        speech_recognizer=object(),
+        speech_probability_threshold=0.5,
+        use_vad_iterator=True,
+    )
+    existing_session = vad.get_session("existing")
+
+    recorder = SQLitePerformanceRecorder(str(tmp_path / "vad-threshold.db"))
+    try:
+        adapter = AIAvatarTestServer(recorder)
+        adapter.sts.vad = vad
+        app = FastAPI()
+        setup_admin_panel(app, adapter=adapter)
+        client = TestClient(app)
+
+        response = client.post(
+            "/admin/api/config/runtime/vad",
+            json={"config": {"speech_probability_threshold": 0.7}},
+        )
+
+        assert response.status_code == 200
+        assert vad.speech_probability_threshold == 0.7
+        assert existing_session.vad_iterator.threshold == 0.5
+        assert vad.get_session("new").vad_iterator.threshold == 0.7
+    finally:
+        recorder.close()
+
+
+@pytest.mark.asyncio
+async def test_admin_expands_tts_router_into_route_synthesizers(tmp_path):
+    tts_ja = VoicevoxSpeechSynthesizer(
+        base_url="http://voicevox.example:50021",
+        speaker=46,
+    )
+    tts_multi = OpenAISpeechSynthesizer(
+        openai_api_key="tts-key",
+        speaker="sage",
+        model="gpt-4o-mini-tts",
+        audio_format="wav",
+    )
+    router = SpeechSynthesizerRouter({
+        "ja": tts_ja,
+        "multi": tts_multi,
+    })
+    recorder = SQLitePerformanceRecorder(str(tmp_path / "tts-router.db"))
+    try:
+        adapter = AIAvatarTestServer(recorder)
+        adapter.sts.tts = router
+        app = FastAPI()
+        setup_admin_panel(app, adapter=adapter)
+        client = TestClient(app)
+
+        schema = client.get("/admin/api/config/runtime").json()
+        sections = {section["name"]: section for section in schema["sections"]}
+        assert "tts" not in sections
+        assert sections["tts:ja"]["title"] == "TTS · ja"
+        assert sections["tts:ja"]["component"] == "VoicevoxSpeechSynthesizer"
+        assert sections["tts:multi"]["title"] == "TTS · multi"
+        assert sections["tts:multi"]["component"] == "OpenAISpeechSynthesizer"
+
+        ja_fields = {
+            field["name"]: field for field in sections["tts:ja"]["fields"]
+        }
+        multi_fields = {
+            field["name"]: field for field in sections["tts:multi"]["fields"]
+        }
+        assert ja_fields["base_url"]["value"] == "http://voicevox.example:50021"
+        assert ja_fields["speaker"]["value"] == 46
+        assert multi_fields["speaker"]["value"] == "sage"
+        assert multi_fields["model"]["value"] == "gpt-4o-mini-tts"
+        assert multi_fields["openai_api_key"]["secret"] is True
+        assert multi_fields["openai_api_key"]["value"] is None
+        assert "audio_format" not in multi_fields
+
+        ja_response = client.post(
+            "/admin/api/config/runtime/tts%3Aja",
+            json={"config": {"speaker": 3}},
+        )
+        multi_response = client.post(
+            "/admin/api/config/runtime/tts%3Amulti",
+            json={"config": {"speaker": "coral", "openai_api_key": "new-key"}},
+        )
+        assert ja_response.status_code == 200
+        assert multi_response.status_code == 200
+        assert tts_ja.speaker == 3
+        assert tts_multi.speaker == "coral"
+        assert tts_multi.openai_api_key == "new-key"
+        assert router.synthesizers == {"ja": tts_ja, "multi": tts_multi}
+    finally:
+        await router.close()
         recorder.close()
 
 

@@ -114,7 +114,15 @@ The Config view reads and updates the currently running objects:
 - TTS
 - Registered Adapters
 
-Input fields are generated dynamically from the values returned by each component's `get_config()`. Saving calls its `set_config()`. These operations update live objects and do not persist values to configuration files. Applications that need persistence must manage it separately.
+Input fields are generated from constructor metadata for parameters that also exist as JSON-compatible members on the running object. Applying a form updates those members directly. `get_config()` and `set_config()` are not used.
+
+Card titles include the active class as static text because the object graph is owned by application code, for example `VAD: SileroStreamSpeechDetector`. Parameters that initialize resources, derived state, or registered hooks are omitted when they cannot be changed safely by member assignment.
+
+When TTS is a `SpeechSynthesizerRouter`, the Config view shows one section for each registered route, such as `TTS · ja` and `TTS · multi`. Each section updates only that route's active synthesizer. The Router, route-selection function, provider classes, preprocessors, and postprocessors remain owned by application code and cannot be changed from Admin.
+
+All changes are volatile. They take effect in the current process and are discarded when it exits. The Admin Panel does not select component classes, write application configuration files, or recreate components. Applications that need persistent configuration must express it in their own code or configuration layer.
+
+Leave a nullable field blank to set it to `None`. Blank secret fields are the exception: they keep the currently configured value. Values cached when a live session is created, such as Silero's speech probability threshold, apply to sessions created after the change; existing sessions continue with their current value.
 
 ### Evaluation
 
@@ -194,13 +202,8 @@ All endpoints are under `/admin/api`.
 | GET | `/metrics/timeline?period=24h&interval=1h` | Return the detailed phase timeline |
 | GET | `/logs` | Return conversation messages matching the filters |
 | GET | `/logs/voice/{transaction_id}/{voice_type}` | Return WAV audio or a Response audio count |
-| GET/POST | `/config/pipeline` | Read or update Pipeline configuration |
-| GET/POST | `/config/vad` | Read or update VAD configuration |
-| GET/POST | `/config/stt` | Read or update STT configuration |
-| GET/POST | `/config/llm` | Read or update LLM configuration |
-| GET/POST | `/config/tts` | Read or update TTS configuration |
-| GET | `/config/adapters` | List Adapters and their configuration |
-| GET/POST | `/config/adapter/{name}` | Read or update one Adapter's configuration |
+| GET | `/config/runtime` | Describe safe editable members of the running object graph |
+| POST | `/config/runtime/{section}` | Apply volatile member changes to one component |
 | POST | `/evaluate` | Start an Evaluation |
 | GET | `/evaluate/{evaluation_id}` | Retrieve Evaluation results |
 
@@ -218,7 +221,7 @@ Metrics and Logs queries currently support `SQLitePerformanceRecorder` and `Post
 | `auth.py` | Provide the replaceable authentication boundary and Basic authentication |
 | `metrics.py` | Define Metrics API request and response models and invoke the query layer |
 | `logs.py` | Provide the Logs and audio APIs and their response models |
-| `config/` | Provide configuration APIs for Pipeline, Adapter, VAD, STT, LLM, and TTS |
+| `config/` | Describe and update safe members of the running object graph |
 | `evaluation.py` | Start Evaluations in the background and retrieve their results |
 
 Database-specific behavior, timestamp selection, latency calculation, log filtering, and grouping are centralized in `aiavatar.sts.performance_recorder.query`. The Admin API remains a thin HTTP layer over those query results.
