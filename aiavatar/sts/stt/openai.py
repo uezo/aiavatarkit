@@ -17,6 +17,7 @@ class OpenAISpeechRecognizer(SpeechRecognizer):
         language: str = "ja",
         alternative_languages: List[str] = None,
         *,
+        base_url: str = "https://api.openai.com/v1",
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
         timeout: float = 10.0,
@@ -31,6 +32,7 @@ class OpenAISpeechRecognizer(SpeechRecognizer):
             debug=debug
         )
         self.openai_api_key = openai_api_key
+        self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
         self.model = model
         self.min_data_length = min_data_length
         self.sample_rate = sample_rate
@@ -73,7 +75,7 @@ class OpenAISpeechRecognizer(SpeechRecognizer):
 
         resp = await self.http_request_with_retry(
             method="POST",
-            url="https://api.openai.com/v1/audio/transcriptions",
+            url=f"{self.base_url}/audio/transcriptions",
             headers=headers,
             data=form_data,
             files=files
