@@ -11,6 +11,14 @@ from .context_manager import ContextManager, SQLiteContextManager
 
 logger = logging.getLogger(__name__)
 
+_XML_TAG_PATTERN = re.compile(
+    r'''(</?[A-Za-z_]\w*(?:"[^"]*"|'[^']*'|[^"'<>])*>)'''
+)
+_INCOMPLETE_CONTROL_TAG_PATTERN = re.compile(
+    r"</?(?:artifact|face|animation|vision|language|tools)\b[^<>]*$",
+    re.IGNORECASE,
+)
+
 
 class ToolCallResult:
     def __init__(self, data: dict = None, is_final: bool = True, text: str = None, task_id: str = None, structured_content: dict = None, deferred_callback: callable = None):
@@ -349,6 +357,23 @@ The list of tools is as follows:
     def replace_last_option_split_char(self, original):
         return re.sub(self.option_split_chars_regex, r"\1|", original)
 
+    def _replace_sentence_splits_outside_markup(self, text: str) -> Tuple[str, bool]:
+        incomplete = _INCOMPLETE_CONTROL_TAG_PATTERN.search(text)
+        suffix = text[incomplete.start():] if incomplete else ""
+        parts = _XML_TAG_PATTERN.split(text[:incomplete.start()] if incomplete else text)
+        for index in range(0, len(parts), 2):
+            parts[index] = re.sub(f"(({self.split_chars_pattern})+)", r"\1|", parts[index])
+        return "".join(parts) + suffix, incomplete is not None
+
+    def _replace_last_option_split_outside_markup(self, text: str) -> str:
+        parts = _XML_TAG_PATTERN.split(text)
+        for index in range(len(parts) - 1, -1, -2):
+            replaced = self.replace_last_option_split_char(parts[index])
+            if replaced != parts[index]:
+                parts[index] = replaced
+                break
+        return "".join(parts)
+
     def get_system_prompt(self, func):
         self._get_system_prompt = func
         return func
@@ -395,6 +420,9 @@ The list of tools is as follows:
         return "NOT_FOUND"
 
     def remove_control_tags(self, text: str) -> str:
+        if incomplete := _INCOMPLETE_CONTROL_TAG_PATTERN.search(text):
+            logger.warning("Incomplete control tag omitted from voice text: %s", incomplete.group(0))
+            text = text[:incomplete.start()]
         clean_text = text
         clean_text = re.sub(r"\[(\w+):([^\]]+)\]", "", clean_text)
         clean_text = re.sub(r"<\w+\s[^>]*>", "", clean_text)
@@ -639,16 +667,17 @@ The list of tools is as follows:
 
             stream_buffer += chunk.text
 
-            # Replace consecutive punctuation with the same punctuation followed by delimiter
-            stream_buffer = re.sub(f"(({self.split_chars_pattern})+)", r"\1|", stream_buffer)
+            # Do not treat punctuation inside control-tag attributes (for
+            # example, the '?' in an artifact URL) as a sentence boundary.
+            stream_buffer, has_incomplete_tag = self._replace_sentence_splits_outside_markup(stream_buffer)
 
             # Split before control tags [xxx:yyy] or <xxx ...> if enabled
             if self.split_on_control_tags:
                 stream_buffer = re.sub(r"(?=\[\w+:[^\]]+\])", "|", stream_buffer)
                 stream_buffer = re.sub(r"(?=<\w+\s[^>]*>)", "|", stream_buffer)
 
-            if len(self.remove_control_tags(stream_buffer)) > self.option_split_threshold:
-                stream_buffer = self.replace_last_option_split_char(stream_buffer)
+            if not has_incomplete_tag and len(self.remove_control_tags(stream_buffer)) > self.option_split_threshold:
+                stream_buffer = self._replace_last_option_split_outside_markup(stream_buffer)
 
             segments = stream_buffer.split("|")
             while len(segments) > 1:
