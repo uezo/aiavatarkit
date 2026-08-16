@@ -1,12 +1,22 @@
 import re
 from abc import ABC, abstractmethod
 import logging
-from typing import Any, Callable, Awaitable, List, Optional
+from typing import Any, Callable, Awaitable, Dict, List, Optional
 from ..sts.models import STSResponse
 from ..sts.pipeline import STSPipeline, ResponseHandler
-from .models import AIAvatarRequest, AIAvatarResponse, AvatarControlRequest
+from .control_tags import ControlTagConfigResolver
+from .models import AIAvatarRequest, AIAvatarResponse, AvatarControlRequest, ControlTag
 
 logger = logging.getLogger(__name__)
+
+_CONTROL_TAG_PATTERN = re.compile(
+    r'''\[(?P<bracket_name>[A-Za-z_]\w*):(?P<bracket_value>[^\]]+)\]'''
+    r'''|<(?P<xml_name>[A-Za-z_]\w*)\b(?P<attributes>(?:"[^"]*"|'[^']*'|[^'"<>])*)>''',
+    re.IGNORECASE,
+)
+_CONTROL_ATTRIBUTE_PATTERN = re.compile(
+    r'''([A-Za-z_][\w-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')'''
+)
 
 
 class Adapter(ABC):
@@ -20,6 +30,12 @@ class Adapter(ABC):
 
         # Control tag pattern: receives (tag, attr) and returns a regex with two capture groups
         self.control_tag_pattern = r'\[{tag}:(\w+)\]|<{tag}\s[^>]*{attr}=["\'](\w+)["\']'
+        self._control_tag_parsers = {}
+        self.register_control_tag("face")
+        self.register_control_tag("animation")
+        self.register_control_tag("vision", value_attribute="source")
+        self._artifact_resolver = ControlTagConfigResolver()
+        self.register_control_tag("artifact", parser=self._artifact_resolver)
 
         # Callbacks
         self._on_session_start_handlers: List[Callable[[AIAvatarRequest, Any], Awaitable[None]]] = []
@@ -55,6 +71,84 @@ class Adapter(ABC):
     @abstractmethod
     async def stop_response(self, session_id: str, context_id: str):
         pass
+
+    def register_control_tag(
+        self,
+        name: str,
+        *,
+        value_attribute: str = "name",
+        parser: Optional[Callable[[Dict[str, str]], Optional[Dict[str, Any]]]] = None,
+    ):
+        """Register a control tag and an optional attribute normalizer."""
+        normalized_name = name.lower()
+        if not re.fullmatch(r"[A-Za-z_]\w*", normalized_name):
+            raise ValueError(f"Invalid control tag name: {name}")
+        self._control_tag_parsers[normalized_name] = (value_attribute.lower(), parser)
+
+    def set_artifacts(self, artifacts: Dict[str, Dict[str, Any]]):
+        """Replace the application-owned artifact catalog."""
+        self._artifact_resolver.set_configs(artifacts)
+        self.register_control_tag("artifact", parser=self._artifact_resolver)
+
+    def update_artifacts(self, artifacts: Dict[str, Dict[str, Any]]):
+        """Add or replace artifact catalog entries without clearing other IDs."""
+        self._artifact_resolver.update_configs(artifacts)
+        self.register_control_tag("artifact", parser=self._artifact_resolver)
+
+    def add_artifact(self, artifact_id: str, config: Dict[str, Any]):
+        """Add or replace one artifact catalog entry."""
+        self._artifact_resolver.set_config(artifact_id, config)
+        self.register_control_tag("artifact", parser=self._artifact_resolver)
+
+    def parse_control_tags(self, text: str) -> List[ControlTag]:
+        """Parse registered bracket or XML-style control tags in source order."""
+        tags = []
+        parsers = getattr(self, "_control_tag_parsers", {})
+        for match in _CONTROL_TAG_PATTERN.finditer(text or ""):
+            name = (match.group("bracket_name") or match.group("xml_name")).lower()
+            registration = parsers.get(name)
+            if not registration:
+                continue
+
+            value_attribute, parser = registration
+            if match.group("bracket_name"):
+                attributes = {value_attribute: match.group("bracket_value").strip()}
+            else:
+                attributes = self._parse_control_attributes(match.group("attributes"))
+                if attributes is None:
+                    logger.warning("Ignored malformed control tag: %s", match.group(0))
+                    continue
+
+            if parser:
+                try:
+                    attributes = parser(attributes)
+                except (TypeError, ValueError) as ex:
+                    logger.warning("Ignored invalid %s control tag: %s", name, ex)
+                    continue
+                if attributes is None:
+                    continue
+            tags.append(ControlTag(name=name, attributes=attributes))
+        return tags
+
+    @staticmethod
+    def _parse_control_attributes(source: str) -> Optional[Dict[str, str]]:
+        source = source.strip()
+        if source.endswith("/"):
+            source = source[:-1].rstrip()
+
+        attributes = {}
+        position = 0
+        for match in _CONTROL_ATTRIBUTE_PATTERN.finditer(source):
+            if source[position:match.start()].strip():
+                return None
+            name = match.group(1).lower()
+            if name in attributes:
+                return None
+            attributes[name] = match.group(2) if match.group(2) is not None else match.group(3)
+            position = match.end()
+        if source[position:].strip():
+            return None
+        return attributes
 
     def parse_control_tag(self, text: str, tag: str, attr: str = "name") -> Optional[str]:
         if not text:

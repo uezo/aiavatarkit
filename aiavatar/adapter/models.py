@@ -1,5 +1,10 @@
-from typing import List, Dict, Optional, Union
+from typing import Any, List, Dict, Optional, Union
 from pydantic import BaseModel
+
+
+class ControlTag(BaseModel):
+    name: str
+    attributes: Dict[str, Any]
 
 
 class AvatarControlRequest(BaseModel):
@@ -31,6 +36,7 @@ class AIAvatarResponse(BaseModel):
     text: Optional[str] = None
     voice_text: Optional[str] = None
     language: Optional[str] = None
+    control_tags: Optional[List[ControlTag]] = None
     avatar_control_request: Optional[AvatarControlRequest] = None
     audio_data: Optional[Union[bytes, str]] = None
     metadata: Optional[Dict] = None
