@@ -1,1 +1,1 @@
-from .adapter import AvatarControlRequest, AIAvatarRequest, AIAvatarResponse
+from .adapter import ControlTag, ControlTagConfigResolver, AvatarControlRequest, AIAvatarRequest, AIAvatarResponse

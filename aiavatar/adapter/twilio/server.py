@@ -449,6 +449,7 @@ class AIAvatarTwilioServer(Adapter):
             context_id=response.context_id,
             text=response.text,
             voice_text=response.voice_text,
+            control_tags=(self.parse_control_tags(response.text) or None) if response.type == "chunk" else None,
             audio_data=response.audio_data,
             metadata=response.metadata or {},
             structured_content=response.structured_content
@@ -868,6 +869,7 @@ class AIAvatarTwilioSMSServer(Adapter):
             text=response.text,
             voice_text=response.voice_text,
             language=response.language,
+            control_tags=(self.parse_control_tags(response.text) or None) if response.type == "chunk" else None,
             audio_data=response.audio_data,
             metadata=response.metadata or {},
             structured_content=response.structured_content,
