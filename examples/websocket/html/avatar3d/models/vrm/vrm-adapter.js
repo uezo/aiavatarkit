@@ -5,6 +5,12 @@ import { VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from "@pixiv/three-vrm-animation";
 import { installVrmSettings } from "./vrm-settings.js";
 
+const ARTIFACT_CAMERA_REFERENCE = {
+    modelHeight: 1.670250301549527,
+    targetOffset: [-0.10330158393900676, 0, -0.1170766868649855],
+    cameraOffset: [1.100777579891017, 0.2236689191280165, 3.040772395500192],
+};
+
 function kelvinToRgb(kelvin) {
     const temperature = kelvin / 100;
     let red;
@@ -30,6 +36,9 @@ export class VrmAdapter {
         this.currentModel = null;
         this.renderRequest = null;
         this.cameraSaveTimer = null;
+        this.artifactMode = false;
+        this.normalCameraState = null;
+        this.normalMaxDistance = null;
         this.onAnimationListChanged = () => {};
         this.lighting = { ...config.lighting };
         this.lightDefinitions = [
@@ -45,6 +54,7 @@ export class VrmAdapter {
         this.aiavatar = aiavatar;
         this.ui = ui;
         this.canvas = document.getElementById("avatarCanvas");
+        this.controlSurface = document.getElementById("avatarControlSurface");
         this.placeholder = document.getElementById("avatarPlaceholder");
 
         this.idle = new VRMIdle({ isAudioPlaying: () => aiavatar.isAudioPlaying });
@@ -90,23 +100,77 @@ export class VrmAdapter {
         this.directionalLight = new THREE.DirectionalLight(0xffffff, this.lighting.directional);
         this.scene.add(this.ambientLight, this.directionalLight);
 
-        this.controls = new OrbitControls(this.viewCamera, this.canvas);
-        this.controls.target.set(...cameraConfig.target);
-        this.controls.enableDamping = cameraConfig.enableDamping;
-        this.controls.dampingFactor = cameraConfig.dampingFactor;
-        this.controls.enablePan = cameraConfig.enablePan;
-        this.controls.minDistance = cameraConfig.minDistance;
-        this.controls.maxDistance = cameraConfig.maxDistance;
-        this.controls.update();
-        this.controls.addEventListener("change", () => {
-            clearTimeout(this.cameraSaveTimer);
-            this.cameraSaveTimer = setTimeout(() => this.saveCameraState(), this.config.camera.saveDebounceMs);
-        });
+        this.controls = this.createControls(
+            new THREE.Vector3(...cameraConfig.target),
+            cameraConfig.maxDistance,
+        );
 
         this.clock = new THREE.Clock();
         this.loader = new GLTFLoader();
         this.loader.register((parser) => new VRMLoaderPlugin(parser));
         this.loader.register((parser) => new VRMAnimationLoaderPlugin(parser));
+    }
+
+    createControls(target, maxDistance) {
+        const controls = new OrbitControls(this.viewCamera, this.controlSurface);
+        controls.target.copy(target);
+        controls.enableDamping = this.config.camera.enableDamping;
+        controls.dampingFactor = this.config.camera.dampingFactor;
+        controls.enablePan = this.config.camera.enablePan;
+        controls.minDistance = this.config.camera.minDistance;
+        controls.maxDistance = maxDistance;
+        controls.update();
+        controls.addEventListener("change", () => {
+            this.updateControlSurface();
+            clearTimeout(this.cameraSaveTimer);
+            this.cameraSaveTimer = setTimeout(() => this.saveCameraState(), this.config.camera.saveDebounceMs);
+        });
+        return controls;
+    }
+
+    updateControlSurface() {
+        if (!this.currentModel) {
+            this.controlSurface.hidden = true;
+            return;
+        }
+
+        const bounds = new THREE.Box3().setFromObject(this.currentModel.scene);
+        if (bounds.isEmpty()) {
+            this.controlSurface.hidden = true;
+            return;
+        }
+
+        const min = bounds.min;
+        const max = bounds.max;
+        const point = new THREE.Vector3();
+        let left = Infinity;
+        let top = Infinity;
+        let right = -Infinity;
+        let bottom = -Infinity;
+        for (const x of [min.x, max.x]) {
+            for (const y of [min.y, max.y]) {
+                for (const z of [min.z, max.z]) {
+                    point.set(x, y, z).project(this.viewCamera);
+                    left = Math.min(left, (point.x + 1) * window.innerWidth / 2);
+                    right = Math.max(right, (point.x + 1) * window.innerWidth / 2);
+                    top = Math.min(top, (1 - point.y) * window.innerHeight / 2);
+                    bottom = Math.max(bottom, (1 - point.y) * window.innerHeight / 2);
+                }
+            }
+        }
+
+        const padding = 12;
+        left = Math.max(0, left - padding);
+        top = Math.max(0, top - padding);
+        right = Math.min(window.innerWidth, right + padding);
+        bottom = Math.min(window.innerHeight, bottom + padding);
+        if (right <= left || bottom <= top) {
+            this.controlSurface.hidden = true;
+            return;
+        }
+
+        this.controlSurface.style.clipPath = `inset(${top}px ${window.innerWidth - right}px ${window.innerHeight - bottom}px ${left}px)`;
+        this.controlSurface.hidden = false;
     }
 
     bind(aiavatar) {
@@ -173,6 +237,7 @@ export class VrmAdapter {
             this.controls.update();
         }
         if (model.lookAt) model.lookAt.target = this.viewCamera;
+        this.updateControlSurface();
         this.placeholder.style.display = "none";
         console.log("VRM loaded");
         return model;
@@ -184,6 +249,7 @@ export class VrmAdapter {
         VRMUtils.deepDispose(this.currentModel.scene);
         this.currentModel = null;
         this.idle.vrm = null;
+        this.updateControlSurface();
     }
 
     async unloadModel({ clearCache = false } = {}) {
@@ -194,7 +260,10 @@ export class VrmAdapter {
 
     async clearModelCache() {
         await this.blobStore.delete(this.persistence.modelKey);
-        if (this.persistence.enabled) localStorage.removeItem(this.persistence.cameraKey);
+        if (this.persistence.enabled) {
+            localStorage.removeItem(this.persistence.cameraKey);
+            localStorage.removeItem(this.artifactCameraKey);
+        }
     }
 
     async loadAnimationBlob(name, blob, { cache = false } = {}) {
@@ -354,30 +423,124 @@ export class VrmAdapter {
         this.directionalLight.color.setRGB(...kelvinToRgb(this.lighting.colorTemperature));
     }
 
-    saveCameraState() {
-        if (!this.persistence.enabled) return;
-        localStorage.setItem(this.persistence.cameraKey, JSON.stringify({
+    get artifactCameraKey() {
+        return `${this.persistence.cameraKey}_artifact`;
+    }
+
+    captureCameraState() {
+        return {
             px: this.viewCamera.position.x,
             py: this.viewCamera.position.y,
             pz: this.viewCamera.position.z,
             tx: this.controls.target.x,
             ty: this.controls.target.y,
             tz: this.controls.target.z,
-        }));
+        };
     }
 
-    restoreCameraState() {
+    applyCameraState(state, { resetControls = false, maxDistance = this.controls.maxDistance } = {}) {
+        const values = [state?.px, state?.py, state?.pz, state?.tx, state?.ty, state?.tz];
+        if (!values.every(Number.isFinite)) return false;
+        this.viewCamera.position.set(state.px, state.py, state.pz);
+        const target = new THREE.Vector3(state.tx, state.ty, state.tz);
+        if (resetControls) {
+            this.controls.dispose();
+            this.controls = this.createControls(target, maxDistance);
+        } else {
+            this.controls.target.copy(target);
+            this.controls.update();
+        }
+        return true;
+    }
+
+    saveCameraState(key = this.artifactMode ? this.artifactCameraKey : this.persistence.cameraKey) {
+        if (!this.persistence.enabled) return;
+        const state = this.captureCameraState();
+        if (key === this.artifactCameraKey) state.layout = "viewport";
+        localStorage.setItem(key, JSON.stringify(state));
+    }
+
+    restoreCameraState(
+        key = this.artifactMode ? this.artifactCameraKey : this.persistence.cameraKey,
+        options = {},
+    ) {
         if (!this.persistence.enabled || !this.persistence.restoreUserSettings) return false;
         try {
-            const saved = JSON.parse(localStorage.getItem(this.persistence.cameraKey));
-            if (!saved) return false;
-            this.viewCamera.position.set(saved.px, saved.py, saved.pz);
-            this.controls.target.set(saved.tx, saved.ty, saved.tz);
-            this.controls.update();
-            return true;
+            const state = JSON.parse(localStorage.getItem(key));
+            if (key === this.artifactCameraKey && state?.layout !== "viewport") return false;
+            return this.applyCameraState(state, options);
         } catch {
             return false;
         }
+    }
+
+    applyArtifactViewOffset() {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        this.viewCamera.setViewOffset(
+            width,
+            height,
+            -0.36 * width,
+            -0.26 * height,
+            width,
+            height,
+        );
+    }
+
+    applyDefaultArtifactCamera(maxDistance) {
+        if (!this.currentModel) return false;
+        const box = new THREE.Box3().setFromObject(this.currentModel.scene);
+        if (box.isEmpty()) return false;
+
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        const scale = size.y / ARTIFACT_CAMERA_REFERENCE.modelHeight;
+        const target = center.clone().add(
+            new THREE.Vector3(...ARTIFACT_CAMERA_REFERENCE.targetOffset).multiplyScalar(scale),
+        );
+        const cameraOffset = new THREE.Vector3(...ARTIFACT_CAMERA_REFERENCE.cameraOffset)
+            .multiplyScalar(scale * 2);
+        const position = target.clone().add(cameraOffset);
+        const distance = cameraOffset.length();
+        return this.applyCameraState({
+            px: position.x,
+            py: position.y,
+            pz: position.z,
+            tx: target.x,
+            ty: target.y,
+            tz: target.z,
+        }, { resetControls: true, maxDistance: Math.max(maxDistance, distance * 1.2) });
+    }
+
+    setArtifactMode(active) {
+        active = Boolean(active);
+        if (active === this.artifactMode) return;
+        clearTimeout(this.cameraSaveTimer);
+
+        if (active) {
+            this.normalCameraState = this.captureCameraState();
+            this.normalMaxDistance = this.controls.maxDistance;
+            this.saveCameraState(this.persistence.cameraKey);
+            this.artifactMode = true;
+            this.applyArtifactViewOffset();
+            const maxDistance = Math.max(this.normalMaxDistance, this.config.camera.maxDistance * 3);
+            if (!this.restoreCameraState(undefined, { resetControls: true, maxDistance })) {
+                this.applyDefaultArtifactCamera(maxDistance);
+            }
+            this.updateControlSurface();
+            return;
+        }
+
+        this.saveCameraState(this.artifactCameraKey);
+        this.artifactMode = false;
+        this.viewCamera.clearViewOffset();
+        const maxDistance = this.normalMaxDistance ?? this.config.camera.maxDistance;
+        if (!this.applyCameraState(this.normalCameraState, { resetControls: true, maxDistance })) {
+            this.restoreCameraState(undefined, { resetControls: true, maxDistance });
+        }
+        this.normalCameraState = null;
+        this.normalMaxDistance = null;
+        this.updateControlSurface();
     }
 
     handleResponse(response) {
@@ -394,7 +557,9 @@ export class VrmAdapter {
         this.onResize = () => {
             this.renderer.setSize(window.innerWidth, window.innerHeight);
             this.viewCamera.aspect = window.innerWidth / window.innerHeight;
-            this.viewCamera.updateProjectionMatrix();
+            if (this.artifactMode) this.applyArtifactViewOffset();
+            else this.viewCamera.updateProjectionMatrix();
+            this.updateControlSurface();
         };
         window.addEventListener("resize", this.onResize);
     }

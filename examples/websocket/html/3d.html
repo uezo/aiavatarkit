@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>AIAvatarKit 3D Avatar</title>
     <link rel="stylesheet" href="avatar3d/3d.css">
+    <link rel="stylesheet" href="artifact/artifact.css">
     <link rel="stylesheet" href="vrm-themes/theme-girly.css">
 </head>
 
@@ -14,6 +15,7 @@
 
     <div id="avatarFrame">
         <canvas id="avatarCanvas"></canvas>
+        <div id="avatarControlSurface" hidden aria-hidden="true"></div>
         <div class="avatar-placeholder" id="avatarPlaceholder">Drop or load a VRM file</div>
     </div>
 
@@ -85,8 +87,26 @@
     -->
     <script type="module">
         import { start3dPage } from "./avatar3d/3d-main.js";
+        import { ImageArtifactPlugin } from "./artifact/image-artifact-plugin.js";
+        import { PresentationArtifactPlugin } from "./artifact/presentation-artifact-plugin.js";
+        import { VideoArtifactPlugin } from "./artifact/video-artifact-plugin.js";
+        import { DocswellDriver } from "./artifact/docswell-driver.js";
+        import { SpeakerDeckDriver } from "./artifact/speakerdeck-driver.js";
+        import { YouTubeDriver } from "./artifact/youtube-driver.js";
 
         await start3dPage({
+            artifactPlugins: [
+                new ImageArtifactPlugin({ type: "image" }),
+                new ImageArtifactPlugin({ type: "chart" }),
+                new PresentationArtifactPlugin({
+                    drivers: [DocswellDriver, SpeakerDeckDriver],
+                }),
+                new VideoArtifactPlugin({
+                    drivers: [YouTubeDriver],
+                    autoplay: true,
+                }),
+            ],
+
             connection: {
                 webSocketUrl: "../ws",
                 apiKey: null,

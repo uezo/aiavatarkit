@@ -82,10 +82,11 @@ export async function start3dPage(config) {
         persistence,
         blobStore,
     });
-    const { model, ...commonConfig } = config;
+    const { model, artifactPlugins = [], ...commonConfig } = config;
     return startAvatarApp({
         config: { ...commonConfig, persistence },
         modelAdapter,
         blobStore,
+        artifactPlugins,
     });
 }
