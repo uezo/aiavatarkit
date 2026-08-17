@@ -6,10 +6,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AIAvatarKit WebSocket Example</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="artifact/artifact.css">
     <style>
         :root {
             --avatar-aspect-ratio: 1 / 1;
             --avatar-zoom: 1.0;
+            --artifact-layer-z-index: 50;
         }
 
         .avatar-container img,
@@ -108,7 +110,15 @@
     <script src="image-avatar.js"></script>
     <script src="mpt-avatar.js"></script>
     <script src="ui.js"></script>
-    <script>
+    <script type="module">
+        import { ArtifactController } from "./artifact/artifact-controller.js";
+        import { ImageArtifactPlugin } from "./artifact/image-artifact-plugin.js";
+        import { PresentationArtifactPlugin } from "./artifact/presentation-artifact-plugin.js";
+        import { VideoArtifactPlugin } from "./artifact/video-artifact-plugin.js";
+        import { DocswellDriver } from "./artifact/docswell-driver.js";
+        import { SpeakerDeckDriver } from "./artifact/speakerdeck-driver.js";
+        import { YouTubeDriver } from "./artifact/youtube-driver.js";
+
         // User settings
         const AVATAR_MODE = "image"; // "image" or "mpt"
         const PLAYBACK_RMS_SCALE = 1.0; // Lower this (e.g. 0.2) if the mouth stays open
@@ -168,6 +178,19 @@
                 "send_query_to_openclaw": "Asking OpenClaw🦞",
             },
             onStop: () => avatar.stop(),
+        });
+        const artifacts = new ArtifactController({
+            plugins: [
+                new ImageArtifactPlugin({ type: "image" }),
+                new ImageArtifactPlugin({ type: "chart" }),
+                new PresentationArtifactPlugin({
+                    drivers: [DocswellDriver, SpeakerDeckDriver],
+                }),
+                new VideoArtifactPlugin({
+                    drivers: [YouTubeDriver],
+                    autoplay: true,
+                }),
+            ],
         });
 
         // Vision (0=OFF, 1=Camera/on-demand, 2=Camera/stream)
@@ -273,6 +296,7 @@
         // Custom response handling
         aiavatar.onResponseReceived = (response) => {
             // Custom handling logic here
+            artifacts.handleResponse(response);
 
             // Common handling
             ui.handleResponse(response);
@@ -280,6 +304,7 @@
 
         // Console helper: chat("Hello.") or chat("What's this?", imageDataUrl)
         window.chat = (text, imageDataUrl) => aiavatar.chat(ui.sessionId, ui.userId, text, imageDataUrl);
+        window.addEventListener("pagehide", () => artifacts.dispose(), { once: true });
     </script>
 </body>
 

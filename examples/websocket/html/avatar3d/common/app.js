@@ -4,6 +4,7 @@ import { installMessageController } from "./message-controller.js";
 import { installPageControls } from "./page-controls.js";
 import { installToolToasts } from "./tool-toast.js";
 import { VisionController } from "./vision-controller.js";
+import { ArtifactController } from "../../artifact/artifact-controller.js";
 
 function requireObject(value, name) {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -27,7 +28,7 @@ function validateConfig(config) {
     }
 }
 
-export async function startAvatarApp({ config, modelAdapter, blobStore }) {
+export async function startAvatarApp({ config, modelAdapter, blobStore, artifactPlugins = [] }) {
     validateConfig(config);
     assertAvatarAdapter(modelAdapter);
     const aiavatar = new AIAvatarClient({
@@ -67,6 +68,10 @@ export async function startAvatarApp({ config, modelAdapter, blobStore }) {
         autoHideDelayMs: config.ui.autoHideDelayMs,
     });
     const vision = new VisionController({ aiavatar, ui, config: config.vision });
+    const artifacts = new ArtifactController({
+        plugins: artifactPlugins,
+        onVisibilityChange: (active) => modelAdapter.setArtifactMode?.(active),
+    });
     const controls = installPageControls({
         ui,
         state: display.state,
@@ -102,6 +107,7 @@ export async function startAvatarApp({ config, modelAdapter, blobStore }) {
     document.addEventListener("drop", onDrop);
 
     aiavatar.onResponseReceived = (response) => {
+        artifacts.handleResponse(response);
         modelAdapter.handleResponse(response);
         vision.handleResponse(response);
         if (response.type === "connected") display.updateConnection(true, response);
@@ -120,13 +126,14 @@ export async function startAvatarApp({ config, modelAdapter, blobStore }) {
         controls.dispose();
         messages.dispose();
         toasts.dispose();
+        artifacts.dispose();
         vision.dispose();
         display.dispose();
         modelAdapter.dispose();
     };
     window.addEventListener("pagehide", dispose, { once: true });
 
-    const app = { aiavatar, ui, modelAdapter, display, vision, dispose };
+    const app = { aiavatar, ui, modelAdapter, display, vision, artifacts, dispose };
     globalThis.avatar3d = app;
     return app;
 }
