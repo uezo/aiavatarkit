@@ -44,7 +44,7 @@ Set `AVATAR_MODE` in `html/index.html` to `"image"` or `"mpt"`. Then visit http:
 
 ## Artifacts in the web viewers
 
-`html/index.html` and `html/3d.html` can display an image, chart, Speaker Deck presentation, Docswell presentation, or YouTube video when an AI response contains a self-closing `artifact` tag. The adapter exposes registered tags through `AIAvatarResponse.control_tags`; the viewer falls back to parsing `text` when connected to an older server. The surrounding speech continues to use `voice_text`.
+`html/index.html` and `html/3d.html` can display an image, chart, Speaker Deck presentation, Docswell presentation, or YouTube video when an AI response contains a self-closing `artifact` tag. The adapter parses and resolves registered tags into `AIAvatarResponse.control_tags`, which is the viewer's only artifact command source. The viewer does not parse tags from response `text`. The surrounding speech continues to use `voice_text`.
 
 ```html
 <artifact type="image" src="https://example.com/image.png" alt="Generated image" />
@@ -58,7 +58,7 @@ Set `AVATAR_MODE` in `html/index.html` to `"image"` or `"mpt"`. Then visit http:
 <artifact action="clear" />
 ```
 
-`href` is accepted as an alias of `src`. `slide` is a positive absolute page number; when `src` is omitted, it moves the currently displayed presentation. A signed `offset` such as `+1`, `+2`, or `-1` moves relative to the current page. The viewer converts navigation to the provider-specific Speaker Deck query or Docswell message. `offset` operates only within the currently displayed presentation. Docswell applies it to the player's actual position, including manual navigation. Speaker Deck applies it to the last page requested through an artifact tag, so manual navigation is intentionally ignored. `autoplay-delay` is a non-negative number of seconds from video display until the first YouTube playback attempt; it defaults to `0`. YouTube `t` or `start` URL parameters select the position inside the video and are independent of this delay. Browsers can block autoplay with sound, in which case the embedded player remains available for manual playback. `size` accepts `small`, `medium`, `large`, or `full`; `aspect` accepts `auto`, `16:9`, `4:3`, `3:2`, `1:1`, or `9:16`. Images and charts default to `auto`; presentations and videos default to `16:9`. Speaker Deck requires a `/player/...` embed URL. Docswell accepts either a `/slide/.../embed` URL or its normal `/s/...` viewing URL. Other provider URL formats are rejected.
+`href` is accepted as an alias of `src`. `slide` is a positive absolute page number; when `src` is omitted, it moves the currently displayed presentation. A signed `offset` such as `+1`, `+2`, or `-1` moves relative to the current page. The viewer converts navigation to the provider-specific Speaker Deck query or Docswell message. `offset` operates only within the currently displayed presentation. Docswell applies it to the player's actual position, including manual navigation. Speaker Deck applies it to the last page requested through an artifact tag, so manual navigation is intentionally ignored. `autoplay-delay` is a number from `0` to `3600` seconds from video display until the first YouTube playback attempt; it defaults to `0`. YouTube `t` or `start` URL parameters select the position inside the video and are independent of this delay. Browsers can block autoplay with sound, in which case the embedded player remains available for manual playback. `size` accepts `small`, `medium`, `large`, or `full`; `aspect` accepts `auto`, `16:9`, `4:3`, `3:2`, `1:1`, or `9:16`. Images and charts default to `auto`; presentations and videos default to `16:9`. Speaker Deck requires a `/player/...` embed URL. Docswell accepts either a `/slide/.../embed` URL or its normal `/s/...` viewing URL. Other provider URL formats are rejected.
 
 While an artifact is visible, the VRM moves into a compact overlay and uses a separate camera state. Its first position automatically frames the full model; later drag, rotation, and zoom adjustments are stored separately in local storage. Closing the artifact restores the normal camera without changing it.
 
@@ -78,13 +78,51 @@ ARTIFACTS = {
 aiavatar_app.set_artifacts(ARTIFACTS)
 ```
 
-The LLM can then emit `<artifact id="about_company" />`. Attributes in the LLM tag override catalog values, so `<artifact id="about_company" slide="5" size="full" />` opens page 5 at full size. A tag without an `id` continues to accept a direct `src` or `href`, which is useful for images returned by search or generation tools.
+The LLM can then emit `<artifact id="about_company" />`. Display and navigation attributes in the LLM tag override catalog values, so `<artifact id="about_company" slide="5" size="full" />` opens page 5 at full size. When an `id` is present, the configured `type` and `src` are protected and cannot be replaced by tag attributes. A tag without an `id` continues to accept a direct `src` or `href`, which is useful for images returned by search or generation tools.
 
 - `set_artifacts(configs)` replaces the complete shared catalog.
 - `update_artifacts(configs)` adds or replaces multiple entries while retaining other IDs.
 - `add_artifact(id, config)` adds or replaces one entry.
 
 These methods update the adapter-wide catalog shared by all sessions; they do not create session-private artifacts.
+
+Direct artifact URLs cause the browser to request the resolved location. The server application is responsible for allowing only URLs that are safe for its users and environment. An `on_response` handler receives `AIAvatarResponse.control_tags` after ID resolution, and can validate, rewrite, or remove artifacts before they are sent:
+
+```python
+from urllib.parse import urlsplit
+
+TRUSTED_ARTIFACT_HOSTS = {"cdn.example.com"}
+
+def is_trusted_artifact_url(source):
+    try:
+        url = urlsplit(source)
+        return (
+            url.scheme == "https"
+            and url.hostname in TRUSTED_ARTIFACT_HOSTS
+            and url.username is None
+            and url.password is None
+        )
+    except ValueError:
+        return False
+
+@aiavatar_app.on_response
+async def validate_artifact_urls(response, _):
+    if not response.control_tags:
+        return
+
+    validated = []
+    for tag in response.control_tags:
+        if tag.name != "artifact":
+            validated.append(tag)
+            continue
+
+        source = tag.attributes.get("src") or tag.attributes.get("href")
+        if source and not is_trusted_artifact_url(source):
+            continue
+        validated.append(tag)
+
+    response.control_tags = validated
+```
 
 
 ## Deep Dive

@@ -56,15 +56,15 @@ def test_parse_registered_control_tags_in_source_order():
     ]
 
 
-def test_register_control_tag_with_attribute_normalizer():
+def test_register_control_tag_with_attribute_resolver():
     adapter = create_adapter()
 
-    def parse_navigation(attributes):
+    def resolve_navigation(attributes):
         if "page" not in attributes:
             raise ValueError("page is required")
         return {"page": int(attributes["page"])}
 
-    adapter.register_control_tag("navigation", parser=parse_navigation)
+    adapter.register_control_tag("navigation", resolver=resolve_navigation)
 
     tags = adapter.parse_control_tags(
         '<navigation page="3" /><navigation target="ignored" />'
@@ -75,7 +75,7 @@ def test_register_control_tag_with_attribute_normalizer():
     ]
 
 
-def test_config_resolver_merges_llm_attributes_over_config():
+def test_config_resolver_protects_type_and_src_from_llm_overrides():
     resolver = ControlTagConfigResolver({
         "about_company": {
             "type": "presentation",
@@ -85,7 +85,13 @@ def test_config_resolver_merges_llm_attributes_over_config():
         },
     })
 
-    assert resolver({"id": "about_company", "slide": "5", "size": "full"}) == {
+    assert resolver({
+        "id": "about_company",
+        "type": "image",
+        "src": "https://attacker.example/image.png",
+        "slide": "5",
+        "size": "full",
+    }) == {
         "type": "presentation",
         "src": "https://speakerdeck.com/player/deck_1",
         "slide": "5",
@@ -95,6 +101,24 @@ def test_config_resolver_merges_llm_attributes_over_config():
     assert resolver({"type": "image", "src": "https://example.com/generated.png"}) == {
         "type": "image",
         "src": "https://example.com/generated.png",
+    }
+
+
+def test_config_resolver_accepts_custom_protected_overrides():
+    resolver = ControlTagConfigResolver({
+        "about_company": {
+            "type": "presentation",
+            "src": "https://speakerdeck.com/player/deck_1",
+        },
+    }, protected_overrides={"src"})
+
+    assert resolver({
+        "id": "about_company",
+        "type": "image",
+        "src": "https://attacker.example/image.png",
+    }) == {
+        "type": "image",
+        "src": "https://speakerdeck.com/player/deck_1",
     }
 
 
@@ -146,6 +170,30 @@ def test_update_and_add_artifacts_preserve_other_entries():
         "type": "image",
         "src": "https://example.com/replaced.png",
     }
+
+
+def test_artifact_catalog_updates_do_not_replace_registered_resolver():
+    adapter = create_adapter()
+
+    def resolve_artifact(_):
+        return {"type": "image", "src": "https://example.com/custom.png"}
+
+    updates = [
+        lambda: adapter.set_artifacts({
+            "first": {"type": "image", "src": "https://example.com/first.png"},
+        }),
+        lambda: adapter.update_artifacts({
+            "second": {"type": "image", "src": "https://example.com/second.png"},
+        }),
+        lambda: adapter.add_artifact(
+            "third", {"type": "image", "src": "https://example.com/third.png"},
+        ),
+    ]
+    for update in updates:
+        adapter.register_control_tag("artifact", resolver=resolve_artifact)
+        update()
+        artifact = adapter.parse_control_tags('<artifact id="first" />')[0]
+        assert artifact.attributes["src"] == "https://example.com/custom.png"
 
 
 def test_malformed_registered_tag_is_ignored():
@@ -214,3 +262,44 @@ async def test_websocket_attaches_control_tags_to_chunks_only():
         },
     }]
     assert final_response.control_tags is None
+
+
+@pytest.mark.asyncio
+async def test_websocket_on_response_receives_resolved_control_tags():
+    server = object.__new__(AIAvatarWebSocketServer)
+    Adapter.__init__(server, StubPipeline())
+    server.sessions = {"session": WebSocketSessionData()}
+    server.response_audio_chunk_size = 0
+    server.debug = False
+    server.send_response = AsyncMock()
+    server.set_artifacts({
+        "about_company": {
+            "type": "presentation",
+            "src": "https://speakerdeck.com/player/deck_1",
+        },
+    })
+    resolved_attributes = []
+
+    @server.on_response
+    async def validate_artifacts(aiavatar_response, _):
+        if aiavatar_response.type != "chunk":
+            return
+        resolved_attributes.append(dict(aiavatar_response.control_tags[0].attributes))
+        aiavatar_response.control_tags = []
+
+    await server.handle_response(STSResponse(
+        type="chunk",
+        session_id="session",
+        text=(
+            '<artifact id="about_company" type="image" '
+            'src="https://attacker.example/image.png" />'
+        ),
+        voice_text="",
+        metadata={},
+    ))
+
+    assert resolved_attributes == [{
+        "type": "presentation",
+        "src": "https://speakerdeck.com/player/deck_1",
+    }]
+    assert server.send_response.await_args.args[0].control_tags == []

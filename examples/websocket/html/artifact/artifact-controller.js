@@ -1,4 +1,4 @@
-import { parseArtifactControlTags, parseArtifactTags } from "./artifact-parser.js";
+import { parseArtifactControlTags } from "./artifact-parser.js";
 import { ArtifactRegistry } from "./artifact-registry.js";
 
 const ASPECT_VALUES = {
@@ -32,7 +32,6 @@ export class ArtifactController {
         this.currentPlugin = null;
         this.currentSession = null;
         this.generation = 0;
-        this.sawTaggedChunk = false;
     }
 
     register(plugin) {
@@ -63,27 +62,17 @@ export class ArtifactController {
 
     handleResponse(response) {
         if (!response || typeof response !== "object") return;
-        if (response.type === "accepted" || response.type === "start") this.sawTaggedChunk = false;
 
-        const structuredTags = Array.isArray(response.control_tags) ? response.control_tags : null;
-        const hasStructuredArtifact = structuredTags?.some(
+        if (!Array.isArray(response.control_tags)) return;
+        const hasStructuredArtifact = response.control_tags.some(
             (tag) => String(tag?.name || "").toLowerCase() === "artifact",
         );
-        const hasTextArtifact = typeof response.text === "string" && /<artifact\b/i.test(response.text);
-        if (!hasStructuredArtifact && !hasTextArtifact) return;
-
-        const isChunk = response.type === "chunk";
-        const isFinalLike = response.type === "final" || response.type === "vision";
-        if (!isChunk && !isFinalLike) return;
-        if (isFinalLike && this.sawTaggedChunk) return;
+        if (!hasStructuredArtifact) return;
 
         const options = { registry: this.registry };
-        const { commands, errors } = structuredTags
-            ? parseArtifactControlTags(structuredTags, options)
-            : parseArtifactTags(response.text, options);
+        const { commands, errors } = parseArtifactControlTags(response.control_tags, options);
         for (const item of errors) console.warn("Ignored invalid artifact tag:", item.error.message, item.tag);
         if (!commands.length) return;
-        if (isChunk) this.sawTaggedChunk = true;
 
         for (const command of commands) {
             try {
