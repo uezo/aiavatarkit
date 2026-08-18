@@ -36,7 +36,7 @@ const controllerDataUrl = sourceDataUrl(
 );
 
 const { ArtifactRegistry } = await import(registryDataUrl);
-const { parseArtifactControlTags, parseArtifactTags } = await import(parserDataUrl);
+const { parseArtifactControlTags } = await import(parserDataUrl);
 const { ArtifactController } = await import(controllerDataUrl);
 const { ImageArtifactPlugin } = await import(imagePluginDataUrl);
 const { PresentationArtifactPlugin } = await import(presentationPluginDataUrl);
@@ -225,15 +225,15 @@ test("registry owns type aliases and rejects duplicate registrations", () => {
     assert.throws(() => registry.register(new ImageArtifactPlugin({ type: "image" })), /already registered/);
 });
 
-test("registered plugins parse text and structured artifact commands", () => {
+test("registered plugins parse structured artifact commands", () => {
     const registry = new ArtifactRegistry(plugins());
-    const { commands, errors } = parseArtifactTags([
-        '<artifact type="image" src="https://example.com/result.png" />',
-        '<artifact type="chart" src="https://example.com/chart.svg" aspect="4:3" />',
-        '<artifact type="slides" src="https://slides.example.com/deck" slide="4" />',
-        '<artifact type="presentation" offset="+2" />',
-        '<artifact type="video" src="https://video.example.com/watch/1" autoplay-delay="1.5" />',
-    ].join(""), { registry });
+    const { commands, errors } = parseArtifactControlTags([
+        { name: "artifact", attributes: { type: "image", src: "https://example.com/result.png" } },
+        { name: "artifact", attributes: { type: "chart", src: "https://example.com/chart.svg", aspect: "4:3" } },
+        { name: "artifact", attributes: { type: "slides", src: "https://slides.example.com/deck", slide: 4 } },
+        { name: "artifact", attributes: { type: "presentation", offset: "+2" } },
+        { name: "artifact", attributes: { type: "video", src: "https://video.example.com/watch/1", "autoplay-delay": 1.5 } },
+    ], { registry });
 
     assert.equal(errors.length, 0);
     assert.deepEqual(commands.map((command) => command.type), [
@@ -250,10 +250,10 @@ test("registered plugins parse text and structured artifact commands", () => {
     assert.equal(structured.errors.length, 0);
     assert.equal(structured.commands[0].autoplayDelaySeconds, 3);
 
-    const invalid = parseArtifactTags(
-        '<artifact type="image" src="https://example.com/x.png" autoplay-delay="2" />',
-        { registry },
-    );
+    const invalid = parseArtifactControlTags([{
+        name: "artifact",
+        attributes: { type: "image", src: "https://example.com/x.png", "autoplay-delay": 2 },
+    }], { registry });
     assert.equal(invalid.commands.length, 0);
     assert.match(invalid.errors[0].error.message, /Unsupported artifact attribute/);
 });
@@ -319,12 +319,11 @@ test("controller delegates image loading and presentation updates to registered 
     assert.deepEqual(visibility, [true, false]);
 });
 
-test("controller handles a tagged chunk once and uses final as fallback", () => {
+test("controller handles structured control tags and ignores raw response text", () => {
     const documentRoot = new FakeDocument();
     const controller = new ArtifactController({ documentRoot, plugins: plugins() });
     const tag = '<artifact type="image" src="https://example.com/image.png" />';
 
-    controller.handleResponse({ type: "start", text: null });
     controller.handleResponse({
         type: "chunk",
         text: tag,
@@ -334,16 +333,16 @@ test("controller handles a tagged chunk once and uses final as fallback", () => 
         }],
     });
     const chunkSurface = controller.root.children[0];
-    controller.handleResponse({ type: "final", text: tag });
-    assert.equal(controller.root.children[0], chunkSurface);
+    assert.equal(controller.current.type, "image");
 
-    controller.handleResponse({ type: "start", text: null });
+    controller.clear();
     controller.handleResponse({
         type: "final",
         text: '<artifact type="chart" src="https://example.com/chart.svg" />',
     });
-    assert.equal(controller.current.type, "chart");
-    assert.notEqual(controller.root.children[0], chunkSurface);
+    assert.equal(controller.current, null);
+    assert.equal(controller.root.hidden, true);
+    assert.equal(chunkSurface.parentNode, null);
 });
 
 test("video plugin passes fixed autoplay delay and disposes its driver", async () => {

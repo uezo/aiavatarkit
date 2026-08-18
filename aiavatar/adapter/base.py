@@ -30,12 +30,12 @@ class Adapter(ABC):
 
         # Control tag pattern: receives (tag, attr) and returns a regex with two capture groups
         self.control_tag_pattern = r'\[{tag}:(\w+)\]|<{tag}\s[^>]*{attr}=["\'](\w+)["\']'
-        self._control_tag_parsers = {}
+        self._control_tag_resolvers = {}
         self.register_control_tag("face")
         self.register_control_tag("animation")
         self.register_control_tag("vision", value_attribute="source")
         self._artifact_resolver = ControlTagConfigResolver()
-        self.register_control_tag("artifact", parser=self._artifact_resolver)
+        self.register_control_tag("artifact", resolver=self._artifact_resolver)
 
         # Callbacks
         self._on_session_start_handlers: List[Callable[[AIAvatarRequest, Any], Awaitable[None]]] = []
@@ -77,40 +77,37 @@ class Adapter(ABC):
         name: str,
         *,
         value_attribute: str = "name",
-        parser: Optional[Callable[[Dict[str, str]], Optional[Dict[str, Any]]]] = None,
+        resolver: Optional[Callable[[Dict[str, str]], Optional[Dict[str, Any]]]] = None,
     ):
-        """Register a control tag and an optional attribute normalizer."""
+        """Register a control tag and an optional attribute resolver."""
         normalized_name = name.lower()
         if not re.fullmatch(r"[A-Za-z_]\w*", normalized_name):
             raise ValueError(f"Invalid control tag name: {name}")
-        self._control_tag_parsers[normalized_name] = (value_attribute.lower(), parser)
+        self._control_tag_resolvers[normalized_name] = (value_attribute.lower(), resolver)
 
     def set_artifacts(self, artifacts: Dict[str, Dict[str, Any]]):
         """Replace the application-owned artifact catalog."""
         self._artifact_resolver.set_configs(artifacts)
-        self.register_control_tag("artifact", parser=self._artifact_resolver)
 
     def update_artifacts(self, artifacts: Dict[str, Dict[str, Any]]):
         """Add or replace artifact catalog entries without clearing other IDs."""
         self._artifact_resolver.update_configs(artifacts)
-        self.register_control_tag("artifact", parser=self._artifact_resolver)
 
     def add_artifact(self, artifact_id: str, config: Dict[str, Any]):
         """Add or replace one artifact catalog entry."""
         self._artifact_resolver.set_config(artifact_id, config)
-        self.register_control_tag("artifact", parser=self._artifact_resolver)
 
     def parse_control_tags(self, text: str) -> List[ControlTag]:
         """Parse registered bracket or XML-style control tags in source order."""
         tags = []
-        parsers = getattr(self, "_control_tag_parsers", {})
+        resolvers = getattr(self, "_control_tag_resolvers", {})
         for match in _CONTROL_TAG_PATTERN.finditer(text or ""):
             name = (match.group("bracket_name") or match.group("xml_name")).lower()
-            registration = parsers.get(name)
+            registration = resolvers.get(name)
             if not registration:
                 continue
 
-            value_attribute, parser = registration
+            value_attribute, resolver = registration
             if match.group("bracket_name"):
                 attributes = {value_attribute: match.group("bracket_value").strip()}
             else:
@@ -119,9 +116,9 @@ class Adapter(ABC):
                     logger.warning("Ignored malformed control tag: %s", match.group(0))
                     continue
 
-            if parser:
+            if resolver:
                 try:
-                    attributes = parser(attributes)
+                    attributes = resolver(attributes)
                 except (TypeError, ValueError) as ex:
                     logger.warning("Ignored invalid %s control tag: %s", name, ex)
                     continue

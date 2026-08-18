@@ -1,18 +1,31 @@
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from typing import Any, Dict, Optional
 
 
 class ControlTagConfigResolver:
-    """Resolve a control-tag identifier from an application-owned config map."""
+    """Resolve a control-tag identifier from an application-owned config map.
+
+    Attributes listed in ``protected_overrides`` retain their configured values
+    when an identifier is resolved. Tags without an identifier pass through.
+    """
 
     def __init__(
         self,
         configs: Optional[Mapping[str, Mapping[str, Any]]] = None,
         *,
         key_attribute: str = "id",
+        protected_overrides: Optional[Iterable[str]] = None,
     ):
         self.key_attribute = key_attribute.lower()
+        if protected_overrides is None:
+            protected_overrides = {"type", "src"}
+        elif isinstance(protected_overrides, str):
+            raise TypeError("Protected overrides must be an iterable of attribute names")
+        self.protected_overrides = frozenset(
+            self._normalize_attribute_name(name)
+            for name in protected_overrides
+        )
         self._configs = {}
         self.set_configs(configs or {})
 
@@ -27,6 +40,12 @@ class ControlTagConfigResolver:
 
     def set_config(self, config_id: str, attributes: Mapping[str, Any]):
         self.update_configs({config_id: attributes})
+
+    @staticmethod
+    def _normalize_attribute_name(name: str) -> str:
+        if not isinstance(name, str) or not name:
+            raise ValueError("Protected override names must be non-empty strings")
+        return name.lower()
 
     @staticmethod
     def _normalize_configs(configs: Mapping[str, Mapping[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -58,6 +77,6 @@ class ControlTagConfigResolver:
         resolved.update({
             name: value
             for name, value in attributes.items()
-            if name != self.key_attribute
+            if name != self.key_attribute and name not in self.protected_overrides
         })
         return resolved
