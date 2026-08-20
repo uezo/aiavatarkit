@@ -1,0 +1,12 @@
+; Asterisk Media WebSocket client using JSON control and transport_data.
+; Replace the URI and credentials. The section name must match
+; ASTERISK_MEDIA_CONNECTION (aiavatarkit-media by default).
+
+[aiavatarkit-media]
+type = websocket_client
+uri = wss://ai.example.com/asterisk/media
+protocols = media
+username = aiavatarkit
+password = CHANGE_ME
+connection_type = per_call_config
+tls_enabled = yes

@@ -1,0 +1,32 @@
+; Conceptual Avaya trunk. Replace all addresses, certificates, authentication,
+; and identity policy with values validated for the deployed CM/SM/SBCE.
+
+[transport-tls]
+type = transport
+protocol = tls
+bind = 0.0.0.0:5061
+cert_file = /etc/asterisk/keys/asterisk.crt
+priv_key_file = /etc/asterisk/keys/asterisk.key
+method = tlsv1_2
+
+[avaya-trunk]
+type = endpoint
+transport = transport-tls
+context = from-avaya
+disallow = all
+allow = ulaw,alaw
+aors = avaya-trunk-aor
+direct_media = no
+trust_id_inbound = yes
+trust_id_outbound = yes
+send_pai = yes
+
+[avaya-trunk-aor]
+type = aor
+contact = sip:AVAYA_SESSION_MANAGER:5061;transport=tls
+qualify_frequency = 60
+
+[avaya-trunk-identify]
+type = identify
+endpoint = avaya-trunk
+match = AVAYA_SESSION_MANAGER_IP

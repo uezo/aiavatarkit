@@ -1,0 +1,29 @@
+; Avaya ingress. Bind this context only to the trusted Avaya PJSIP endpoint.
+[from-avaya]
+exten => _X.,1,NoOp(Avaya to AIAvatarKit)
+ same => n,Set(__AIAVATAR_SESSION_ID=${UNIQUEID})
+ same => n,Set(__AIAVATAR_CALLED_NUMBER=${EXTEN})
+ same => n,Set(__AIAVATAR_UCID=${PJSIP_HEADER(read,X-Avaya-UCID)})
+ same => n,Set(__AIAVATAR_UUI=${PJSIP_HEADER(read,User-to-User)})
+ same => n,Set(__AIAVATAR_TRUSTED_PAI=${PJSIP_HEADER(read,P-Asserted-Identity)})
+ same => n,Stasis(aiavatar,inbound)
+ same => n,Hangup()
+
+; Defense in depth: list every transfer destination explicitly. Keep this in
+; sync with transfer_destinations in the Python application.
+[aiavatar-transfer]
+exten => 1234,1,Gosub(aiavatar-transfer-run,s,1(${EXTEN}))
+ same => n,Hangup()
+exten => 2345,1,Gosub(aiavatar-transfer-run,s,1(${EXTEN}))
+ same => n,Hangup()
+
+[aiavatar-transfer-run]
+exten => s,1,NoOp(AIAvatar REFER to allowlisted destination ${ARG1})
+ ; Confirm the Refer-To domain and URI form against Avaya Session Manager.
+ same => n,Transfer(PJSIP/sip:${ARG1}@avaya.example.local)
+ same => n,GotoIf($["${TRANSFERSTATUS}"="SUCCESS"]?success:failed)
+ same => n(failed),Stasis(aiavatar,transfer-failed)
+ same => n,Return()
+ same => n(success),Stasis(aiavatar,transfer-completed)
+ same => n,Return()
+

@@ -1,0 +1,14 @@
+; ARI uses Asterisk's built-in HTTP server. Bind only to a trusted management
+; network and restrict ports 8088/8089 with a host firewall or network ACL.
+
+[general]
+enabled = yes
+bindaddr = 0.0.0.0
+bindport = 8088
+
+; Prefer TLS outside an isolated local test. Replace these paths with the
+; certificate and private key installed for this Asterisk instance.
+tlsenable = yes
+tlsbindaddr = 0.0.0.0:8089
+tlscertfile = /etc/asterisk/keys/asterisk.crt
+tlsprivatekey = /etc/asterisk/keys/asterisk.key

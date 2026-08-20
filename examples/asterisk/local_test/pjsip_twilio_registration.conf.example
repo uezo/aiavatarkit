@@ -1,0 +1,40 @@
+; Optional Twilio Programmable Voice SIP Registration configuration.
+; Do not commit real values. Replace every TWILIO_* placeholder, then include
+; this file from pjsip.conf or copy the sections into a local-only config.
+
+[transport-tcp]
+type = transport
+protocol = tcp
+bind = 0.0.0.0:5060
+
+[twilio-auth]
+type = auth
+auth_type = userpass
+username = TWILIO_SIP_USERNAME
+password = TWILIO_SIP_PASSWORD
+
+[twilio-registration]
+type = registration
+transport = transport-tcp
+outbound_auth = twilio-auth
+server_uri = sip:TWILIO_SIP_DOMAIN.sip.twilio.com;transport=tcp
+client_uri = sip:TWILIO_SIP_USERNAME@TWILIO_SIP_DOMAIN.sip.twilio.com
+outbound_proxy = sip:sip.tokyo.twilio.com\;transport=tcp\;lr
+contact_user = TWILIO_SIP_USERNAME
+expiration = 600
+retry_interval = 30
+forbidden_retry_interval = 300
+line = yes
+endpoint = twilio-endpoint
+
+[twilio-endpoint]
+type = endpoint
+transport = transport-tcp
+context = from-twilio
+disallow = all
+allow = ulaw
+direct_media = no
+force_rport = yes
+rewrite_contact = yes
+rtp_symmetric = yes
+from_domain = TWILIO_SIP_DOMAIN.sip.twilio.com
