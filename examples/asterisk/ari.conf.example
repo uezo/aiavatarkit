@@ -1,0 +1,9 @@
+[general]
+enabled = yes
+pretty = no
+
+[aiavatar]
+type = user
+read_only = no
+password = CHANGE_ME
+

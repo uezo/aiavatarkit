@@ -1,0 +1,16 @@
+services:
+  asterisk:
+    build:
+      context: .
+      args:
+        ASTERISK_VERSION: "22.10.1"
+    container_name: aiavatarkit-asterisk-local
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:18088:8088/tcp"
+      - "127.0.0.1:15060:5060/udp"
+      - "10000-10020:10000-10020/udp"
+    restart: "no"
+    stop_grace_period: 5s
+
