@@ -111,6 +111,7 @@ class OpenAIResponsesWebSocketService(LLMService):
         option_split_threshold: int = 50,
         split_on_control_tags: bool = True,
         voice_text_tag: Union[str, List[str]] = None,
+        terminal_voice_text_tag: str = None,
         max_connections: int = 100,  # Max concurrent WebSocket connections (= max parallel requests)
         max_connection_age: float = 3300,
         context_manager: ContextManager = None,
@@ -128,6 +129,7 @@ class OpenAIResponsesWebSocketService(LLMService):
             option_split_threshold=option_split_threshold,
             split_on_control_tags=split_on_control_tags,
             voice_text_tag=voice_text_tag,
+            terminal_voice_text_tag=terminal_voice_text_tag,
             context_manager=context_manager,
             shared_context_ids=shared_context_ids,
             db_connection_str=db_connection_str,

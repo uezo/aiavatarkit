@@ -186,6 +186,7 @@ class LLMService(ABC):
         option_split_threshold: int = 50,
         split_on_control_tags: bool = True,
         voice_text_tag: Union[str, List[str]] = None,
+        terminal_voice_text_tag: str = None,
         use_dynamic_tools: bool = False,
         context_manager: ContextManager = None,
         shared_context_ids: List[str] = None,
@@ -219,6 +220,7 @@ class LLMService(ABC):
         self._request_filter = None
         self._update_context_filter = None
         self.voice_text_tag = voice_text_tag
+        self.terminal_voice_text_tag = terminal_voice_text_tag
         self.tools: Dict[str, Tool] = {}
         self.use_dynamic_tools = use_dynamic_tools
         self.dynamic_tool_instruction = """
@@ -605,8 +607,18 @@ The list of tools is as follows:
             voice_text_tags = [self.voice_text_tag]
         else:
             voice_text_tags = self.voice_text_tag or []
+        if (
+            self.terminal_voice_text_tag is not None
+            and self.terminal_voice_text_tag not in voice_text_tags
+        ):
+            raise ValueError("terminal_voice_text_tag must be included in voice_text_tag")
         current_voice_tag = None
         targets = {tag: (f"<{tag}>", f"</{tag}>") for tag in voice_text_tags}
+        terminal_tag_end = (
+            f"</{self.terminal_voice_text_tag}>" if self.terminal_voice_text_tag else None
+        )
+        terminal_tag_closed = False
+        discarded_buffer = ""
 
         def to_voice_text(segment: str) -> Optional[str]:
             if not voice_text_tags:
@@ -665,7 +677,19 @@ The list of tools is as follows:
                     response_text = ""
                 continue
 
+            if terminal_tag_closed:
+                discarded_buffer += chunk.text or ""
+                continue
+
             stream_buffer += chunk.text
+
+            if terminal_tag_end:
+                terminal_end_index = stream_buffer.find(terminal_tag_end)
+                if terminal_end_index >= 0:
+                    terminal_end_index += len(terminal_tag_end)
+                    discarded_buffer += stream_buffer[terminal_end_index:]
+                    stream_buffer = stream_buffer[:terminal_end_index]
+                    terminal_tag_closed = True
 
             # Do not treat punctuation inside control-tag attributes (for
             # example, the '?' in an artifact URL) as a sentence boundary.
@@ -689,6 +713,15 @@ The list of tools is as follows:
                 segments = stream_buffer.split("|")
 
             await asyncio.sleep(0.001)   # wait slightly in every loop not to use up CPU
+
+        if discarded_buffer:
+            logger.warning(
+                "Discarded LLM response text after terminal voice text tag: "
+                "context_id=%s, tag=%s, discarded_text=%r",
+                context_id,
+                self.terminal_voice_text_tag,
+                discarded_buffer,
+            )
 
         if stream_buffer:
             voice_text = to_voice_text(stream_buffer)
@@ -742,6 +775,7 @@ class LLMServiceDummy(LLMService):
         option_split_threshold: int = 50,
         split_on_control_tags: bool = True,
         voice_text_tag: Union[str, List[str]] = None,
+        terminal_voice_text_tag: str = None,
         use_dynamic_tools: bool = False,
         context_manager: ContextManager = None,
         shared_context_ids: List[str] = None,
@@ -759,6 +793,7 @@ class LLMServiceDummy(LLMService):
             option_split_threshold=option_split_threshold,
             split_on_control_tags=split_on_control_tags,
             voice_text_tag=voice_text_tag,
+            terminal_voice_text_tag=terminal_voice_text_tag,
             use_dynamic_tools=use_dynamic_tools,
             context_manager=context_manager,
             shared_context_ids=shared_context_ids,
