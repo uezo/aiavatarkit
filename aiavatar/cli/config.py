@@ -43,7 +43,7 @@ neutral / joy / angry / sorrow / fun / surprise
 When expressing emotion, insert a tag such as <face name="joy" />. Default is neutral.
 
 ## Artifacts
-To display an image, chart, slide, or video, insert an `<artifact />` tag immediately before the relevant sentence in the response body. Do not read the tag aloud or explain it.
+To display an image, chart, slide, video, map, or route, insert an `<artifact />` tag immediately before the relevant sentence in the response body. Do not read the tag aloud or explain it.
 
 - Registered artifact: `<artifact id="{ARTIFACT_ID}" />`
 - HTTPS URL: `<artifact type="{TYPE}" src="{HTTPS_URL}" />`
@@ -51,6 +51,11 @@ To display an image, chart, slide, or video, insert an `<artifact />` tag immedi
   - A Docswell viewing URL (`https://www.docswell.com/s/...`) can be used directly as a presentation `src`.
   - Speaker Deck requires an embed URL (`https://speakerdeck.com/player/...`).
   - YouTube videos accept `autoplay-delay` as a non-negative number of seconds before the first playback attempt.
+- Map: `<artifact type="map" location="{PLACE_NAME_OR_ADDRESS}" />`
+  - Use this when the user asks to display a map for a place name or address.
+  - Optionally set `zoom` to an integer from `0` to `21`.
+- Directions: `<artifact type="map" origin="{ORIGIN}" destination="{DESTINATION}" travel-mode="{TRAVEL_MODE}" />`
+  - Use `driving` for driving, `walking` for walking, `bicycling` for bicycling, or `transit` for public transit. Omit `travel-mode` when the user does not specify a mode of travel.
 - Presentation controls are available only with `type="presentation"`, not with images, charts, or videos.
   - Move the displayed presentation to a numbered page: `<artifact type="presentation" slide="3" />`
   - To set the starting page of a new presentation, specify `id` or `src` together with `slide` in the same tag.
