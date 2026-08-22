@@ -1,6 +1,8 @@
+import logging
 import os
 import pytest
 from uuid import uuid4
+from aiavatar.sts.llm.base import LLMResponse, LLMServiceDummy
 from aiavatar.sts.llm.chatgpt import ChatGPTService
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -22,6 +24,190 @@ SYSTEM_PROMPT = """あなたはAIアシスタントです。
 
 それ以外の文言は禁止です。
 """
+
+
+class ChunkedLLMServiceDummy(LLMServiceDummy):
+    def __init__(self, *, response_chunks, **kwargs):
+        super().__init__(response_text="", **kwargs)
+        self.response_chunks = response_chunks
+
+    async def get_llm_stream_response(
+        self,
+        context_id,
+        user_id,
+        messages,
+        system_prompt_params=None,
+        tools=None,
+        inline_llm_params=None,
+        session_id=None,
+        channel=None,
+    ):
+        for text in self.response_chunks:
+            yield LLMResponse(context_id=context_id, text=text)
+
+
+async def collect_text_and_voice(service):
+    text_parts = []
+    voice_parts = []
+    async for response in service.chat_stream("context", "user", "test"):
+        text_parts.append(response.text or "")
+        voice_parts.append(response.voice_text or "")
+    return "".join(text_parts), "".join(voice_parts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response_chunks",
+    [
+        ["<answer>first</answer>\n<answer>duplicate</answer>"],
+        ["<answer>first</answer>\n", "<answer>duplicate</answer>"],
+    ],
+    ids=["same_chunk", "later_chunk"],
+)
+async def test_terminal_voice_text_tag_truncates_after_first_close(
+    tmp_path,
+    response_chunks,
+):
+    service = ChunkedLLMServiceDummy(
+        response_chunks=response_chunks,
+        system_prompt="test",
+        model="dummy",
+        voice_text_tag=["answer"],
+        terminal_voice_text_tag="answer",
+        db_connection_str=str(tmp_path / "context.db"),
+    )
+
+    full_text, full_voice = await collect_text_and_voice(service)
+    histories = await service.context_manager.get_histories("context")
+
+    assert full_text == "<answer>first</answer>"
+    assert full_voice == "first"
+    assert histories[-1]["content"] == full_text
+
+
+@pytest.mark.asyncio
+async def test_terminal_voice_text_tag_uses_named_tag_with_multiple_voice_tags(tmp_path):
+    first_response = (
+        "<ack>了解。</ack><think>回答を確認する。</think>"
+        "<answer>最初の回答です。</answer>"
+    )
+    service = ChunkedLLMServiceDummy(
+        response_chunks=[
+            first_response,
+            "garbage<ack>了解。</ack><answer>重複した回答です。</answer>",
+        ],
+        system_prompt="test",
+        model="dummy",
+        voice_text_tag=["ack", "answer"],
+        terminal_voice_text_tag="answer",
+        db_connection_str=str(tmp_path / "context.db"),
+    )
+
+    full_text, full_voice = await collect_text_and_voice(service)
+
+    assert full_text == first_response
+    assert full_voice == "了解。最初の回答です。"
+
+
+@pytest.mark.asyncio
+async def test_terminal_voice_text_tag_warns_once_with_discarded_buffer(tmp_path, caplog):
+    service = ChunkedLLMServiceDummy(
+        response_chunks=[
+            "<answer>first</answer>same-chunk suffix",
+            "second chunk",
+            "third chunk",
+        ],
+        system_prompt="test",
+        model="dummy",
+        voice_text_tag=["answer"],
+        terminal_voice_text_tag="answer",
+        db_connection_str=str(tmp_path / "context.db"),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="aiavatar.sts.llm.base"):
+        await collect_text_and_voice(service)
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "aiavatar.sts.llm.base"
+        and record.levelno == logging.WARNING
+        and record.getMessage().startswith("Discarded LLM response text")
+    ]
+    assert warnings == [
+        "Discarded LLM response text after terminal voice text tag: "
+        "context_id=context, tag=answer, "
+        "discarded_text='same-chunk suffixsecond chunkthird chunk'",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response_chunks",
+    [
+        ["<ans", "wer>first</answer>\n<answer>duplicate</answer>"],
+        ["<answer>first</ans", "wer>\n<answer>duplicate</answer>"],
+    ],
+    ids=["split_open", "split_close"],
+)
+async def test_terminal_voice_text_tag_detects_split_tag(tmp_path, response_chunks):
+    service = ChunkedLLMServiceDummy(
+        response_chunks=response_chunks,
+        system_prompt="test",
+        model="dummy",
+        voice_text_tag=["answer"],
+        terminal_voice_text_tag="answer",
+        db_connection_str=str(tmp_path / "context.db"),
+    )
+
+    full_text, full_voice = await collect_text_and_voice(service)
+
+    assert full_text == "<answer>first</answer>"
+    assert full_voice == "first"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "terminal_kwargs",
+    [{}, {"terminal_voice_text_tag": None}],
+    ids=["default", "explicit_none"],
+)
+async def test_terminal_voice_text_tag_disabled_preserves_duplicate(
+    tmp_path,
+    terminal_kwargs,
+):
+    response_text = "<answer>first</answer>\n<answer>duplicate</answer>"
+    service = ChunkedLLMServiceDummy(
+        response_chunks=[response_text],
+        system_prompt="test",
+        model="dummy",
+        voice_text_tag=["answer"],
+        db_connection_str=str(tmp_path / "context.db"),
+        **terminal_kwargs,
+    )
+
+    full_text, full_voice = await collect_text_and_voice(service)
+
+    assert full_text == response_text
+    assert full_voice == "firstduplicate"
+
+
+@pytest.mark.asyncio
+async def test_terminal_voice_text_tag_missing_close_preserves_response(tmp_path):
+    response_text = "<answer>終端タグがありません。後続も保持されます。"
+    service = ChunkedLLMServiceDummy(
+        response_chunks=[response_text],
+        system_prompt="test",
+        model="dummy",
+        voice_text_tag=["answer"],
+        terminal_voice_text_tag="answer",
+        db_connection_str=str(tmp_path / "context.db"),
+    )
+
+    full_text, full_voice = await collect_text_and_voice(service)
+
+    assert full_text == response_text
+    assert full_voice == "終端タグがありません。後続も保持されます。"
 
 
 @pytest.mark.asyncio
