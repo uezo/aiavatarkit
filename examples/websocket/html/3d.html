@@ -88,13 +88,29 @@
     <script type="module">
         import { start3dPage } from "./avatar3d/3d-main.js";
         import { ImageArtifactPlugin } from "./artifact/image-artifact-plugin.js";
+        import { GoogleMapArtifactPlugin } from "./artifact/google-map-artifact-plugin.js";
         import { PresentationArtifactPlugin } from "./artifact/presentation-artifact-plugin.js";
         import { VideoArtifactPlugin } from "./artifact/video-artifact-plugin.js";
+        import { WebAppArtifactPlugin } from "./artifact/webapp-artifact-plugin.js";
         import { DocswellDriver } from "./artifact/docswell-driver.js";
         import { SpeakerDeckDriver } from "./artifact/speakerdeck-driver.js";
         import { YouTubeDriver } from "./artifact/youtube-driver.js";
 
-        await start3dPage({
+        const GOOGLE_MAPS_EMBED_API_KEY = "YOUR_GOOGLE_MAPS_EMBED_API_KEY";
+
+        let avatarApp = null;
+        const webAppArtifactPlugin = new WebAppArtifactPlugin({
+            onInvoke: ({ text, imageDataUrl }) => (
+                avatarApp?.aiavatar.chat(
+                    avatarApp.ui.sessionId,
+                    avatarApp.ui.userId,
+                    text,
+                    imageDataUrl,
+                ) ?? false
+            ),
+        });
+
+        avatarApp = await start3dPage({
             artifactPlugins: [
                 new ImageArtifactPlugin({ type: "image" }),
                 new ImageArtifactPlugin({ type: "chart" }),
@@ -105,6 +121,12 @@
                     drivers: [YouTubeDriver],
                     autoplay: true,
                 }),
+                new GoogleMapArtifactPlugin({
+                    apiKey: GOOGLE_MAPS_EMBED_API_KEY,
+                    language: "ja",
+                    region: "JP",
+                }),
+                webAppArtifactPlugin,
             ],
 
             connection: {

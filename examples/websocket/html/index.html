@@ -113,8 +113,10 @@
     <script type="module">
         import { ArtifactController } from "./artifact/artifact-controller.js";
         import { ImageArtifactPlugin } from "./artifact/image-artifact-plugin.js";
+        import { GoogleMapArtifactPlugin } from "./artifact/google-map-artifact-plugin.js";
         import { PresentationArtifactPlugin } from "./artifact/presentation-artifact-plugin.js";
         import { VideoArtifactPlugin } from "./artifact/video-artifact-plugin.js";
+        import { WebAppArtifactPlugin } from "./artifact/webapp-artifact-plugin.js";
         import { DocswellDriver } from "./artifact/docswell-driver.js";
         import { SpeakerDeckDriver } from "./artifact/speakerdeck-driver.js";
         import { YouTubeDriver } from "./artifact/youtube-driver.js";
@@ -124,6 +126,7 @@
         const PLAYBACK_RMS_SCALE = 1.0; // Lower this (e.g. 0.2) if the mouth stays open
         const VISION_STREAM_ENABLED = false; // Requires the optional Vision server
         const VISION_SERVER_URL = "../vision";
+        const GOOGLE_MAPS_EMBED_API_KEY = "YOUR_GOOGLE_MAPS_EMBED_API_KEY";
 
         // Avatar
         let avatar;
@@ -189,6 +192,16 @@
                 new VideoArtifactPlugin({
                     drivers: [YouTubeDriver],
                     autoplay: true,
+                }),
+                new GoogleMapArtifactPlugin({
+                    apiKey: GOOGLE_MAPS_EMBED_API_KEY,
+                    language: "ja",
+                    region: "JP",
+                }),
+                new WebAppArtifactPlugin({
+                    onInvoke: ({ text, imageDataUrl }) => (
+                        aiavatar.chat(ui.sessionId, ui.userId, text, imageDataUrl)
+                    ),
                 }),
             ],
         });
