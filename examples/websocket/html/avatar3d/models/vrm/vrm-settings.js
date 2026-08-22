@@ -59,6 +59,11 @@ export function installVrmSettings(adapter) {
         });
         panel.append(modelButton, modelInput);
 
+        const resetViewButton = button("Reset view");
+        resetViewButton.style.marginLeft = "6px";
+        resetViewButton.addEventListener("click", () => adapter.resetView());
+        panel.appendChild(resetViewButton);
+
         const unloadButton = button("Unload");
         unloadButton.style.marginLeft = "6px";
         unloadButton.addEventListener("click", () => adapter.unloadModel({ clearCache: true }));
