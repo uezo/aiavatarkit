@@ -10,6 +10,8 @@ const ARTIFACT_CAMERA_REFERENCE = {
     targetOffset: [-0.10330158393900676, 0, -0.1170766868649855],
     cameraOffset: [1.100777579891017, 0.2236689191280165, 3.040772395500192],
 };
+const SKELETON_HEAD_PADDING_RATIO = 0.18;
+const SKELETON_FOOT_PADDING_RATIO = 0.04;
 
 function kelvinToRgb(kelvin) {
     const temperature = kelvin / 100;
@@ -34,6 +36,8 @@ export class VrmAdapter {
         this.persistence = persistence;
         this.blobStore = blobStore;
         this.currentModel = null;
+        this.modelSkeletonFrame = null;
+        this.modelDefaultCameraState = null;
         this.renderRequest = null;
         this.cameraSaveTimer = null;
         this.artifactMode = false;
@@ -121,55 +125,138 @@ export class VrmAdapter {
         controls.maxDistance = maxDistance;
         controls.update();
         controls.addEventListener("change", () => {
-            this.updateControlSurface();
             clearTimeout(this.cameraSaveTimer);
             this.cameraSaveTimer = setTimeout(() => this.saveCameraState(), this.config.camera.saveDebounceMs);
         });
         return controls;
     }
 
+    getRawSkeletonBones() {
+        const humanoid = this.currentModel?.humanoid;
+        const hips = humanoid?.getRawBoneNode("hips");
+        const head = humanoid?.getRawBoneNode("head");
+        const feet = [
+            humanoid?.getRawBoneNode("leftFoot"),
+            humanoid?.getRawBoneNode("rightFoot"),
+        ].filter(Boolean);
+        return hips && head && feet.length > 0 ? { hips, head, feet } : null;
+    }
+
+    captureRawSkeletonFrame() {
+        const skeleton = this.getRawSkeletonBones();
+        if (!skeleton) return null;
+
+        this.currentModel.scene.updateMatrixWorld(true);
+        const hips = skeleton.hips.getWorldPosition(new THREE.Vector3());
+        const head = skeleton.head.getWorldPosition(new THREE.Vector3());
+        const feet = skeleton.feet.map((bone) => bone.getWorldPosition(new THREE.Vector3()));
+        const feetY = Math.min(...feet.map(({ y }) => y));
+        const skeletonHeight = head.y - feetY;
+        if (![hips.x, hips.y, hips.z, head.y, feetY, skeletonHeight].every(Number.isFinite)) {
+            return null;
+        }
+        if (skeletonHeight <= 0) return null;
+
+        const top = head.y + skeletonHeight * SKELETON_HEAD_PADDING_RATIO;
+        const bottom = feetY - skeletonHeight * SKELETON_FOOT_PADDING_RATIO;
+        const center = hips.clone();
+        center.y = (top + bottom) / 2;
+        return { center, height: top - bottom };
+    }
+
+    captureDefaultModelCameraState() {
+        const head = this.getRawSkeletonBones()?.head;
+        if (!head) return null;
+
+        this.currentModel.scene.updateMatrixWorld(true);
+        const headPosition = head.getWorldPosition(new THREE.Vector3());
+        if (![headPosition.x, headPosition.y, headPosition.z].every(Number.isFinite)) return null;
+
+        return {
+            px: 0,
+            py: headPosition.y,
+            pz: this.config.camera.autoFrameDistance,
+            tx: 0,
+            ty: headPosition.y - 0.05,
+            tz: 0,
+        };
+    }
+
+    applyDefaultModelCamera({ resetControls = false } = {}) {
+        const state = this.modelDefaultCameraState || this.captureDefaultModelCameraState();
+        if (!state) return false;
+        return this.applyCameraState(state, {
+            resetControls,
+            maxDistance: this.config.camera.maxDistance,
+        });
+    }
+
     updateControlSurface() {
-        if (!this.currentModel) {
+        const skeleton = this.getRawSkeletonBones();
+        if (!skeleton) {
             this.controlSurface.hidden = true;
             return;
         }
 
-        const bounds = new THREE.Box3().setFromObject(this.currentModel.scene);
-        if (bounds.isEmpty()) {
-            this.controlSurface.hidden = true;
-            return;
-        }
-
-        const min = bounds.min;
-        const max = bounds.max;
+        this.viewCamera.updateMatrixWorld(true);
         const point = new THREE.Vector3();
-        let left = Infinity;
-        let top = Infinity;
-        let right = -Infinity;
-        let bottom = -Infinity;
-        for (const x of [min.x, max.x]) {
-            for (const y of [min.y, max.y]) {
-                for (const z of [min.z, max.z]) {
-                    point.set(x, y, z).project(this.viewCamera);
-                    left = Math.min(left, (point.x + 1) * window.innerWidth / 2);
-                    right = Math.max(right, (point.x + 1) * window.innerWidth / 2);
-                    top = Math.min(top, (1 - point.y) * window.innerHeight / 2);
-                    bottom = Math.max(bottom, (1 - point.y) * window.innerHeight / 2);
-                }
-            }
+        const projectBone = (bone) => {
+            bone.getWorldPosition(point);
+            point.project(this.viewCamera);
+            if (![point.x, point.y, point.z].every(Number.isFinite)) return null;
+            if (point.z < -1 || point.z > 1) return null;
+            return {
+                x: (point.x + 1) * window.innerWidth / 2,
+                y: (1 - point.y) * window.innerHeight / 2,
+            };
+        };
+        const projectedHips = projectBone(skeleton.hips);
+        const projectedHead = projectBone(skeleton.head);
+        const projectedFeet = skeleton.feet.map(projectBone).filter(Boolean);
+        if (!projectedHips || !projectedHead || projectedFeet.length === 0) {
+            this.controlSurface.hidden = true;
+            return;
         }
 
-        const padding = 12;
-        left = Math.max(0, left - padding);
-        top = Math.max(0, top - padding);
-        right = Math.min(window.innerWidth, right + padding);
-        bottom = Math.min(window.innerHeight, bottom + padding);
+        const feetY = Math.max(...projectedFeet.map(({ y }) => y));
+        const skeletonHeight = feetY - projectedHead.y;
+        if (!Number.isFinite(skeletonHeight) || skeletonHeight < 8) {
+            this.controlSurface.hidden = true;
+            return;
+        }
+
+        const topPadding = skeletonHeight * SKELETON_HEAD_PADDING_RATIO;
+        const bottomPadding = skeletonHeight * SKELETON_FOOT_PADDING_RATIO;
+        const projectedHeight = skeletonHeight + topPadding + bottomPadding;
+        const controlWidth = Math.min(320, Math.max(140, projectedHeight * 0.22));
+        let left = projectedHips.x - controlWidth / 2;
+        let top = projectedHead.y - topPadding;
+        let right = projectedHips.x + controlWidth / 2;
+        let bottom = feetY + bottomPadding;
+        if (right <= 0 || left >= window.innerWidth || bottom <= 0 || top >= window.innerHeight) {
+            this.controlSurface.hidden = true;
+            return;
+        }
+
+        left = Math.max(0, left);
+        top = Math.max(0, top);
+        right = Math.min(window.innerWidth, right);
+        bottom = Math.min(window.innerHeight, bottom);
         if (right <= left || bottom <= top) {
             this.controlSurface.hidden = true;
             return;
         }
 
-        this.controlSurface.style.clipPath = `inset(${top}px ${window.innerWidth - right}px ${window.innerHeight - bottom}px ${left}px)`;
+        const insets = [
+            top,
+            window.innerWidth - right,
+            window.innerHeight - bottom,
+            left,
+        ].map(Math.round);
+        const clipPath = `inset(${insets.map((value) => `${value}px`).join(" ")})`;
+        if (this.controlSurface.style.clipPath !== clipPath) {
+            this.controlSurface.style.clipPath = clipPath;
+        }
         this.controlSurface.hidden = false;
     }
 
@@ -225,19 +312,10 @@ export class VrmAdapter {
         this.idle.vrm = model;
         VRMUtils.rotateVRM0(model);
         this.scene.add(model.scene);
-
-        const head = model.humanoid?.getNormalizedBoneNode("head");
-        if (head) {
-            const headPosition = new THREE.Vector3();
-            head.getWorldPosition(headPosition);
-            const distance = this.config.camera.autoFrameDistance;
-            this.viewCamera.position.set(0, headPosition.y, distance);
-            this.viewCamera.lookAt(0, headPosition.y - 0.05, 0);
-            this.controls.target.set(0, headPosition.y - 0.05, 0);
-            this.controls.update();
-        }
+        this.modelSkeletonFrame = this.captureRawSkeletonFrame();
+        this.modelDefaultCameraState = this.captureDefaultModelCameraState();
+        this.applyDefaultModelCamera();
         if (model.lookAt) model.lookAt.target = this.viewCamera;
-        this.updateControlSurface();
         this.placeholder.style.display = "none";
         console.log("VRM loaded");
         return model;
@@ -248,8 +326,10 @@ export class VrmAdapter {
         this.scene.remove(this.currentModel.scene);
         VRMUtils.deepDispose(this.currentModel.scene);
         this.currentModel = null;
+        this.modelSkeletonFrame = null;
+        this.modelDefaultCameraState = null;
         this.idle.vrm = null;
-        this.updateControlSurface();
+        this.controlSurface.hidden = true;
     }
 
     async unloadModel({ clearCache = false } = {}) {
@@ -488,14 +568,11 @@ export class VrmAdapter {
     }
 
     applyDefaultArtifactCamera(maxDistance) {
-        if (!this.currentModel) return false;
-        const box = new THREE.Box3().setFromObject(this.currentModel.scene);
-        if (box.isEmpty()) return false;
+        const frame = this.modelSkeletonFrame || this.captureRawSkeletonFrame();
+        if (!frame) return false;
 
-        const center = box.getCenter(new THREE.Vector3());
-        const size = box.getSize(new THREE.Vector3());
-        const scale = size.y / ARTIFACT_CAMERA_REFERENCE.modelHeight;
-        const target = center.clone().add(
+        const scale = frame.height / ARTIFACT_CAMERA_REFERENCE.modelHeight;
+        const target = frame.center.clone().add(
             new THREE.Vector3(...ARTIFACT_CAMERA_REFERENCE.targetOffset).multiplyScalar(scale),
         );
         const cameraOffset = new THREE.Vector3(...ARTIFACT_CAMERA_REFERENCE.cameraOffset)
@@ -510,6 +587,31 @@ export class VrmAdapter {
             ty: target.y,
             tz: target.z,
         }, { resetControls: true, maxDistance: Math.max(maxDistance, distance * 1.2) });
+    }
+
+    resetView() {
+        if (!this.currentModel) return false;
+        clearTimeout(this.cameraSaveTimer);
+        this.cameraSaveTimer = null;
+        this.viewCamera.zoom = 1;
+        this.viewCamera.updateProjectionMatrix();
+
+        let reset;
+        let persistenceKey;
+        if (this.artifactMode) {
+            const normalMaxDistance = this.normalMaxDistance ?? this.config.camera.maxDistance;
+            const maxDistance = Math.max(normalMaxDistance, this.config.camera.maxDistance * 3);
+            reset = this.applyDefaultArtifactCamera(maxDistance);
+            persistenceKey = this.artifactCameraKey;
+        } else {
+            reset = this.applyDefaultModelCamera({ resetControls: true });
+            persistenceKey = this.persistence.cameraKey;
+        }
+        if (!reset) return false;
+
+        this.saveCameraState(persistenceKey);
+        this.controlSurface.hidden = true;
+        return true;
     }
 
     setArtifactMode(active) {
@@ -527,7 +629,7 @@ export class VrmAdapter {
             if (!this.restoreCameraState(undefined, { resetControls: true, maxDistance })) {
                 this.applyDefaultArtifactCamera(maxDistance);
             }
-            this.updateControlSurface();
+            this.controlSurface.hidden = true;
             return;
         }
 
@@ -540,7 +642,7 @@ export class VrmAdapter {
         }
         this.normalCameraState = null;
         this.normalMaxDistance = null;
-        this.updateControlSurface();
+        this.controlSurface.hidden = true;
     }
 
     handleResponse(response) {
@@ -559,7 +661,6 @@ export class VrmAdapter {
             this.viewCamera.aspect = window.innerWidth / window.innerHeight;
             if (this.artifactMode) this.applyArtifactViewOffset();
             else this.viewCamera.updateProjectionMatrix();
-            this.updateControlSurface();
         };
         window.addEventListener("resize", this.onResize);
     }
@@ -570,6 +671,7 @@ export class VrmAdapter {
             this.renderRequest = requestAnimationFrame(render);
             this.controls.update();
             this.idle.update(this.clock.getDelta());
+            this.updateControlSurface();
             this.renderer.render(this.scene, this.viewCamera);
         };
         render();
