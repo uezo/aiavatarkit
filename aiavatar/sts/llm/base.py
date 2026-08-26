@@ -337,7 +337,7 @@ The list of tools is as follows:
             tool_to_add.is_dynamic = is_dynamic
         self.tools[tool_to_add.name] = tool_to_add
 
-    async def get_dynamic_tools(self, func):
+    def get_dynamic_tools(self, func):
         self._get_dynamic_tools = func
         return func
 
