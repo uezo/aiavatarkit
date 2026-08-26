@@ -23,10 +23,14 @@ def create_app(
     config: AppConfig | None = None,
     components: ComponentSet | None = None,
     download_ui: bool = True,
+    use_namo_turn: bool = True,
 ) -> FastAPI:
     """Assemble the CLI's built-in WebSocket application."""
     config = config or AppConfig.from_env()
-    components = components or build_components(config)
+    components = components or build_components(
+        config,
+        use_namo_turn=use_namo_turn,
+    )
     vad, stt, llm, tts = components
 
     pipeline = STSPipeline(
