@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Dict, Optional, Any, Tuple, List, AsyncIterable, Callable, Awaitable
+from typing import AsyncIterator, Dict, Optional, Any, Tuple, List, Callable, Awaitable
 import numpy as np
 import asyncpg
 from . import BaseSpeakerStore
@@ -14,6 +14,16 @@ def _to_pg_vector(arr: np.ndarray) -> str:
 def _from_pg_vector(s: str) -> np.ndarray:
     """Convert pgvector string format to numpy array."""
     return np.array(json.loads(s), dtype=np.float32)
+
+
+def _from_pg_metadata(s: Optional[str]) -> Dict[str, Any]:
+    """Decode metadata selected as text with asyncpg's default codecs."""
+    if s is None:
+        return {}
+    metadata = json.loads(s)
+    if not isinstance(metadata, dict):
+        raise ValueError("Speaker metadata must be a JSON object.")
+    return metadata
 
 
 class PGVectorStore(BaseSpeakerStore):
@@ -121,13 +131,13 @@ class PGVectorStore(BaseSpeakerStore):
         pool = await self.get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                f"SELECT embedding::text, metadata FROM {self.table} WHERE id = $1",
+                f"SELECT embedding::text, metadata::text AS metadata FROM {self.table} WHERE id = $1",
                 speaker_id
             )
             if row is None:
                 raise KeyError(f"Unknown speaker_id: {speaker_id}")
             emb = _from_pg_vector(row["embedding"])
-            md = row["metadata"] or {}
+            md = _from_pg_metadata(row["metadata"])
             return emb, md
 
     async def set_metadata(self, speaker_id: str, key: str, value: Any) -> None:
@@ -144,19 +154,21 @@ class PGVectorStore(BaseSpeakerStore):
         pool = await self.get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                f"SELECT metadata->$1 FROM {self.table} WHERE id = $2",
-                key, speaker_id
+                f"SELECT metadata::text AS metadata FROM {self.table} WHERE id = $1",
+                speaker_id
             )
             if row is None:
                 raise KeyError(f"Unknown speaker_id: {speaker_id}")
-            return default if row[0] is None else row[0]
+            return _from_pg_metadata(row["metadata"]).get(key, default)
 
-    async def all_items(self) -> AsyncIterable[Tuple[str, np.ndarray, Dict[str, Any]]]:
+    async def all_items(self) -> AsyncIterator[Tuple[str, np.ndarray, Dict[str, Any]]]:
         pool = await self.get_pool()
         async with pool.acquire() as conn:
-            rows = await conn.fetch(f"SELECT id, embedding::text, metadata FROM {self.table}")
+            rows = await conn.fetch(
+                f"SELECT id, embedding::text, metadata::text AS metadata FROM {self.table}"
+            )
             for row in rows:
-                yield row["id"], _from_pg_vector(row["embedding"]), (row["metadata"] or {})
+                yield row["id"], _from_pg_vector(row["embedding"]), _from_pg_metadata(row["metadata"])
 
     async def count(self) -> int:
         pool = await self.get_pool()

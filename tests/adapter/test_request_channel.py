@@ -1,11 +1,17 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
-from aiavatar.adapter.http.server import AIAvatarHttpServer, PostChatMessagesRequest
+from aiavatar.adapter.http.server import (
+    AIAvatarHttpServer,
+    PostChatMessagesRequest,
+    PostSpeakerNameRequest,
+)
 from aiavatar.adapter.local.server import AIAvatarLocalServer
 from aiavatar.adapter.models import AIAvatarRequest
 from aiavatar.sts.models import STSRequest, STSResponse
+from aiavatar.sts.stt.speaker_registry.base import Candidate, MatchTopKResult
 
 
 class FakePipeline:
@@ -47,6 +53,38 @@ class FakePipeline:
         )
 
 
+class FakeSpeakerRegistry:
+    def __init__(self):
+        self.match_calls = []
+        self.metadata_calls = []
+
+    async def match_topk_from_pcm(self, audio_bytes, sample_rate):
+        self.match_calls.append((audio_bytes, sample_rate))
+        return MatchTopKResult(
+            chosen=Candidate("speaker-1", 1.0, {}, is_new=True),
+            candidates=[],
+        )
+
+    async def set_metadata(self, speaker_id, key, value):
+        self.metadata_calls.append((speaker_id, key, value))
+
+
+class FakeSpeechRecognizer:
+    sample_rate = 16000
+
+    async def recognize(self, session_id, data):
+        return SimpleNamespace(
+            text="hello",
+            preprocess_metadata={},
+            postprocess_metadata={},
+        )
+
+
+class FakeUpload:
+    async def read(self):
+        return b"audio"
+
+
 @pytest.mark.asyncio
 async def test_http_adapter_sets_its_channel_on_pipeline_request():
     pipeline = FakePipeline()
@@ -66,6 +104,31 @@ async def test_http_adapter_sets_its_channel_on_pipeline_request():
     assert pipeline.handler_owned_during_invoke == [True]
     assert [response.type for response in pipeline.dispatched_responses] == ["accepted"]
     assert server.sessions == {}
+
+
+@pytest.mark.asyncio
+async def test_http_adapter_awaits_speaker_registry_calls():
+    speaker_registry = FakeSpeakerRegistry()
+    server = AIAvatarHttpServer(
+        sts=FakePipeline(),
+        speaker_registry=speaker_registry,
+    )
+    router = server.get_api_router(stt=FakeSpeechRecognizer())
+    transcribe_endpoint = next(
+        route.endpoint for route in router.routes if route.path == "/transcribe"
+    )
+    speaker_endpoint = next(
+        route.endpoint
+        for route in router.routes
+        if route.path == "/transcribe/speaker"
+    )
+
+    response = await transcribe_endpoint(FakeUpload(), None, None)
+    await speaker_endpoint(PostSpeakerNameRequest(speaker_id="speaker-1", name="Alice"), None)
+
+    assert response.speakers.chosen.speaker_id == "speaker-1"
+    assert speaker_registry.match_calls == [(b"audio", 16000)]
+    assert speaker_registry.metadata_calls == [("speaker-1", "name", "Alice")]
 
 
 @pytest.mark.asyncio

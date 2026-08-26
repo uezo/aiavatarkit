@@ -1,17 +1,34 @@
 from abc import ABC, abstractmethod
+import asyncio
 from dataclasses import dataclass, asdict
 import json
 import logging
 import os
-from typing import Dict, Optional, Any, Tuple, Iterable, List
+from typing import AsyncIterator, Callable, Dict, Optional, Any, Tuple, List
 import uuid
 import numpy as np
+
+VoiceEncoder = None
+preprocess_wav = None
 try:
     from resemblyzer import VoiceEncoder, preprocess_wav  # pip install resemblyzer
-except:
+except ImportError:
     pass
 
 logger = logging.getLogger(__name__)
+
+
+async def _run_in_thread(func: Callable[..., Any], *args: Any) -> Any:
+    """Keep the worker alive on cancellation so protected state is not raced."""
+    task = asyncio.create_task(asyncio.to_thread(func, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await task
+        except Exception:
+            logger.exception("Worker thread failed after its caller was cancelled.")
+        raise
 
 
 @dataclass
@@ -50,32 +67,32 @@ class BaseSpeakerStore(ABC):
     """Abstract storage for speaker embeddings and metadata."""
 
     @abstractmethod
-    def upsert(self, speaker_id: str, embedding: np.ndarray, metadata: Optional[Dict[str, Any]] = None) -> None:
+    async def upsert(self, speaker_id: str, embedding: np.ndarray, metadata: Optional[Dict[str, Any]] = None) -> None:
         """Insert or update an L2-normalized embedding and its metadata."""
         ...
 
     @abstractmethod
-    def get(self, speaker_id: str) -> Tuple[np.ndarray, Dict[str, Any]]:
+    async def get(self, speaker_id: str) -> Tuple[np.ndarray, Dict[str, Any]]:
         ...
 
     @abstractmethod
-    def set_metadata(self, speaker_id: str, key: str, value: Any) -> None:
+    async def set_metadata(self, speaker_id: str, key: str, value: Any) -> None:
         ...
 
     @abstractmethod
-    def get_metadata(self, speaker_id: str, key: str, default: Any = None) -> Any:
+    async def get_metadata(self, speaker_id: str, key: str, default: Any = None) -> Any:
         ...
 
     @abstractmethod
-    def all_items(self) -> Iterable[Tuple[str, np.ndarray, Dict[str, Any]]]:
+    def all_items(self) -> AsyncIterator[Tuple[str, np.ndarray, Dict[str, Any]]]:
         ...
 
     @abstractmethod
-    def count(self) -> int:
+    async def count(self) -> int:
         ...
 
     @abstractmethod
-    def topk_similarity(self, q_norm: np.ndarray, k: int) -> List[Tuple[str, float]]:
+    async def topk_similarity(self, q_norm: np.ndarray, k: int) -> List[Tuple[str, float]]:
         """
         Return top-k (speaker_id, cosine_similarity) against normalized query q_norm.
         All stored embeddings must be L2-normalized (cosine = dot).
@@ -83,10 +100,10 @@ class BaseSpeakerStore(ABC):
         ...
 
     # Optional file persistence (in-memory only)
-    def save_to_file(self, path: str) -> None:
+    async def save_to_file(self) -> None:
         raise NotImplementedError
 
-    def load_from_file(self, path: str) -> None:
+    async def load_from_file(self) -> None:
         raise NotImplementedError
 
 
@@ -102,46 +119,63 @@ class InMemoryStore(BaseSpeakerStore):
         self._id_list: List[str] = []                 # Row order aligned with _emb_matrix
         self._emb_matrix: Optional[np.ndarray] = None # (N, D) float32
         self.data_path = data_path
-        self.load_from_file()
+        self._lock = asyncio.Lock()
+        # Constructors cannot be awaited; request-time reloads use load_from_file().
+        self._load_from_file()
 
-    def upsert(self, speaker_id: str, embedding: np.ndarray, metadata: Optional[Dict[str, Any]] = None) -> None:
-        is_new = speaker_id not in self._store
-        if is_new:
-            self._store[speaker_id] = {"embedding": embedding.astype(np.float32, copy=False),
-                                       "metadata": (metadata or {})}
-            self._id_list.append(speaker_id)
-        else:
-            self._store[speaker_id]["embedding"] = embedding.astype(np.float32, copy=False)
-            if metadata:
-                self._store[speaker_id]["metadata"].update(metadata)
-        self._emb_matrix = None  # Invalidate cache
-        self.save_to_file()
+    async def upsert(self, speaker_id: str, embedding: np.ndarray, metadata: Optional[Dict[str, Any]] = None) -> None:
+        async with self._lock:
+            is_new = speaker_id not in self._store
+            if is_new:
+                self._store[speaker_id] = {"embedding": embedding.astype(np.float32, copy=False),
+                                           "metadata": (metadata or {})}
+                self._id_list.append(speaker_id)
+            else:
+                self._store[speaker_id]["embedding"] = embedding.astype(np.float32, copy=False)
+                if metadata:
+                    self._store[speaker_id]["metadata"].update(metadata)
+            self._emb_matrix = None  # Invalidate cache
+            if self.data_path:
+                await _run_in_thread(self._save_to_file)
 
-    def get(self, speaker_id: str) -> Tuple[np.ndarray, Dict[str, Any]]:
-        slot = self._store.get(speaker_id)
-        if slot is None:
-            raise KeyError(f"Unknown speaker_id: {speaker_id}")
-        return slot["embedding"], slot["metadata"]
+    async def get(self, speaker_id: str) -> Tuple[np.ndarray, Dict[str, Any]]:
+        async with self._lock:
+            slot = self._store.get(speaker_id)
+            if slot is None:
+                raise KeyError(f"Unknown speaker_id: {speaker_id}")
+            return slot["embedding"], slot["metadata"]
 
-    def set_metadata(self, speaker_id: str, key: str, value: Any) -> None:
-        slot = self._store.get(speaker_id)
-        if slot is None:
-            raise KeyError(f"Unknown speaker_id: {speaker_id}")
-        slot["metadata"][key] = value
-        self.save_to_file()
+    async def set_metadata(self, speaker_id: str, key: str, value: Any) -> None:
+        async with self._lock:
+            slot = self._store.get(speaker_id)
+            if slot is None:
+                raise KeyError(f"Unknown speaker_id: {speaker_id}")
+            slot["metadata"][key] = value
+            if self.data_path:
+                await _run_in_thread(self._save_to_file)
 
-    def get_metadata(self, speaker_id: str, key: str, default: Any = None) -> Any:
-        slot = self._store.get(speaker_id)
-        if slot is None:
-            raise KeyError(f"Unknown speaker_id: {speaker_id}")
-        return slot["metadata"].get(key, default)
+    async def get_metadata(self, speaker_id: str, key: str, default: Any = None) -> Any:
+        async with self._lock:
+            slot = self._store.get(speaker_id)
+            if slot is None:
+                raise KeyError(f"Unknown speaker_id: {speaker_id}")
+            return slot["metadata"].get(key, default)
 
-    def all_items(self) -> Iterable[Tuple[str, np.ndarray, Dict[str, Any]]]:
-        for sid, payload in self._store.items():
-            yield sid, payload["embedding"], payload["metadata"]
+    async def all_items(self) -> AsyncIterator[Tuple[str, np.ndarray, Dict[str, Any]]]:
+        async with self._lock:
+            items = await _run_in_thread(self._all_items)
+        for item in items:
+            yield item
 
-    def count(self) -> int:
-        return len(self._store)
+    def _all_items(self) -> List[Tuple[str, np.ndarray, Dict[str, Any]]]:
+        return [
+            (sid, payload["embedding"], payload["metadata"])
+            for sid, payload in self._store.items()
+        ]
+
+    async def count(self) -> int:
+        async with self._lock:
+            return len(self._store)
 
     def _ensure_matrix(self) -> None:
         """Rebuild (N, D) matrix and aligned id list."""
@@ -169,7 +203,11 @@ class InMemoryStore(BaseSpeakerStore):
         self._id_list = new_ids
         self._emb_matrix = np.vstack(rows).astype(np.float32, copy=False) if rows else np.zeros((0, 0), np.float32)
 
-    def topk_similarity(self, q_norm: np.ndarray, k: int) -> List[Tuple[str, float]]:
+    async def topk_similarity(self, q_norm: np.ndarray, k: int) -> List[Tuple[str, float]]:
+        async with self._lock:
+            return await _run_in_thread(self._topk_similarity, q_norm, k)
+
+    def _topk_similarity(self, q_norm: np.ndarray, k: int) -> List[Tuple[str, float]]:
         """Compute top-k using a single matvec and argpartition."""
         self._ensure_matrix()
         if self._emb_matrix.size == 0:
@@ -181,7 +219,11 @@ class InMemoryStore(BaseSpeakerStore):
         idx = idx[np.argsort(sims[idx])[::-1]]
         return [(self._id_list[i], float(sims[i])) for i in idx]
 
-    def save_to_file(self) -> None:
+    async def save_to_file(self) -> None:
+        async with self._lock:
+            await _run_in_thread(self._save_to_file)
+
+    def _save_to_file(self) -> None:
         """Write {path}.npz (ids + embeddings) and {path}.json (metadata)."""
         if not self.data_path:
             return
@@ -200,7 +242,11 @@ class InMemoryStore(BaseSpeakerStore):
         with open(f"{self.data_path}.json", "w", encoding="utf-8") as f:
             json.dump(metas, f, ensure_ascii=False, indent=2)
 
-    def load_from_file(self) -> None:
+    async def load_from_file(self) -> None:
+        async with self._lock:
+            await _run_in_thread(self._load_from_file)
+
+    def _load_from_file(self) -> None:
         """Load from {path}.npz and {path}.json and rebuild cache."""
         if not self.data_path:
             return
@@ -233,14 +279,14 @@ class InMemoryStore(BaseSpeakerStore):
 class SpeakerRegistry:
     def __init__(self, match_threshold: float = 0.72, store: Optional[BaseSpeakerStore] = None, data_path: Optional[str] = None):
         self.match_threshold = float(match_threshold)
-        try:
-            self._enc = VoiceEncoder()
-        except:
-            self._enc = None
+        self._enc = None
+        if VoiceEncoder is None:
             logger.warning("SpeakerRegistry doesn't work because resemblyzer is not installed.")
         self._store: BaseSpeakerStore = store or InMemoryStore(data_path=data_path)
+        self._encoder_lock = asyncio.Lock()
+        self._match_lock = asyncio.Lock()
 
-    def match_topk_from_embedding(
+    async def match_topk_from_embedding(
         self,
         embedding: np.ndarray,
         k: int = 3,
@@ -252,43 +298,44 @@ class SpeakerRegistry:
         """
         q = self._normalize(embedding)
 
-        if self._store.count() == 0:
-            # First entry: register and return no candidates
+        async with self._match_lock:
+            if await self._store.count() == 0:
+                # First entry: register and return no candidates
+                new_sid = self._new_speaker_id()
+                await self._store.upsert(new_sid, q, metadata={})
+                return MatchTopKResult(
+                    chosen=Candidate(new_sid, 1.0, {}, is_new=True),
+                    candidates=[],
+                )
+
+            topk = await self._store.topk_similarity(q, max(1, k))
+            best_sid, best_sim = topk[0]
+
+            if best_sim >= self.match_threshold:
+                # Match to existing: chosen = Top-1 existing
+                _, md = await self._store.get(best_sid)
+                chosen = Candidate(best_sid, float(best_sim), dict(md), is_new=False)
+                others = []
+                for sid, sim in topk[1:]:
+                    if sim >= candidate_min_sim:
+                        _, metadata = await self._store.get(sid)
+                        others.append(Candidate(sid, float(sim), metadata, is_new=False))
+                return MatchTopKResult(chosen=chosen, candidates=others)
+
+            # Below threshold: register new; candidates include original Top-1 at index 0
             new_sid = self._new_speaker_id()
-            self._store.upsert(new_sid, q, metadata={})
+            await self._store.upsert(new_sid, q, metadata={})
+            refs = []
+            for sid, sim in topk:
+                if sim >= candidate_min_sim:
+                    _, metadata = await self._store.get(sid)
+                    refs.append(Candidate(sid, float(sim), metadata, is_new=False))
             return MatchTopKResult(
                 chosen=Candidate(new_sid, 1.0, {}, is_new=True),
-                candidates=[],
+                candidates=refs,
             )
 
-        topk: List[Tuple[str, float]] = self._store.topk_similarity(q, max(1, k))
-        best_sid, best_sim = topk[0]
-
-        if best_sim >= self.match_threshold:
-            # Match to existing: chosen = Top-1 existing
-            _, md = self._store.get(best_sid)
-            chosen = Candidate(best_sid, float(best_sim), dict(md), is_new=False)
-            others = [
-                Candidate(sid, float(sim), self._store.get(sid)[1], is_new=False)
-                for (sid, sim) in topk[1:]
-                if sim >= candidate_min_sim
-            ]
-            return MatchTopKResult(chosen=chosen, candidates=others)
-
-        # Below threshold: register new; candidates include original Top-1 at index 0
-        new_sid = self._new_speaker_id()
-        self._store.upsert(new_sid, q, metadata={})
-        refs = [
-            Candidate(sid, float(sim), self._store.get(sid)[1], is_new=False)
-            for (sid, sim) in topk
-            if sim >= candidate_min_sim
-        ]
-        return MatchTopKResult(
-            chosen=Candidate(new_sid, 1.0, {}, is_new=True),
-            candidates=refs,
-        )
-
-    def match_topk_from_pcm(
+    async def match_topk_from_pcm(
         self,
         audio_bytes: bytes,
         sample_rate: int,
@@ -296,21 +343,26 @@ class SpeakerRegistry:
         candidate_min_sim: float = 0.0,
     ) -> MatchTopKResult:
         """Top-K matching directly from raw PCM (int16 mono)."""
-        emb = self._embed_pcm(audio_bytes, sample_rate)
-        return self.match_topk_from_embedding(
+        async with self._encoder_lock:
+            emb = await _run_in_thread(self._embed_pcm, audio_bytes, sample_rate)
+        return await self.match_topk_from_embedding(
             emb,
             k=k,
             candidate_min_sim=candidate_min_sim,
         )
 
-    def set_metadata(self, speaker_id: str, key: str, value: Any) -> None:
-        self._store.set_metadata(speaker_id, key, value)
+    async def set_metadata(self, speaker_id: str, key: str, value: Any) -> None:
+        await self._store.set_metadata(speaker_id, key, value)
 
-    def get_metadata(self, speaker_id: str, key: str, default: Any = None) -> Any:
-        return self._store.get_metadata(speaker_id, key, default)
+    async def get_metadata(self, speaker_id: str, key: str, default: Any = None) -> Any:
+        return await self._store.get_metadata(speaker_id, key, default)
 
     def _embed_pcm(self, audio_bytes: bytes, sample_rate: int) -> np.ndarray:
         """Convert raw PCM (int16 mono) to float32 waveform, preprocess, and embed."""
+        if VoiceEncoder is None or preprocess_wav is None:
+            raise RuntimeError("SpeakerRegistry requires resemblyzer for PCM matching.")
+        if self._enc is None:
+            self._enc = VoiceEncoder()
         wav_i16 = np.frombuffer(audio_bytes, dtype=np.int16)
         wav_f32 = wav_i16.astype(np.float32, copy=False) / 32768.0
         wav_proc = preprocess_wav(wav_f32, source_sr=sample_rate)

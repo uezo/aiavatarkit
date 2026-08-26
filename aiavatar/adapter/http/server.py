@@ -442,7 +442,7 @@ class AIAvatarHttpServer(Adapter):
             speakers = None
             if self.speaker_registry:
                 try:
-                    match_result = self.speaker_registry.match_topk_from_pcm(audio_bytes=audio_bytes, sample_rate=(stt or self.sts.stt).sample_rate)
+                    match_result = await self.speaker_registry.match_topk_from_pcm(audio_bytes=audio_bytes, sample_rate=(stt or self.sts.stt).sample_rate)
                     if match_result:
                         speakers = MatchTopKResultModel.parse(match_result)
                 except Exception as ex:
@@ -464,7 +464,7 @@ class AIAvatarHttpServer(Adapter):
                 self.api_key_auth(credentials)
 
             if self.speaker_registry:
-                self.speaker_registry.set_metadata(request.speaker_id, "name", request.name)
+                await self.speaker_registry.set_metadata(request.speaker_id, "name", request.name)
                 return JSONResponse(content={"speaker_id": request.speaker_id, "name": request.name})
             else:
                 return JSONResponse(content={})
