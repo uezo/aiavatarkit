@@ -121,7 +121,11 @@ def component_fakes(monkeypatch):
     )
     monkeypatch.setattr(cli_components, "NearFieldAudioGate", FakeComponent)
     monkeypatch.setattr(cli_components, "FillerOnlyTurnEndGate", FakeComponent)
-    monkeypatch.setattr(cli_components, "NamoTurnEndGate", FakeComponent)
+    monkeypatch.setattr(
+        cli_components,
+        "_namo_turn_end_gate_class",
+        lambda: FakeComponent,
+    )
     monkeypatch.setattr(cli_components, "SileroStreamSpeechDetector", FakeVad)
     monkeypatch.setattr(cli_tts, "AlphabetToKanaPreprocessor", FakePreprocessor)
     monkeypatch.setattr(cli_tts, "VoicevoxSpeechSynthesizer", FakeComponent)

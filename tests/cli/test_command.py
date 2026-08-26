@@ -15,6 +15,7 @@ REAL_LOAD_DOTENV = cli_command.load_dotenv
 def disable_project_dotenv(monkeypatch):
     """Keep CLI tests isolated from a developer's ignored root .env file."""
     monkeypatch.setattr(cli_command, "load_dotenv", lambda **_: False)
+    monkeypatch.setattr(cli_command, "_missing_namo_turn_modules", lambda: [])
 
 
 def test_cli_hides_known_websockets_deprecation_warnings():
@@ -42,6 +43,137 @@ assert 'aiavatar.cli.components' not in sys.modules
 assert 'aiavatar.cli.builtin' not in sys.modules
 """
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_prepare_namo_turn_decline_disables_it_for_this_run(monkeypatch):
+    observed = {}
+    monkeypatch.setattr(
+        cli_command,
+        "_missing_namo_turn_modules",
+        lambda: ["onnxruntime", "transformers"],
+    )
+    monkeypatch.setattr(cli_command.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda prompt: observed.update(prompt=prompt) or "n",
+    )
+    monkeypatch.setattr(
+        cli_command.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("pip must not run after declining"),
+    )
+
+    use_namo_turn = cli_command._prepare_namo_turn(
+        cli_command.build_parser(),
+        using_builtin_app=True,
+    )
+
+    assert use_namo_turn is False
+    assert observed["prompt"] == (
+        "Additional dependencies are required to enable Semantic VAD. "
+        "Install them now? [y/N]: "
+    )
+
+
+def test_prepare_namo_turn_installs_and_continues(monkeypatch):
+    observed = {}
+    missing_results = iter([["onnxruntime"], []])
+    monkeypatch.setattr(
+        cli_command,
+        "_missing_namo_turn_modules",
+        lambda: next(missing_results),
+    )
+    monkeypatch.setattr(cli_command.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    monkeypatch.setattr(
+        cli_command.subprocess,
+        "run",
+        lambda command, **kwargs: observed.update(
+            command=command,
+            kwargs=kwargs,
+        ),
+    )
+    monkeypatch.setattr(
+        cli_command.importlib,
+        "invalidate_caches",
+        lambda: observed.update(caches_invalidated=True),
+    )
+
+    use_namo_turn = cli_command._prepare_namo_turn(
+        cli_command.build_parser(),
+        using_builtin_app=True,
+    )
+
+    assert use_namo_turn is True
+    assert observed == {
+        "command": [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "aiavatar[namo-turn]",
+        ],
+        "kwargs": {"check": True},
+        "caches_invalidated": True,
+    }
+
+
+def test_prepare_namo_turn_noninteractive_disables_it(monkeypatch, caplog):
+    monkeypatch.setattr(
+        cli_command,
+        "_missing_namo_turn_modules",
+        lambda: ["huggingface_hub"],
+    )
+    monkeypatch.setattr(cli_command.sys.stdin, "isatty", lambda: False)
+
+    use_namo_turn = cli_command._prepare_namo_turn(
+        cli_command.build_parser(),
+        using_builtin_app=True,
+    )
+
+    assert use_namo_turn is False
+    assert "Semantic VAD is disabled" in caplog.text
+
+
+def test_prepare_namo_turn_does_not_check_script_mode(monkeypatch):
+    monkeypatch.setattr(
+        cli_command,
+        "_missing_namo_turn_modules",
+        lambda: pytest.fail("script mode must not inspect Namo Turn dependencies"),
+    )
+
+    assert cli_command._prepare_namo_turn(
+        cli_command.build_parser(),
+        using_builtin_app=False,
+    ) is False
+
+
+def test_cli_starts_builtin_app_without_namo_after_decline(
+    monkeypatch,
+    clean_builtin_environment,
+):
+    observed = {}
+    application = object()
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        cli_command,
+        "_missing_namo_turn_modules",
+        lambda: ["onnxruntime"],
+    )
+    monkeypatch.setattr(cli_command.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    monkeypatch.setattr(
+        cli_command,
+        "_load_builtin_app",
+        lambda *, use_namo_turn: observed.update(
+            use_namo_turn=use_namo_turn,
+        ) or application,
+    )
+    monkeypatch.setattr(cli_command.uvicorn, "run", lambda *args, **kwargs: None)
+
+    cli_command.main([])
+
+    assert observed == {"use_namo_turn": False}
 
 
 def test_load_app_from_python_file(tmp_path):
@@ -181,7 +313,7 @@ def test_cli_tts_arguments_override_environment(
     monkeypatch.setattr(
         cli_command,
         "_load_builtin_app",
-        lambda: observed.update(
+        lambda **_: observed.update(
             ja_tts=os.environ.get("AIAVATAR_JA_TTS"),
             multi_tts=os.environ.get("AIAVATAR_MULTI_TTS"),
             openai_tts_speaker=os.environ.get("AIAVATAR_OPENAI_TTS_SPEAKER"),
@@ -220,7 +352,9 @@ def test_builtin_app_prompts_for_missing_key(
     monkeypatch.setattr(
         cli_command,
         "_load_builtin_app",
-        lambda: observed.update(key=os.environ.get("OPENAI_API_KEY")) or application,
+        lambda **_: observed.update(
+            key=os.environ.get("OPENAI_API_KEY")
+        ) or application,
     )
     monkeypatch.setattr(
         cli_command.uvicorn,
@@ -247,7 +381,7 @@ def test_builtin_app_accepts_individual_openai_keys(
     monkeypatch.setattr(
         cli_command,
         "_load_builtin_app",
-        lambda: observed.update(loaded=True) or application,
+        lambda **_: observed.update(loaded=True) or application,
     )
     monkeypatch.setattr(cli_command.uvicorn, "run", lambda *args, **kwargs: None)
 
@@ -275,7 +409,7 @@ def test_builtin_app_does_not_require_unused_tts_openai_key(
     monkeypatch.setattr(
         cli_command,
         "_load_builtin_app",
-        lambda: observed.update(loaded=True) or application,
+        lambda **_: observed.update(loaded=True) or application,
     )
     monkeypatch.setattr(cli_command.uvicorn, "run", lambda *args, **kwargs: None)
 

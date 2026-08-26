@@ -14,13 +14,20 @@ from aiavatar.sts.vad import SpeechDetector
 from aiavatar.sts.vad.filters import NearFieldAudioGate
 from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
 from aiavatar.sts.vad.turn_end_gates.filler import FillerOnlyTurnEndGate
-from aiavatar.sts.vad.turn_end_gates.namo_turn import NamoTurnEndGate
 
 from .config import AppConfig
 from .tts import build_default_tts
 
 
 logger = logging.getLogger(__name__)
+
+
+def _namo_turn_end_gate_class():
+    # Keep optional dependencies out of the import path unless the default
+    # component graph will actually use Namo Turn.
+    from aiavatar.sts.vad.turn_end_gates.namo_turn import NamoTurnEndGate
+
+    return NamoTurnEndGate
 
 
 def websocket_base_url(base_url: str | None) -> str | None:
@@ -127,11 +134,14 @@ def build_components(
     stt: SpeechRecognizer | None = None,
     llm: LLMService | None = None,
     tts: SpeechSynthesizer | None = None,
+    use_namo_turn: bool = True,
 ) -> ComponentSet:
     """Build missing speech components without creating a pipeline or adapter.
 
     Explicitly supplied components are kept, and the selected STT is injected
-    into the default streaming VAD when ``vad`` is omitted.
+    into the default streaming VAD when ``vad`` is omitted. Set
+    ``use_namo_turn`` to false to build that VAD without the optional Namo Turn
+    semantic gate.
     """
     config = config or AppConfig.from_env()
     managed_resources = []
@@ -158,18 +168,23 @@ def build_components(
             fillers=config.filler_phrases,
             timeout=config.filler_timeout,
         )
-        namo_turn_gate = NamoTurnEndGate(
-            language=config.namo_language,
-            threshold=config.namo_threshold,
-            timeout=config.namo_timeout,
-            force_end_phrases=config.namo_force_end_phrases,
-        )
+        turn_end_gates = [filler_gate]
+        if use_namo_turn:
+            namo_turn_gate_class = _namo_turn_end_gate_class()
+            turn_end_gates.append(
+                namo_turn_gate_class(
+                    language=config.namo_language,
+                    threshold=config.namo_threshold,
+                    timeout=config.namo_timeout,
+                    force_end_phrases=config.namo_force_end_phrases,
+                )
+            )
         vad = SileroStreamSpeechDetector(
             speech_recognizer=stt,
             silence_duration_threshold=config.vad_silence_duration_threshold,
             segment_silence_threshold=config.vad_segment_silence_threshold,
             audio_filters=[near_field_gate],
-            turn_end_gates=[filler_gate, namo_turn_gate],
+            turn_end_gates=turn_end_gates,
             use_vad_iterator=config.vad_use_iterator,
             debug=config.debug,
         )

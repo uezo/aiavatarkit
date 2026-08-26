@@ -237,3 +237,25 @@ def test_build_components_uses_overrides_and_injects_stt_into_default_vad(
     assert components.llm is custom_llm
     assert components.tts is custom_tts
     assert components.vad.kwargs["speech_recognizer"] is custom_stt
+
+
+def test_build_components_can_disable_namo_turn(
+    monkeypatch,
+    clean_builtin_environment,
+    component_fakes,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        cli_components,
+        "_namo_turn_end_gate_class",
+        lambda: pytest.fail("Namo Turn must not be imported"),
+    )
+
+    components = cli_components.build_components(use_namo_turn=False)
+
+    turn_end_gates = components.vad.kwargs["turn_end_gates"]
+    assert len(turn_end_gates) == 1
+    assert turn_end_gates[0].kwargs == {
+        "fillers": cli_config.DEFAULT_JA_FILLERS + cli_config.DEFAULT_EN_FILLERS,
+        "timeout": 3.0,
+    }

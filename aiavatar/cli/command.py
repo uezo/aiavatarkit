@@ -4,6 +4,7 @@ import importlib
 import importlib.util
 import logging
 import os
+import subprocess
 import sys
 import warnings
 from pathlib import Path
@@ -14,6 +15,13 @@ from dotenv import load_dotenv
 
 
 logger = logging.getLogger(__name__)
+
+
+NAMO_TURN_OPTIONAL_MODULES = (
+    "onnxruntime",
+    "transformers",
+    "huggingface_hub",
+)
 
 
 class ApplicationLoadError(ValueError):
@@ -92,10 +100,81 @@ def load_app(target: str) -> Any:
     return app
 
 
-def _load_builtin_app() -> Any:
+def _load_builtin_app(*, use_namo_turn: bool) -> Any:
     from .builtin import create_app
 
-    return create_app()
+    return create_app(use_namo_turn=use_namo_turn)
+
+
+def _missing_namo_turn_modules() -> list[str]:
+    return [
+        module_name
+        for module_name in NAMO_TURN_OPTIONAL_MODULES
+        if importlib.util.find_spec(module_name) is None
+    ]
+
+
+def _prepare_namo_turn(
+    parser: argparse.ArgumentParser,
+    *,
+    using_builtin_app: bool,
+) -> bool:
+    """Install Namo Turn support when requested, or disable it for this run."""
+    if not using_builtin_app:
+        return False
+
+    missing_modules = _missing_namo_turn_modules()
+    if not missing_modules:
+        return True
+
+    missing_display = ", ".join(missing_modules)
+    if not sys.stdin.isatty():
+        logger.warning(
+            "Semantic VAD is disabled because optional dependencies "
+            "are not installed: %s",
+            missing_display,
+        )
+        return False
+
+    try:
+        answer = input(
+            "Additional dependencies are required to enable Semantic VAD. "
+            "Install them now? [y/N]: "
+        ).strip().lower()
+    except EOFError:
+        answer = ""
+
+    if answer not in {"y", "yes"}:
+        logger.info("Semantic VAD is disabled for this run.")
+        return False
+
+    install_command = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "aiavatar[namo-turn]",
+    ]
+    logger.info("Installing Semantic VAD dependencies...")
+    try:
+        subprocess.run(install_command, check=True)
+    except (OSError, subprocess.CalledProcessError) as ex:
+        parser.error(
+            "Could not install Semantic VAD dependencies. Run "
+            f"'{sys.executable}' -m pip install 'aiavatar[namo-turn]' "
+            "and try again."
+        )
+        raise AssertionError("parser.error() did not exit") from ex
+
+    importlib.invalidate_caches()
+    missing_modules = _missing_namo_turn_modules()
+    if missing_modules:
+        parser.error(
+            "Semantic VAD installation completed, but these modules are still "
+            f"unavailable: {', '.join(missing_modules)}"
+        )
+    logger.info("Semantic VAD dependencies installed.")
+    return True
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -209,14 +288,23 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         os.environ["AIAVATAR_LLM_EXTRA_BODY"] = args.llm_extra_body
     if args.llm_api:
         os.environ["AIAVATAR_LLM_API"] = args.llm_api
+    using_builtin_app = args.script is None
+    use_namo_turn = _prepare_namo_turn(
+        parser,
+        using_builtin_app=using_builtin_app,
+    )
     _prepare_openai_api_key(
         parser,
         supplied_key=args.openai_api_key,
-        using_builtin_app=args.script is None,
+        using_builtin_app=using_builtin_app,
     )
 
     try:
-        app = load_app(args.script) if args.script else _load_builtin_app()
+        app = (
+            load_app(args.script)
+            if args.script
+            else _load_builtin_app(use_namo_turn=use_namo_turn)
+        )
     except ApplicationLoadError as ex:
         parser.error(str(ex))
 
