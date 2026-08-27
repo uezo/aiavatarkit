@@ -37,8 +37,7 @@ def _default_evaluator(adapter: Adapter) -> Optional[DialogEvaluator]:
         return None
     source = adapter.sts.llm
     evaluation_llm = ChatGPTService(
-        openai_api_key=source.openai_client.api_key,
-        base_url=str(source.openai_client.base_url),
+        openai_client=source.openai_client,
         model=source.model,
         temperature=source.temperature,
         reasoning_effort=source.reasoning_effort,

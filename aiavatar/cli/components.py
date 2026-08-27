@@ -93,13 +93,14 @@ class ComponentSet:
             return
         self._closed = True
 
-        llm_resource = getattr(self.llm, "_ws_pool", None)
-        if llm_resource is None:
-            llm_resource = getattr(self.llm, "openai_client", None)
-        if llm_resource is None and (
-            hasattr(self.llm, "close") or hasattr(self.llm, "aclose")
+        if callable(getattr(self.llm, "close", None)) or callable(
+            getattr(self.llm, "aclose", None)
         ):
             llm_resource = self.llm
+        else:
+            llm_resource = getattr(self.llm, "_ws_pool", None)
+            if llm_resource is None:
+                llm_resource = getattr(self.llm, "openai_client", None)
 
         resources = [
             llm_resource,

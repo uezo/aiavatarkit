@@ -23,6 +23,14 @@ class FakeVoiceRecorder:
         self.events.append("voice:stop")
 
 
+class FakeLLM:
+    def __init__(self, events, **kwargs):
+        self.events = events
+
+    async def close(self):
+        self.events.append("llm:close")
+
+
 def create_pipeline(*, performance_recorder=None, voice_recorder=None):
     return STSPipeline(
         vad=SpeechDetectorDummy(),
@@ -68,3 +76,24 @@ async def test_shutdown_leaves_injected_resources_open():
     await pipeline.shutdown()
 
     assert events == []
+
+
+@pytest.mark.asyncio
+async def test_shutdown_closes_internally_created_llm_once(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        "aiavatar.sts.pipeline.ChatGPTService",
+        lambda **kwargs: FakeLLM(events, **kwargs),
+    )
+    pipeline = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        tts=SpeechSynthesizerDummy(),
+        performance_recorder=FakePerformanceRecorder(events),
+        voice_recorder=FakeVoiceRecorder(events),
+    )
+
+    await pipeline.shutdown()
+    await pipeline.shutdown()
+
+    assert events == ["llm:close"]

@@ -1,4 +1,6 @@
+import inspect
 import json
+import warnings
 from logging import getLogger
 from typing import AsyncGenerator, Dict, List, Protocol, Type, Union
 from urllib.parse import urlparse, parse_qs
@@ -36,6 +38,7 @@ class ChatGPTService(LLMService):
         context_manager: ContextManager = None,
         shared_context_ids: List[str] = None,
         db_connection_str: str = "aiavatar.db",
+        openai_client: openai_module.AsyncOpenAI = None,
         custom_openai_module: OpenAICompatibleModule = None,
         debug: bool = False
     ):
@@ -61,18 +64,50 @@ class ChatGPTService(LLMService):
         self.extra_body = extra_body
         self._edit_chat_completion_params = None
 
-        client_module = custom_openai_module or openai_module
-        if "azure" in model:
-            if base_url:
-                base_url = base_url.rstrip("/")
-            api_version = parse_qs(urlparse(base_url).query).get("api-version", [None])[0]
-            self.openai_client = client_module.AsyncAzureOpenAI(
-                api_key=openai_api_key,
-                api_version=api_version,
-                base_url=base_url
+        uses_legacy_azure_detection = (
+            openai_client is None and "azure" in model
+        )
+        if uses_legacy_azure_detection:
+            warnings.warn(
+                'Selecting Azure by including "azure" in model is deprecated. '
+                "Pass a pre-configured OpenAI client, such as AsyncAzureOpenAI, "
+                "through openai_client and set model to the deployment name.",
+                DeprecationWarning,
+                stacklevel=2,
             )
+
+        if openai_client is None and custom_openai_module is not None:
+            warnings.warn(
+                "custom_openai_module is deprecated. Construct the module's async "
+                "client and pass it through openai_client instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        self._close_openai_client = None
+        if openai_client is not None:
+            self.openai_client = openai_client
         else:
-            self.openai_client = client_module.AsyncClient(api_key=openai_api_key, base_url=base_url)
+            client_module = custom_openai_module or openai_module
+            if uses_legacy_azure_detection:
+                if base_url:
+                    base_url = base_url.rstrip("/")
+                api_version = parse_qs(urlparse(base_url).query).get("api-version", [None])[0]
+                self.openai_client = client_module.AsyncAzureOpenAI(
+                    api_key=openai_api_key,
+                    api_version=api_version,
+                    base_url=base_url
+                )
+            else:
+                self.openai_client = client_module.AsyncClient(
+                    api_key=openai_api_key,
+                    base_url=base_url,
+                )
+            self._close_openai_client = getattr(
+                self.openai_client,
+                "close",
+                None,
+            ) or getattr(self.openai_client, "aclose", None)
 
         self.dynamic_tool_spec = {
             "type": "function",
@@ -102,6 +137,15 @@ class ChatGPTService(LLMService):
         config["enable_tool_filtering"] = self.enable_tool_filtering
         config["extra_body"] = self.extra_body
         return config
+
+    async def close(self):
+        """Close the OpenAI client only when this service constructed it."""
+        close = self._close_openai_client
+        self._close_openai_client = None
+        if close is not None:
+            result = close()
+            if inspect.isawaitable(result):
+                await result
 
     @property
     def dynamic_tool_name(self) -> str:

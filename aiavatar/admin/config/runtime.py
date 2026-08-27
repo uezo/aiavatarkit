@@ -14,6 +14,7 @@ _EXCLUDED = {
     "llm", "stt", "sts", "tts", "vad", "speech_recognizer",
     "context_manager", "session_state_manager", "response_id_store",
     "performance_recorder", "voice_recorder", "db_pool_provider",
+    "openai_client",
     "audio_filters", "guardrails", "postprocessors", "preprocessors",
     "turn_end_gates", "on_recording_started", "to_linear16",
     # Values coupled to resources, derived state, or registered hooks

@@ -1,4 +1,5 @@
 import copy
+import inspect
 import json
 from logging import getLogger
 from typing import AsyncGenerator, Dict, List, Union
@@ -36,6 +37,7 @@ class OpenAIResponsesService(LLMService):
         response_id_store: ResponseIdStore = None,
         shared_context_ids: List[str] = None,
         db_connection_str: str = "aiavatar.db",
+        openai_client: openai_module.AsyncOpenAI = None,
         debug: bool = False
     ):
         super().__init__(
@@ -66,15 +68,34 @@ class OpenAIResponsesService(LLMService):
                 self.response_id_store = SQLiteResponseIdStore(db_path=db_connection_str)
         self._edit_response_params = None
 
-        self.openai_client = openai_module.AsyncClient(
-            api_key=openai_api_key, base_url=base_url
-        )
+        self._close_openai_client = None
+        if openai_client is not None:
+            self.openai_client = openai_client
+        else:
+            self.openai_client = openai_module.AsyncClient(
+                api_key=openai_api_key,
+                base_url=base_url,
+            )
+            self._close_openai_client = getattr(
+                self.openai_client,
+                "close",
+                None,
+            ) or getattr(self.openai_client, "aclose", None)
 
     def get_config(self) -> dict:
         config = super().get_config()
         config["reasoning_effort"] = self.reasoning_effort
         config["extra_body"] = self.extra_body
         return config
+
+    async def close(self):
+        """Close the OpenAI client only when this service constructed it."""
+        close = self._close_openai_client
+        self._close_openai_client = None
+        if close is not None:
+            result = close()
+            if inspect.isawaitable(result):
+                await result
 
     @property
     def dynamic_tool_name(self) -> str:

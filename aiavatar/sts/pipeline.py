@@ -205,6 +205,7 @@ class STSPipeline:
                 db_connection_str=db_connection_str,
                 debug=debug
             )
+            self._lifecycle.push_async_callback(self.llm.close)
 
         # Text-to-Speech
         self.tts = tts or VoicevoxSpeechSynthesizer(
