@@ -154,12 +154,20 @@ class OpenAIResponsesWebSocketService(LLMService):
             max_size=max_connections,
             max_age=max_connection_age,
         )
+        self._close_ws_pool = self._ws_pool.close
 
     def get_config(self) -> dict:
         config = super().get_config()
         config["reasoning_effort"] = self.reasoning_effort
         config["extra_body"] = self.extra_body
         return config
+
+    async def close(self):
+        """Close the internally constructed WebSocket pool once."""
+        close = self._close_ws_pool
+        self._close_ws_pool = None
+        if close is not None:
+            await close()
 
     @property
     def dynamic_tool_name(self) -> str:

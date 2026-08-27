@@ -130,6 +130,9 @@ The Evaluation view accepts a JSON array of scenarios and runs Dialog Evaluation
 
 The Evaluation tab is shown only when an Evaluator is available. An Evaluator is created automatically when the Adapter uses `ChatGPTService` as its LLM. For other LLMs, pass a `DialogEvaluator` through `setup_admin_panel(..., evaluator=...)`.
 
+The automatic Evaluator reuses the source `ChatGPTService` client, preserving Azure,
+custom transport, and tracing configuration. It does not take ownership of that client.
+
 Character and Control UI and APIs are not included in this Admin Panel.
 
 ## Time Semantics

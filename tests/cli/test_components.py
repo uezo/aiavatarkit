@@ -66,6 +66,23 @@ async def test_component_set_closes_owned_resources_once():
     preprocessor_client.close.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_component_set_uses_llm_ownership_aware_close():
+    llm_client = SimpleNamespace(close=AsyncMock())
+    llm = SimpleNamespace(close=AsyncMock(), openai_client=llm_client)
+    components = cli_components.ComponentSet(
+        vad=object(),
+        stt=object(),
+        llm=llm,
+        tts=object(),
+    )
+
+    await components.close()
+
+    llm.close.assert_awaited_once()
+    llm_client.close.assert_not_awaited()
+
+
 def test_build_components_preserves_defaults(
     monkeypatch,
     clean_builtin_environment,
