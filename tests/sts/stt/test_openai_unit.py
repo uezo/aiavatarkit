@@ -26,3 +26,4 @@ async def test_openai_stt_uses_configured_base_url():
 
     assert observed["url"] == "https://stt.example/v1/audio/transcriptions"
     assert observed["headers"] == {"Authorization": "Bearer test-key"}
+    assert observed["data"]["model"] == "gpt-transcribe"

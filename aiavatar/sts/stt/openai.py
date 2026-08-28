@@ -11,7 +11,7 @@ class OpenAISpeechRecognizer(SpeechRecognizer):
     def __init__(
         self,
         openai_api_key: str,
-        model: str = "gpt-4o-mini-transcribe",
+        model: str = "gpt-transcribe",
         min_data_length: int = 4096,
         sample_rate: int = 16000,
         language: str = "ja",

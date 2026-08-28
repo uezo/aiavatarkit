@@ -102,7 +102,7 @@ class OpenAIResponsesWebSocketService(LLMService):
         openai_api_key: str = None,
         system_prompt: str = None,
         ws_url: str = None,
-        model: str = "gpt-5.4",
+        model: str = "gpt-5.6-terra",
         reasoning_effort: str = None,
         extra_body: dict = None,
         initial_messages: List[dict] = None,

@@ -33,7 +33,10 @@ async def test_mcp():
 @pytest.mark.asyncio
 async def test_mcp_llm():
     async with StdioMCP(server_script="tests/sts/llm/tools/mcpserver.py") as mcp:
-        llm = ChatGPTService(openai_api_key=OPENAI_API_KEY)
+        llm = ChatGPTService(
+            openai_api_key=OPENAI_API_KEY,
+            reasoning_effort="none",
+        )
         mcp.for_each_tool = llm.add_tool
         assert len(llm.tools) == 0
 

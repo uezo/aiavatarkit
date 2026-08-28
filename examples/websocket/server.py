@@ -122,7 +122,6 @@ stt = OpenAISpeechRecognizer(
 llm = ChatGPTService(
     openai_api_key=OPENAI_API_KEY,
     system_prompt=SYSTEM_PROMPT_JP, # <- Use SYSTEM_PROMPT_EN for English
-    model="gpt-5.2",
     reasoning_effort="none",
     voice_text_tag="answer"
 )

@@ -90,7 +90,7 @@ class AIAvatarChatCompletionsServer(Adapter):
         # Quick start
         openai_api_key: str = None,
         openai_base_url: str = None,
-        openai_model: str = "gpt-4.1",
+        openai_model: str = "gpt-5.6-terra",
         system_prompt: str = None,
 
         # STS Pipeline and its components
@@ -100,7 +100,9 @@ class AIAvatarChatCompletionsServer(Adapter):
         # STS Pipeline params for default components
         llm_openai_api_key: str = None,
         llm_base_url: str = None,
-        llm_model: str = "gpt-4.1",
+        llm_model: str = "gpt-5.6-terra",
+        llm_temperature: float = None,
+        llm_reasoning_effort: str = None,
         llm_system_prompt: str = None,
         llm_context_manager: ContextManager = None,
         timestamp_interval_seconds: float = 0.0,
@@ -138,6 +140,8 @@ class AIAvatarChatCompletionsServer(Adapter):
             llm_openai_api_key=llm_openai_api_key or openai_api_key,
             llm_base_url=llm_base_url or openai_base_url,
             llm_model=llm_model or openai_model,
+            llm_temperature=llm_temperature,
+            llm_reasoning_effort=llm_reasoning_effort,
             llm_system_prompt=llm_system_prompt or system_prompt,
             llm_context_manager=llm_context_manager,
             tts=SpeechSynthesizerDummy(),

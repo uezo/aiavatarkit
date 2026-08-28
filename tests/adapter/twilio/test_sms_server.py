@@ -40,6 +40,7 @@ from aiavatar.adapter.twilio import (
     TwilioSessionData,
     TwilioSMSMessage,
 )
+from aiavatar.adapter.twilio import server as server_module
 from aiavatar.sts.models import STSRequest, STSResponse
 
 
@@ -120,6 +121,25 @@ class FakeMessages:
 class FakeTwilioClient:
     def __init__(self):
         self.messages = FakeMessages()
+
+
+def test_default_pipeline_receives_llm_generation_params(monkeypatch):
+    captured = {}
+
+    def create_pipeline(**kwargs):
+        captured.update(kwargs)
+        return FakePipeline()
+
+    monkeypatch.setattr(server_module, "STSPipeline", create_pipeline)
+    AIAvatarTwilioServer(
+        stt=object(),
+        llm_temperature=0.0,
+        llm_reasoning_effort="none",
+    )
+
+    assert captured["llm_model"] == "gpt-5.6-terra"
+    assert captured["llm_temperature"] == 0.0
+    assert captured["llm_reasoning_effort"] == "none"
 
 
 @pytest.mark.asyncio

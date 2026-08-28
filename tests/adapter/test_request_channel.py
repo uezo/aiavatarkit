@@ -3,11 +3,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from aiavatar.adapter.http import server as http_server_module
 from aiavatar.adapter.http.server import (
     AIAvatarHttpServer,
     PostChatMessagesRequest,
     PostSpeakerNameRequest,
 )
+from aiavatar.adapter.local import server as local_server_module
 from aiavatar.adapter.local.server import AIAvatarLocalServer
 from aiavatar.adapter.models import AIAvatarRequest
 from aiavatar.sts.models import STSRequest, STSResponse
@@ -83,6 +85,46 @@ class FakeSpeechRecognizer:
 class FakeUpload:
     async def read(self):
         return b"audio"
+
+
+def test_http_default_pipeline_receives_llm_generation_params(monkeypatch):
+    captured = {}
+
+    def create_pipeline(**kwargs):
+        captured.update(kwargs)
+        return FakePipeline()
+
+    monkeypatch.setattr(http_server_module, "STSPipeline", create_pipeline)
+    AIAvatarHttpServer(
+        stt=FakeSpeechRecognizer(),
+        llm_temperature=0.0,
+        llm_reasoning_effort="none",
+    )
+
+    assert captured["llm_model"] == "gpt-5.6-terra"
+    assert captured["llm_temperature"] == 0.0
+    assert captured["llm_reasoning_effort"] == "none"
+
+
+def test_local_default_pipeline_receives_llm_generation_params(monkeypatch):
+    captured = {}
+
+    def create_pipeline(**kwargs):
+        captured.update(kwargs)
+        return FakePipeline()
+
+    monkeypatch.setattr(local_server_module, "STSPipeline", create_pipeline)
+    with pytest.warns(DeprecationWarning):
+        AIAvatarLocalServer(
+            asyncio.Queue(),
+            stt=FakeSpeechRecognizer(),
+            llm_temperature=0.0,
+            llm_reasoning_effort="none",
+        )
+
+    assert captured["llm_model"] == "gpt-5.6-terra"
+    assert captured["llm_temperature"] == 0.0
+    assert captured["llm_reasoning_effort"] == "none"
 
 
 @pytest.mark.asyncio

@@ -8,8 +8,6 @@ from aiavatar.sts.llm.openai_responses import OpenAIResponsesService
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 IMAGE_URL = os.getenv("IMAGE_URL")
-MODEL = "gpt-4.1"
-
 SYSTEM_PROMPT = """
 ## 基本設定
 
@@ -28,6 +26,99 @@ SYSTEM_PROMPT = """
 """
 
 
+REASONING_EFFORT_CASES = [
+    pytest.param(None, id="omitted"),
+    pytest.param("medium", id="medium"),
+]
+
+REASONING_TOOL_SPEC = {
+    "type": "function",
+    "function": {
+        "name": "noop",
+        "description": "A no-op function that is not needed for this request.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+@pytest.mark.skipif(
+    not OPENAI_API_KEY,
+    reason="OPENAI_API_KEY is required for live OpenAI compatibility tests",
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reasoning_effort", REASONING_EFFORT_CASES)
+async def test_openai_responses_service_reasoning_with_tools_is_accepted(
+    tmp_path,
+    reasoning_effort,
+):
+    service_params = {
+        "openai_api_key": OPENAI_API_KEY,
+        "db_connection_str": str(tmp_path / "responses_reasoning_with_tools.db"),
+    }
+    if reasoning_effort is not None:
+        service_params["reasoning_effort"] = reasoning_effort
+    service = OpenAIResponsesService(**service_params)
+
+    @service.tool(REASONING_TOOL_SPEC)
+    async def noop():
+        return {"ok": True}
+
+    context_id = f"responses_reasoning_with_tools_{uuid4()}"
+    try:
+        errors = []
+        async for response in service.chat_stream(
+            context_id,
+            "test_user",
+            "Reply with exactly OK. Do not call any tools.",
+        ):
+            if response.error_info:
+                errors.append(response.error_info)
+
+        assert not errors
+        assert await service.response_id_store.get(context_id) is not None
+    finally:
+        await service.close()
+
+
+@pytest.mark.skipif(
+    not OPENAI_API_KEY,
+    reason="OPENAI_API_KEY is required for live OpenAI compatibility tests",
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reasoning_effort", REASONING_EFFORT_CASES)
+async def test_openai_responses_service_reasoning_without_tools_is_accepted(
+    tmp_path,
+    reasoning_effort,
+):
+    service_params = {
+        "openai_api_key": OPENAI_API_KEY,
+        "db_connection_str": str(tmp_path / "responses_reasoning_without_tools.db"),
+    }
+    if reasoning_effort is not None:
+        service_params["reasoning_effort"] = reasoning_effort
+    service = OpenAIResponsesService(**service_params)
+
+    context_id = f"responses_reasoning_without_tools_{uuid4()}"
+    try:
+        errors = []
+        async for response in service.chat_stream(
+            context_id,
+            "test_user",
+            "Reply with exactly OK.",
+        ):
+            if response.error_info:
+                errors.append(response.error_info)
+
+        assert not errors
+        assert await service.response_id_store.get(context_id) is not None
+    finally:
+        await service.close()
+
+
 @pytest.mark.asyncio
 async def test_openai_responses_service_simple():
     """
@@ -37,8 +128,7 @@ async def test_openai_responses_service_simple():
     service = OpenAIResponsesService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt=SYSTEM_PROMPT,
-        model=MODEL,
-        temperature=0.5
+        reasoning_effort="none",
     )
     context_id = f"test_context_{uuid4()}"
 
@@ -79,8 +169,7 @@ async def test_openai_responses_service_context_continuity():
     service = OpenAIResponsesService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt="あなたは親切なアシスタントです。短く回答してください。",
-        model=MODEL,
-        temperature=0.0
+        reasoning_effort="none",
     )
     context_id = f"test_continuity_{uuid4()}"
 
@@ -115,9 +204,8 @@ async def test_openai_responses_service_tool_calls():
     """
     service = OpenAIResponsesService(
         openai_api_key=OPENAI_API_KEY,
-        system_prompt="You can call a tool to solve math problems if necessary.",
-        model=MODEL,
-        temperature=0.5
+        system_prompt="You MUST always use the solve_math tool to solve any math problem. Never calculate manually.",
+        reasoning_effort="none",
     )
     context_id = f"test_tool_context_{uuid4()}"
 
@@ -171,8 +259,7 @@ async def test_openai_responses_service_tool_calls_response_formatter():
     service = OpenAIResponsesService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt="You can call a tool to solve math problems if necessary.",
-        model=MODEL,
-        temperature=0.5
+        reasoning_effort="none",
     )
     context_id = f"test_tool_rf_context_{uuid4()}"
 
@@ -246,8 +333,7 @@ async def test_openai_responses_service_chained_tool_calls_mixed():
             "3. Tell the user about the campaign based on get_campaign_info result\n"
             "Always follow this exact order. Never skip steps."
         ),
-        model=MODEL,
-        temperature=0.0
+        reasoning_effort="none",
     )
     context_id = f"test_chained_mixed_{uuid4()}"
 
@@ -339,8 +425,7 @@ async def test_openai_responses_service_context_isolation():
     service = OpenAIResponsesService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt="あなたは親切なアシスタントです。短く回答してください。",
-        model=MODEL,
-        temperature=0.0
+        reasoning_effort="none",
     )
 
     context_a = f"test_isolation_a_{uuid4()}"
@@ -398,8 +483,7 @@ async def test_openai_responses_service_image():
     service = OpenAIResponsesService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt=SYSTEM_PROMPT,
-        model=MODEL,
-        temperature=0.5
+        reasoning_effort="none",
     )
     context_id = f"test_image_context_{uuid4()}"
 

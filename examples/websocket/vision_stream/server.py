@@ -83,10 +83,10 @@ class VisionStreamServer:
         self,
         *,
         openai_api_key: str,
-        openai_model: str = "gpt-5.4-mini",
+        openai_model: str = "gpt-5.6-luna",
         openai_base_url: Optional[str] = None,
-        reasoning_effort: str = "none",
-        temperature: float = 1.0,
+        reasoning_effort: Optional[str] = "none",
+        temperature: Optional[float] = None,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
         context_manager: ContextManager = None,
         conversation_history_count: int = 20,
@@ -203,12 +203,15 @@ class VisionStreamServer:
         api_start = time.monotonic()
         messages, image_url = await self._build_messages(context_id, image_bytes, image_id)
 
-        resp = await self.openai_client.chat.completions.create(
-            model=self.model,
-            reasoning_effort=self.reasoning_effort,
-            messages=messages,
-            temperature=self.temperature,
-        )
+        completion_params = {
+            "model": self.model,
+            "messages": messages,
+        }
+        if self.reasoning_effort is not None:
+            completion_params["reasoning_effort"] = self.reasoning_effort
+        if self.temperature is not None:
+            completion_params["temperature"] = self.temperature
+        resp = await self.openai_client.chat.completions.create(**completion_params)
         raw_text = resp.choices[0].message.content
         api_elapsed = time.monotonic() - api_start
         logger.info(f"[{context_id}] ({api_elapsed:.2f}s) {raw_text}")
