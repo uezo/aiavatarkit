@@ -10,8 +10,6 @@ from aiavatar.sts.llm import Tool
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 IMAGE_URL = os.getenv("IMAGE_URL")
-MODEL = "gpt-4.1"
-
 XAI_MODEL = "grok-4-1-fast-non-reasoning"
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 XAI_BASE_URL = os.getenv("XAI_BASE_URL")
@@ -45,6 +43,102 @@ SYSTEM_PROMPT_COT = SYSTEM_PROMPT + """
 """
 
 
+REASONING_EFFORT_CASES = [
+    pytest.param(None, id="omitted"),
+    pytest.param("medium", id="medium"),
+]
+
+REASONING_TOOL_SPEC = {
+    "type": "function",
+    "function": {
+        "name": "noop",
+        "description": "A no-op function that is not needed for this request.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+@pytest.mark.skipif(
+    not OPENAI_API_KEY,
+    reason="OPENAI_API_KEY is required for live OpenAI compatibility tests",
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reasoning_effort", REASONING_EFFORT_CASES)
+async def test_chatgpt_service_reasoning_with_tools_is_rejected(
+    tmp_path,
+    reasoning_effort,
+):
+    service_params = {
+        "openai_api_key": OPENAI_API_KEY,
+        "db_connection_str": str(tmp_path / "chatgpt_reasoning_with_tools.db"),
+    }
+    if reasoning_effort is not None:
+        service_params["reasoning_effort"] = reasoning_effort
+    service = ChatGPTService(**service_params)
+
+    @service.tool(REASONING_TOOL_SPEC)
+    async def noop():
+        return {"ok": True}
+
+    try:
+        errors = []
+        async for response in service.chat_stream(
+            f"chatgpt_reasoning_with_tools_{uuid4()}",
+            "test_user",
+            "Reply with exactly OK. Do not call any tools.",
+        ):
+            if response.error_info:
+                errors.append(response.error_info)
+
+        assert len(errors) == 1
+        response_json = errors[0]["response_json"] or {}
+        detail = response_json.get("error", response_json)
+        assert detail.get("param") == "reasoning_effort"
+        assert "Function tools with reasoning_effort are not supported" in detail.get(
+            "message",
+            "",
+        )
+    finally:
+        await service.close()
+
+
+@pytest.mark.skipif(
+    not OPENAI_API_KEY,
+    reason="OPENAI_API_KEY is required for live OpenAI compatibility tests",
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reasoning_effort", REASONING_EFFORT_CASES)
+async def test_chatgpt_service_reasoning_without_tools_is_accepted(
+    tmp_path,
+    reasoning_effort,
+):
+    service_params = {
+        "openai_api_key": OPENAI_API_KEY,
+        "db_connection_str": str(tmp_path / "chatgpt_reasoning_without_tools.db"),
+    }
+    if reasoning_effort is not None:
+        service_params["reasoning_effort"] = reasoning_effort
+    service = ChatGPTService(**service_params)
+
+    try:
+        errors = []
+        async for response in service.chat_stream(
+            f"chatgpt_reasoning_without_tools_{uuid4()}",
+            "test_user",
+            "Reply with exactly OK.",
+        ):
+            if response.error_info:
+                errors.append(response.error_info)
+
+        assert not errors
+    finally:
+        await service.close()
+
+
 @pytest.mark.asyncio
 async def test_chatgpt_service_simple():
     """
@@ -54,8 +148,7 @@ async def test_chatgpt_service_simple():
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt=SYSTEM_PROMPT,
-        model=MODEL,
-        temperature=0.5
+        reasoning_effort="none",
     )
     context_id = f"test_context_{uuid4()}"
 
@@ -93,8 +186,7 @@ async def test_chatgpt_service_system_prompt_params():
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt="あなたは{animal_name}です。語尾をそれらしくしてください。カタカナで表現します。",
-        model=MODEL,
-        temperature=0.5
+        reasoning_effort="none",
     )
     context_id = f"test_system_prompt_params_context_{uuid4()}"
 
@@ -128,8 +220,7 @@ async def test_chatgpt_service_image():
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt=SYSTEM_PROMPT,
-        model=MODEL,
-        temperature=0.5
+        reasoning_effort="none",
     )
     context_id = f"test_context_{uuid4()}"
 
@@ -161,8 +252,7 @@ async def test_chatgpt_service_cot():
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt=SYSTEM_PROMPT_COT,
-        model=MODEL,
-        temperature=0.5,
+        reasoning_effort="none",
         voice_text_tag="answer"
     )
     context_id = f"test_cot_context_{uuid4()}"
@@ -212,8 +302,7 @@ async def test_chatgpt_service_with_initial_messages():
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt="グルメアドバイザーとして振る舞ってください。",
-        model=MODEL,
-        temperature=0.5,
+        reasoning_effort="none",
         initial_messages=initial_messages
     )
     context_id = f"test_initial_context_{uuid4()}"
@@ -254,9 +343,8 @@ async def test_chatgpt_service_tool_calls():
     """
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
-        system_prompt="You can call a tool to solve math problems if necessary.",
-        model=MODEL,
-        temperature=0.5
+        system_prompt="You MUST always use the solve_math tool to solve any math problem. Never calculate manually.",
+        reasoning_effort="none",
     )
     context_id = f"test_tool_context_{uuid4()}"
 
@@ -324,9 +412,8 @@ async def test_chatgpt_service_tool_calls_response_formatter():
     """
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
-        system_prompt="You can call a tool to solve math problems if necessary.",
-        model=MODEL,
-        temperature=0.5
+        system_prompt="You MUST always use the solve_math tool to solve any math problem. Never calculate manually.",
+        reasoning_effort="none",
     )
     context_id = f"test_tool_response_formatter_context_{uuid4()}"
 
@@ -409,8 +496,7 @@ async def test_chatgpt_service_chained_tool_calls_mixed():
             "3. Tell the user about the campaign based on get_campaign_info result\n"
             "Always follow this exact order. Never skip steps."
         ),
-        model=MODEL,
-        temperature=0.0
+        reasoning_effort="none",
     )
     context_id = f"test_chained_mixed_{uuid4()}"
 
@@ -475,9 +561,8 @@ async def test_chatgpt_service_tool_calls_iter():
     """
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
-        system_prompt="You can call a tool to solve math problems if necessary.",
-        model=MODEL,
-        temperature=0.5
+        system_prompt="You MUST always use the solve_math tool to solve any math problem. Never calculate manually.",
+        reasoning_effort="none",
     )
     context_id = f"test_tool_iter_context_{uuid4()}"
 
@@ -557,8 +642,7 @@ async def test_chatgpt_guardrails():
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt="ユーザーの指示に従い、入力内容を復唱してください。",
-        model=MODEL,
-        temperature=0.5
+        reasoning_effort="none",
     )
     context_id = f"test_context_guardrails_{uuid4()}"
 
@@ -752,8 +836,7 @@ async def test_chatgpt_service_split_by_period():
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt="ユーザーの指示に従い、入力内容を一字一句変えずに復唱してください。",
-        model=MODEL,
-        temperature=0.0
+        reasoning_effort="none",
     )
     context_id = f"test_split_period_{uuid4()}"
 
@@ -784,8 +867,7 @@ async def test_chatgpt_service_split_by_comma_when_long():
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt="ユーザーの指示に従い、入力内容を一字一句変えずに復唱してください。",
-        model=MODEL,
-        temperature=0.0,
+        reasoning_effort="none",
         option_split_threshold=20  # Set low threshold to trigger comma split
     )
     context_id = f"test_split_comma_{uuid4()}"
@@ -819,8 +901,7 @@ async def test_chatgpt_service_no_comma_split_when_tag_makes_it_long():
         openai_api_key=OPENAI_API_KEY,
         system_prompt="""ユーザーの指示に従い、入力内容を一字一句変えずに復唱してください。
 ただし、復唱する前に必ず[face:happy][mood:excellent][tone:cheerful]というタグをつけてください。""",
-        model=MODEL,
-        temperature=0.0,
+        reasoning_effort="none",
         option_split_threshold=20  # Threshold: tag included=52 chars (exceeds), tag excluded=6 chars (under)
     )
     context_id = f"test_split_tag_{uuid4()}"
@@ -865,8 +946,7 @@ async def test_chatgpt_service_split_on_control_tags():
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt="""ユーザーの指示に従い、入力内容を一字一句変えずに復唱してください。""",
-        model=MODEL,
-        temperature=0.0,
+        reasoning_effort="none",
         split_on_control_tags=True  # Default, but explicit for clarity
     )
     context_id = f"test_split_control_tags_{uuid4()}"
@@ -913,8 +993,7 @@ async def test_chatgpt_service_no_split_on_tts_tags():
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt="""ユーザーの指示に従い、入力内容を一字一句変えずに復唱してください。""",
-        model=MODEL,
-        temperature=0.0,
+        reasoning_effort="none",
         split_on_control_tags=True
     )
     context_id = f"test_no_split_tts_tags_{uuid4()}"
@@ -970,8 +1049,7 @@ async def test_chatgpt_service_dynamic_tools():
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt="You are a helpful assistant. Use tools when needed.",
-        model=MODEL,
-        temperature=0.5,
+        reasoning_effort="none",
         use_dynamic_tools=True,
         debug=True
     )
@@ -1059,8 +1137,7 @@ async def test_chatgpt_service_split_on_control_tags_disabled():
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt="""ユーザーの指示に従い、入力内容を一字一句変えずに復唱してください。""",
-        model=MODEL,
-        temperature=0.0,
+        reasoning_effort="none",
         split_on_control_tags=False  # Disable splitting on control tags
     )
     context_id = f"test_split_control_tags_disabled_{uuid4()}"

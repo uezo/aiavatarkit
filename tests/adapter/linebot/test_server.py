@@ -3,6 +3,7 @@ from types import ModuleType, SimpleNamespace
 from uuid import UUID
 
 import pytest
+import pytest_asyncio
 
 
 try:
@@ -62,6 +63,7 @@ except ModuleNotFoundError:
     sys.modules["linebot.v3.messaging"] = linebot_messaging_module
     sys.modules["linebot.v3.webhooks"] = linebot_webhooks_module
 
+from aiavatar.adapter.linebot import server as server_module
 from aiavatar.adapter.linebot.server import AIAvatarLineBotServer
 from aiavatar.sts.models import STSResponse
 
@@ -160,13 +162,54 @@ def assert_linebot_session_id(session_id):
     UUID(value)
 
 
+@pytest_asyncio.fixture
+async def linebot_server_factory():
+    servers = []
+
+    def create(**kwargs):
+        server = AIAvatarLineBotServer(**kwargs)
+        servers.append(server)
+        return server
+
+    yield create
+
+    for server in servers:
+        if close := getattr(server.line_api_client, "close", None):
+            await close()
+
+
 @pytest.mark.asyncio
-async def test_linebot_reply_routes_shared_pipeline_response():
+async def test_default_pipeline_receives_llm_generation_params(
+    monkeypatch,
+    linebot_server_factory,
+):
+    captured = {}
+
+    def create_pipeline(**kwargs):
+        captured.update(kwargs)
+        return FakePipeline()
+
+    monkeypatch.setattr(server_module, "STSPipeline", create_pipeline)
+    linebot_server_factory(
+        llm_temperature=0.0,
+        llm_reasoning_effort="none",
+        channel_access_token="test-channel-access-token",
+        channel_secret="test-channel-secret",
+        channel_context_bridge=FakeChannelContextBridge(),
+    )
+
+    assert captured["llm_model"] == "gpt-5.6-terra"
+    assert captured["llm_temperature"] == 0.0
+    assert captured["llm_reasoning_effort"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_linebot_reply_routes_shared_pipeline_response(linebot_server_factory):
     pipeline = FakePipeline()
     foreign_handler = ForeignResponseHandler()
     pipeline.response_handlers.append(foreign_handler)
     bridge = FakeChannelContextBridge()
-    server = AIAvatarLineBotServer(
+    server = linebot_server_factory(
         sts=pipeline,
         channel_access_token="test-channel-access-token",
         channel_secret="test-channel-secret",
@@ -204,10 +247,12 @@ async def test_linebot_reply_routes_shared_pipeline_response():
 
 
 @pytest.mark.asyncio
-async def test_linebot_direct_reply_routes_shared_pipeline_response():
+async def test_linebot_direct_reply_routes_shared_pipeline_response(
+    linebot_server_factory,
+):
     pipeline = FakePipeline()
     bridge = FakeChannelContextBridge()
-    server = AIAvatarLineBotServer(
+    server = linebot_server_factory(
         sts=pipeline,
         channel_access_token="test-channel-access-token",
         channel_secret="test-channel-secret",
@@ -231,14 +276,14 @@ async def test_linebot_direct_reply_routes_shared_pipeline_response():
 
 
 @pytest.mark.asyncio
-async def test_linebot_push_routes_response_to_resolved_user():
+async def test_linebot_push_routes_response_to_resolved_user(linebot_server_factory):
     pipeline = FakePipeline()
     bridge = FakeChannelContextBridge()
     bridge.channel_users = [SimpleNamespace(
         channel_id="linebot",
         channel_user_id="U-line-user",
     )]
-    server = AIAvatarLineBotServer(
+    server = linebot_server_factory(
         sts=pipeline,
         channel_access_token="test-channel-access-token",
         channel_secret="test-channel-secret",
@@ -259,9 +304,9 @@ async def test_linebot_push_routes_response_to_resolved_user():
 
 
 @pytest.mark.asyncio
-async def test_linebot_releases_session_when_invoke_fails():
+async def test_linebot_releases_session_when_invoke_fails(linebot_server_factory):
     pipeline = FakePipeline(fail_on_invoke=True)
-    server = AIAvatarLineBotServer(
+    server = linebot_server_factory(
         sts=pipeline,
         channel_access_token="test-channel-access-token",
         channel_secret="test-channel-secret",

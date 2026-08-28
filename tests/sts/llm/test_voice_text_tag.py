@@ -6,8 +6,6 @@ from aiavatar.sts.llm.base import LLMResponse, LLMServiceDummy
 from aiavatar.sts.llm.chatgpt import ChatGPTService
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-MODEL = "gpt-4.1-mini"
-
 SYSTEM_PROMPT = """あなたはAIアシスタントです。
 
 応答は必ず以下の形式で出力してください：
@@ -218,8 +216,7 @@ async def test_single_voice_text_tag():
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt=SYSTEM_PROMPT,
-        model=MODEL,
-        temperature=0.5,
+        reasoning_effort="none",
         voice_text_tag="answer"
     )
     context_id = f"test_single_tag_{uuid4()}"
@@ -253,8 +250,7 @@ async def test_multiple_voice_text_tags():
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt=SYSTEM_PROMPT,
-        model=MODEL,
-        temperature=0.5,
+        reasoning_effort="none",
         voice_text_tag=["ack", "answer"]
     )
     context_id = f"test_multi_tag_{uuid4()}"
@@ -290,8 +286,7 @@ async def test_multiple_tags_only_one_present():
     service = ChatGPTService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt=SYSTEM_PROMPT,
-        model=MODEL,
-        temperature=0.5,
+        reasoning_effort="none",
         voice_text_tag=["ack", "answer", "speech"]
     )
     context_id = f"test_multi_partial_{uuid4()}"

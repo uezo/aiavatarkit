@@ -26,6 +26,7 @@ class FakeVoiceRecorder:
 class FakeLLM:
     def __init__(self, events, **kwargs):
         self.events = events
+        self.kwargs = kwargs
 
     async def close(self):
         self.events.append("llm:close")
@@ -97,3 +98,55 @@ async def test_shutdown_closes_internally_created_llm_once(monkeypatch):
     await pipeline.shutdown()
 
     assert events == ["llm:close"]
+
+
+def test_default_llm_uses_default_model_and_unset_generation_params(
+    monkeypatch,
+    tmp_path,
+):
+    events = []
+    created = []
+
+    def create_llm(**kwargs):
+        llm = FakeLLM(events, **kwargs)
+        created.append(llm)
+        return llm
+
+    monkeypatch.setattr("aiavatar.sts.pipeline.ChatGPTService", create_llm)
+    STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        tts=SpeechSynthesizerDummy(),
+        performance_recorder=FakePerformanceRecorder(events),
+        voice_recorder=FakeVoiceRecorder(events),
+        db_connection_str=str(tmp_path / "default-llm.db"),
+    )
+
+    assert created[0].kwargs["model"] == "gpt-5.6-terra"
+    assert created[0].kwargs["temperature"] is None
+    assert created[0].kwargs["reasoning_effort"] is None
+
+
+def test_default_llm_forwards_generation_params(monkeypatch, tmp_path):
+    events = []
+    created = []
+
+    def create_llm(**kwargs):
+        llm = FakeLLM(events, **kwargs)
+        created.append(llm)
+        return llm
+
+    monkeypatch.setattr("aiavatar.sts.pipeline.ChatGPTService", create_llm)
+    STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        tts=SpeechSynthesizerDummy(),
+        llm_temperature=0.0,
+        llm_reasoning_effort="none",
+        performance_recorder=FakePerformanceRecorder(events),
+        voice_recorder=FakeVoiceRecorder(events),
+        db_connection_str=str(tmp_path / "configured-llm.db"),
+    )
+
+    assert created[0].kwargs["temperature"] == 0.0
+    assert created[0].kwargs["reasoning_effort"] == "none"

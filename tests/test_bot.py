@@ -96,7 +96,7 @@ def aiavatar_app():
         face_controller=FaceControllerForTest(),
         animation_controller=AnimationControllerTest(),
         openai_api_key=OPENAI_API_KEY,
-        openai_model="gpt-4.1",
+        llm_reasoning_effort="none",
         system_prompt=SYSTEM_PROMPT,
         vad_silence_duration_threshold=1.5,
         input_sample_rate=INPUT_VOICE_SAMPLE_RATE,

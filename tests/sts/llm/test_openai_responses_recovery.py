@@ -42,8 +42,7 @@ async def test_http_service_recovers_deleted_response_with_local_history(tmp_pat
     service = OpenAIResponsesService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt="短く回答してください。",
-        model="gpt-4.1",
-        temperature=0.0,
+        reasoning_effort="none",
         db_connection_str=str(tmp_path / "http_recovery.db"),
     )
     context_id = f"test_http_recovery_{uuid4()}"
@@ -79,7 +78,6 @@ async def test_websocket_service_recovers_deleted_response_with_local_history(tm
     service = OpenAIResponsesWebSocketService(
         openai_api_key=OPENAI_API_KEY,
         system_prompt="短く回答してください。",
-        model="gpt-5.4-mini",
         reasoning_effort="none",
         db_connection_str=str(tmp_path / "websocket_recovery.db"),
     )

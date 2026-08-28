@@ -22,7 +22,7 @@ class OpenAIResponsesService(LLMService):
         openai_api_key: str = None,
         system_prompt: str = None,
         base_url: str = None,
-        model: str = "gpt-5.4",
+        model: str = "gpt-5.6-terra",
         temperature: float = None,
         reasoning_effort: str = None,
         extra_body: dict = None,

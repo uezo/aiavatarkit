@@ -9,7 +9,7 @@ logger = getLogger(__name__)
 
 
 class WebScraper:
-    def __init__(self, *, default_user_agent: str = None, openai_api_key: str = None, openai_base_url: str = None, openai_model: str = "gpt-4.1", return_summary: bool = False, summary_system_prompt: str = None, debug: bool = False):
+    def __init__(self, *, default_user_agent: str = None, openai_api_key: str = None, openai_base_url: str = None, openai_model: str = "gpt-5.6-terra", return_summary: bool = False, summary_system_prompt: str = None, debug: bool = False):
         self._playwright = None
         self._browser: Optional[Browser] = None
         self._lock = asyncio.Lock()
@@ -146,7 +146,7 @@ class WebScraperTool(Tool):
         default_user_agent: str = None,
         openai_api_key: str = None,
         openai_base_url: str = None,
-        openai_model: str = "gpt-4.1",
+        openai_model: str = "gpt-5.6-terra",
         return_summary: bool = False,
         summary_system_prompt: str = None,
         name=None,

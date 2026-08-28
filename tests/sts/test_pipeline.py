@@ -100,7 +100,7 @@ async def test_sts_pipeline():
         ),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o",
+            reasoning_effort="none",
         ),
         tts=VoicevoxSpeechSynthesizer(
             base_url="http://127.0.0.1:50021",
@@ -179,7 +179,7 @@ async def test_sts_pipeline_wakeword():
         ),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o",
+            reasoning_effort="none",
         ),
         tts=VoicevoxSpeechSynthesizer(
             base_url="http://127.0.0.1:50021",
@@ -268,7 +268,7 @@ async def test_sts_pipeline_novoice():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         performance_recorder=SQLitePerformanceRecorder(),  # DB記録
@@ -323,7 +323,7 @@ async def test_sts_pipeline_with_user():
         ),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o",
+            reasoning_effort="none",
         ),
         tts=VoicevoxSpeechSynthesizer(
             base_url="http://127.0.0.1:50021",
@@ -380,7 +380,7 @@ async def test_request_merging_enabled():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         merge_request_threshold=3.0,  # 3 second threshold
@@ -433,7 +433,7 @@ async def test_request_merging_allow_merge_false():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         merge_request_threshold=3.0,  # Merging enabled with 3 second threshold
@@ -486,7 +486,7 @@ async def test_request_merging_disabled():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         merge_request_threshold=0.0,  # Disabled
@@ -538,7 +538,7 @@ async def test_request_merging_threshold_exceeded():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         merge_request_threshold=0.5,  # 0.5 second threshold
@@ -593,7 +593,7 @@ async def test_request_merging_different_sessions():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         merge_request_threshold=1.0,  # 1 second threshold
@@ -645,7 +645,7 @@ async def test_request_merging_with_files():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         merge_request_threshold=1.0,  # 1 second threshold
@@ -698,7 +698,7 @@ async def test_request_merging_prefix_removal():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         merge_request_threshold=3.0,  # 3 second threshold
@@ -767,7 +767,7 @@ async def test_invoke_queued_sequential():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o-mini",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         performance_recorder=SQLitePerformanceRecorder(),
@@ -822,7 +822,7 @@ async def test_invoke_queued_immediately_cancels_pending():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o-mini",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         performance_recorder=SQLitePerformanceRecorder(),
@@ -890,7 +890,7 @@ async def test_invoke_queued_cleanup_on_idle():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o-mini",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         invoke_queue_idle_timeout=1.0,  # Short timeout for testing
@@ -932,7 +932,7 @@ async def test_invoke_queued_error_handling():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key="invalid_key",  # This will cause an error
-            model="gpt-4o-mini",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         performance_recorder=SQLitePerformanceRecorder(),
@@ -965,7 +965,7 @@ async def test_validate_request_cancel():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o-mini",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         performance_recorder=SQLitePerformanceRecorder(),
@@ -1009,7 +1009,7 @@ async def test_validate_request_pass():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o-mini",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         performance_recorder=SQLitePerformanceRecorder(),
@@ -1052,7 +1052,7 @@ async def test_validate_request_with_files():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o-mini",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         performance_recorder=SQLitePerformanceRecorder(),
@@ -1095,7 +1095,7 @@ async def test_invoke_queued_multiple_sessions():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o-mini",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         performance_recorder=SQLitePerformanceRecorder(),
@@ -1146,7 +1146,7 @@ async def test_insert_channel_tag_with_text():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o-mini",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         insert_channel_tag=True,
@@ -1179,7 +1179,7 @@ async def test_insert_channel_tag_without_text():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o-mini",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         insert_channel_tag=True,
@@ -1213,7 +1213,7 @@ async def test_insert_channel_tag_disabled():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o-mini",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         insert_channel_tag=False,
@@ -1285,7 +1285,7 @@ async def test_transaction_id_in_responses():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o-mini",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         performance_recorder=SQLitePerformanceRecorder(),
@@ -1327,7 +1327,7 @@ async def test_transaction_id_differs_between_invokes():
         stt=SpeechRecognizerDummy(),
         llm=ChatGPTService(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o-mini",
+            reasoning_effort="none",
         ),
         tts=SpeechSynthesizerDummy(),
         performance_recorder=SQLitePerformanceRecorder(),
