@@ -298,14 +298,6 @@ async def test_query_summary_with_data(recorder, query, test_marker):
             stt_time=0.1 * (i + 1),
             tts_first_chunk_time=0.5 * (i + 1),
         ))
-    recorder.record(PerformanceRecord(
-        transaction_id=f"sibling-{uuid4()}",
-        user_id=test_marker,
-        context_id=context_id,
-        channel="another-channel",
-        request_text="Sibling request",
-    ))
-
     recorder.record_queue.join()
 
     # Verify exact count
@@ -419,6 +411,13 @@ async def test_query_logs_with_data(recorder, query, test_marker):
             request_text=f"Request {i}",
             response_text=f"Response {i}",
         ))
+    recorder.record(PerformanceRecord(
+        transaction_id=f"sibling-{uuid4()}",
+        user_id=test_marker,
+        context_id=context_id,
+        channel="another-channel",
+        request_text="Sibling request",
+    ))
 
     recorder.record_queue.join()
 
