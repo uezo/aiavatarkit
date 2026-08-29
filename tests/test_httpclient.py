@@ -117,17 +117,20 @@ async def test_chat(aiavatar_app: AIAvatar):
     try:
         # Just chat
         response = await chat(aiavatar_app, text="こんにちは", session_id=session_id)
-        assert "こんにちは" in response.text
-        assert response.context_id is not None
+        # Keep pytest assertion output from rendering response.audio_data.
+        response_text = response.text
         context_id = response.context_id
+        assert "こんにちは" in response_text
+        assert context_id is not None
 
         # Context
         await chat(aiavatar_app, text="旅行で悩んでいます。東京、京都、福岡のいずれかに。どう思う？", session_id=session_id, context_id=context_id)
         response = await chat(aiavatar_app, text="おすすめはどこ？先ほどの選択肢の中から選んで都市名だけ答えて。それ以外は何も言わないで", session_id=session_id, context_id=context_id)
-        response_text = response.text   # Avoid flooding the console with audio data when comparing response.text on assertion errors
+        response_text = response.text
+        audio_data = response.audio_data
         assert "東京" in response_text or "京都" in response_text or "福岡" in response_text
-        trans_text = transcribe(response.audio_data)
-        assert response.audio_data != b""
+        trans_text = transcribe(audio_data)
+        assert len(audio_data or b"") > 0
         assert "東京" in trans_text or "京都" in trans_text or "福岡" in trans_text
 
     finally:
@@ -174,31 +177,43 @@ async def test_chat_wakeword(aiavatar_app: AIAvatar):
     try:
         # Not triggered chat
         response = await chat(aiavatar_app, text="やあ", session_id=session_id)
-        assert response.type == "final"
-        assert response.text == ""
-        assert response.voice_text == ""
-        assert response.audio_data == b""
-        assert response.context_id is None
+        response_type = response.type
+        response_text = response.text
+        response_voice_text = response.voice_text
+        response_audio_length = len(response.audio_data or b"")
+        response_context_id = response.context_id
+        assert response_type == "final"
+        assert response_text == ""
+        assert response_voice_text == ""
+        assert response_audio_length == 0
+        assert response_context_id is None
 
         # Start chat
         response = await chat(aiavatar_app, text="こんにちは、元気？", session_id=session_id)
-        assert "こんにちは" in response.text
+        response_text = response.text
+        assert "こんにちは" in response_text
         context_id = response.context_id
 
         # Continue chat not by wakeword
         response = await chat(aiavatar_app, text="寿司とラーメンどっちが好き？", session_id=session_id, context_id=context_id)
-        assert "寿司" in response.text or "ラーメン" in response.text
+        response_text = response.text
+        assert "寿司" in response_text or "ラーメン" in response_text
 
         # Wait for wakeword timeout
         await asyncio.sleep(10)
 
         # Not triggered chat
         response = await chat(aiavatar_app, text="そうなんだ", session_id=session_id, context_id=context_id)
-        assert response.type == "final"
-        assert response.text == ""
-        assert response.voice_text == ""
-        assert response.audio_data == b""
-        assert response.context_id == context_id    # Context is still alive
+        response_type = response.type
+        response_text = response.text
+        response_voice_text = response.voice_text
+        response_audio_length = len(response.audio_data or b"")
+        response_context_id = response.context_id
+        assert response_type == "final"
+        assert response_text == ""
+        assert response_voice_text == ""
+        assert response_audio_length == 0
+        assert response_context_id == context_id    # Context is still alive
 
     finally:
         await aiavatar_app.stop_listening(session_id)
@@ -231,7 +246,8 @@ async def test_chat_vision(aiavatar_app: AIAvatar):
 
         # Check `aiavatar_app.last_response`, not response from chat
         response = await chat(aiavatar_app, text="画面を見て。今見えているアプリケーションは何かな？", session_id=session_id)
-        assert "visual" in response.text.lower()  # Run test on Visual Studio Code
+        response_text = response.text.lower()
+        assert "visual" in response_text  # Run test on Visual Studio Code
 
     finally:
         await aiavatar_app.stop_listening(session_id)

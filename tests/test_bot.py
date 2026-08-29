@@ -167,16 +167,20 @@ async def test_chat(aiavatar_app: AIAvatar):
     try:
         # Just chat
         response = await chat(aiavatar_app, text="こんにちは", session_id=session_id)
-        assert "こんにちは" in response.text
-        assert response.context_id is not None
+        # Keep pytest assertion output from rendering response.audio_data.
+        response_text = response.text
         context_id = response.context_id
+        assert "こんにちは" in response_text
+        assert context_id is not None
 
         # Context
         await chat(aiavatar_app, text="旅行で悩んでいます。東京、京都、福岡のいずれかに。", session_id=session_id, context_id=context_id)
         response = await chat(aiavatar_app, text="おすすめはどこ？場所だけ答えて。それ以外は何も言わないで", session_id=session_id, context_id=context_id)
-        assert "東京" in response.text or "京都" in response.text or "福岡" in response.text
-        trans_text = transcribe(response.audio_data)
-        assert response.audio_data != b""
+        response_text = response.text
+        audio_data = response.audio_data
+        assert "東京" in response_text or "京都" in response_text or "福岡" in response_text
+        trans_text = transcribe(audio_data)
+        assert len(audio_data or b"") > 0
         assert "東京" in trans_text or "京都" in trans_text or "福岡" in trans_text
 
     finally:
@@ -223,11 +227,16 @@ async def test_chat_wakeword(aiavatar_app: AIAvatar):
     try:
         # Not triggered chat
         response = await chat(aiavatar_app, text="やあ", session_id=session_id)
-        assert response.type == "final"
-        assert response.text == ""
-        assert response.voice_text == ""
-        assert response.audio_data == b""
-        assert response.context_id is None
+        response_type = response.type
+        response_text = response.text
+        response_voice_text = response.voice_text
+        response_audio_length = len(response.audio_data or b"")
+        response_context_id = response.context_id
+        assert response_type == "final"
+        assert response_text == ""
+        assert response_voice_text == ""
+        assert response_audio_length == 0
+        assert response_context_id is None
 
         # Start chat
         response = await chat(aiavatar_app, text="こんにちは、元気？", session_id=session_id)
@@ -245,11 +254,16 @@ async def test_chat_wakeword(aiavatar_app: AIAvatar):
 
         # Not triggered chat
         response = await chat(aiavatar_app, text="そうなんだ", session_id=session_id, context_id=context_id)
-        assert response.type == "final"
-        assert response.text == ""
-        assert response.voice_text == ""
-        assert response.audio_data == b""
-        assert response.context_id == context_id    # Context is still alive
+        response_type = response.type
+        response_text = response.text
+        response_voice_text = response.voice_text
+        response_audio_length = len(response.audio_data or b"")
+        response_context_id = response.context_id
+        assert response_type == "final"
+        assert response_text == ""
+        assert response_voice_text == ""
+        assert response_audio_length == 0
+        assert response_context_id == context_id    # Context is still alive
 
     finally:
         await aiavatar_app.stop_listening(session_id)
@@ -315,8 +329,9 @@ async def test_chat_function(aiavatar_app: AIAvatar):
             return {"weather": "clear", "temperature": 23.4}
 
         response = await chat(aiavatar_app, text="東京の天気を教えて。", session_id=session_id)
-        assert "晴" in response.text
-        assert "23.4" in response.text
+        response_text = response.text
+        assert "晴" in response_text
+        assert "23.4" in response_text
 
     finally:
         await aiavatar_app.stop_listening(session_id)
