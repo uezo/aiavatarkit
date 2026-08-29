@@ -44,7 +44,7 @@ Set `AVATAR_MODE` in `html/index.html` to `"image"` or `"mpt"`. Then visit http:
 
 ## Artifacts in the web viewers
 
-`html/index.html` and `html/3d.html` can display an image, chart, Speaker Deck presentation, Docswell presentation, or YouTube video when an AI response contains a self-closing `artifact` tag. The adapter parses and resolves registered tags into `AIAvatarResponse.control_tags`, which is the viewer's only artifact command source. The viewer does not parse tags from response `text`. The surrounding speech continues to use `voice_text`.
+`html/index.html` and `html/3d.html` can display an image, chart, presentation, YouTube video, sandboxed web app, or Google map when an AI response contains a self-closing `artifact` tag. The adapter parses and resolves registered tags into `AIAvatarResponse.control_tags`, which is the viewer's only artifact command source. The viewer does not parse tags from response `text`. The surrounding speech continues to use `voice_text`.
 
 ```html
 <artifact type="image" src="https://example.com/image.png" alt="Generated image" />
@@ -55,10 +55,17 @@ Set `AVATAR_MODE` in `html/index.html` to `"image"` or `"mpt"`. Then visit http:
 <artifact type="presentation" offset="+1" />
 <artifact type="presentation" offset="+2" />
 <artifact type="video" src="https://www.youtube.com/watch?v=VIDEO_ID" autoplay-delay="3" />
+<artifact type="webapp" src="https://example.com/app" />
+<artifact type="map" location="Tokyo Station" zoom="16" />
+<artifact type="map" origin="Tokyo Station" destination="Tokyo Tower" travel-mode="walking" />
 <artifact action="clear" />
 ```
 
-`href` is accepted as an alias of `src`. `slide` is a positive absolute page number; when `src` is omitted, it moves the currently displayed presentation. A signed `offset` such as `+1`, `+2`, or `-1` moves relative to the current page. The viewer converts navigation to the provider-specific Speaker Deck query or Docswell message. `offset` operates only within the currently displayed presentation. Docswell applies it to the player's actual position, including manual navigation. Speaker Deck applies it to the last page requested through an artifact tag, so manual navigation is intentionally ignored. `autoplay-delay` is a number from `0` to `3600` seconds from video display until the first YouTube playback attempt; it defaults to `0`. YouTube `t` or `start` URL parameters select the position inside the video and are independent of this delay. Browsers can block autoplay with sound, in which case the embedded player remains available for manual playback. `size` accepts `small`, `medium`, `large`, or `full`; `aspect` accepts `auto`, `16:9`, `4:3`, `3:2`, `1:1`, or `9:16`. Images and charts default to `auto`; presentations and videos default to `16:9`. Speaker Deck requires a `/player/...` embed URL. Docswell accepts either a `/slide/.../embed` URL or its normal `/s/...` viewing URL. Other provider URL formats are rejected.
+`webapp` loads an HTTPS page in a sandboxed iframe; the page must permit embedding. It can request a new chat turn by posting `{ type: "aiavatar.webapp.invoke", version: 1, text, imageDataUrl }` to its parent window; `imageDataUrl` is optional. Payloads, source windows, sizes, and invocation frequency are validated by the viewer.
+
+`map` uses the Google Maps Embed API. Specify either `location`, a `latitude`/`longitude` pair, or both `origin` and `destination` for directions. `travel-mode` accepts `driving`, `walking`, `bicycling`, `transit`, or `flying`; `zoom` accepts an integer from `0` to `21`. Enable the Maps Embed API, restrict its browser key, and replace `YOUR_GOOGLE_MAPS_EMBED_API_KEY` in the viewer HTML before use.
+
+`href` is accepted as an alias of `src` for URL-based artifacts. `slide` is a positive absolute page number; when `src` is omitted, it moves the currently displayed presentation. A signed `offset` such as `+1`, `+2`, or `-1` moves relative to the current page. The viewer converts navigation to the provider-specific Speaker Deck query or Docswell message. `offset` operates only within the currently displayed presentation. Docswell applies it to the player's actual position, including manual navigation. Speaker Deck applies it to the last page requested through an artifact tag, so manual navigation is intentionally ignored. `autoplay-delay` is a number from `0` to `3600` seconds from video display until the first YouTube playback attempt; it defaults to `0`. YouTube `t` or `start` URL parameters select the position inside the video and are independent of this delay. Browsers can block autoplay with sound, in which case the embedded player remains available for manual playback. `size` accepts `small`, `medium`, `large`, or `full`; `aspect` accepts `auto`, `16:9`, `4:3`, `3:2`, `1:1`, or `9:16`. Images and charts default to `auto`; presentations, videos, web apps, and maps default to `16:9`. Speaker Deck requires a `/player/...` embed URL. Docswell accepts either a `/slide/.../embed` URL or its normal `/s/...` viewing URL. Other provider URL formats are rejected.
 
 While an artifact is visible, the VRM moves into a compact overlay and uses a separate camera state. Its first position automatically frames the full model; later drag, rotation, and zoom adjustments are stored separately in local storage. Closing the artifact restores the normal camera without changing it.
 
