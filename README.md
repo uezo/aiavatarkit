@@ -20,7 +20,7 @@
 
 ## 🚀 Quick start
 
-**Requirements**: Python 3.11+, OpenAI API key, and a running VOICEVOX instance for TTS
+**Requirements**: Python 3.11+, an OpenAI API key, and a reachable VOICEVOX-compatible server at its default URL.
 
 Install AIAvatarKit.
 
@@ -28,12 +28,33 @@ Install AIAvatarKit.
 pip install aiavatar
 ```
 
-**NOTE:** If the steps in technical blogs don’t work as expected, the blog may be based on a version prior to v0.6. Some features may be limited, but you can try downgrading with `pip install aiavatar==0.5.8` to match the environment described in the blog.
+Start the built-in default application.
 
+```sh
+export OPENAI_API_KEY=sk-xxx
+aiavatar
+```
 
-Make the script as `run.py`.
+The built-in application uses Namo Turn semantic VAD. When its optional
+dependencies are missing, the command asks whether to install them:
+
+```text
+Additional dependencies are required to enable Semantic VAD. Install them now? [y/N]:
+```
+
+Answer `y` to install `aiavatar[namo-turn]` into the current Python environment
+and continue startup automatically. Answer `n` to start without the Namo Turn
+gate; Silero VAD and the filler gate remain enabled.
+
+Open http://127.0.0.1:8000/ and enjoy the conversation! The Admin Panel is available at http://127.0.0.1:8000/admin/.
+
+See [Command Line Interface](#-command-line-interface) for configuration options and details about the built-in application.
+
+Or, write your own application script when you need full, fine-grained control over components, routes, and application lifecycle. Save the following as `run.py`.
 
 ```python
+import os
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer
@@ -44,7 +65,7 @@ download_example("websocket/html")
 
 # Build Speech-to-Speech pipeline with WebSocket adapter
 aiavatar_app = AIAvatarWebSocketServer(
-    openai_api_key=OPENAI_API_KEY
+    openai_api_key=os.environ["OPENAI_API_KEY"]
 )
 
 # Build websocket server
@@ -64,9 +85,7 @@ Start server. Also, don't forget to launch VOICEVOX beforehand.
 $ python -m uvicorn run:app
 ```
 
-Set `AVATAR_MODE` in `html/index.html` to `"image"` for the character icon or `"mpt"` for MotionPNGTuber, then open http://127.0.0.1:8000/static/index.html and enjoy the conversation!
-
-You can also access the Admin Panel at http://127.0.0.1:8000/admin.
+**NOTE:** If the steps in technical blogs don’t work as expected, the blog may be based on a version prior to v0.6. Some features may be limited, but you can try downgrading with `pip install aiavatar==0.5.8` to match the environment described in the blog.
 
 For a Python console client that uses local microphone and speaker devices, see [WebSocket](#-websocket).
 
@@ -82,7 +101,17 @@ For a Python console client that uses local microphone and speaker devices, see 
     - [OpenAI-compatible APIs](#openai-compatible-apis)
     - [Other LLMs](#other-llms)
 
-- [🗣️ Voice](#️voice)
+- [🗣️ Speech Synthesizer](#%EF%B8%8F-speech-synthesizer)
+    - [VOICEVOX](#voicevox)
+    - [Azure](#azure)
+    - [Google](#google)
+    - [OpenAI](#openai)
+    - [SpeechGateway](#speechgateway)
+    - [Instant TTS Synthesizer](#instant-tts-synthesizer)
+    - [TTS Routing](#tts-routing)
+    - [TTS Caching](#tts-caching)
+    - [Preprocessing](#preprocessing)
+    - [Adjusting Speech Speed](#adjusting-speech-speed)
 
 - [👂 Speech Listener](#-speech-listener)
     - [Preprocessing and Postprocessing](#preprocessing-and-postprocessing)
@@ -102,6 +131,8 @@ For a Python console client that uses local microphone and speaker devices, see 
 - [🥰 Face Expression](#-face-expression)
 
 - [💃 Animation](#-animation)
+
+- [🖼️ Artifacts](#%EF%B8%8F-artifacts)
 
 - [🥳 Character Management](#-character-management)
     - [Get started](#get-started)
@@ -128,6 +159,18 @@ For a Python console client that uses local microphone and speaker devices, see 
     - [🔌 MCP](#-mcp)
     - [🛠️ Built-in Tools](#️-built-in-tools)
     - [🦞 OpenClaw / Hermes](#-openclaw--hermes)
+
+- [📡 Channel Adapter](#-channel-adapter)
+    - [Adapters](#adapters)
+    - [Connecting Multiple Channels](#connecting-multiple-channels)
+    - [Sharing Context Across Channels](#sharing-context-across-channels)
+    - [Channel-aware Processing](#channel-aware-processing)
+
+- [💻 Command Line Interface](#-command-line-interface)
+    - [Built-in Application](#built-in-application)
+    - [OpenAI and LLM Configuration](#openai-and-llm-configuration)
+    - [Built-in TTS Routing](#built-in-tts-routing)
+    - [Script Mode](#script-mode)
 
 - [🛡️ Guardrail](#%EF%B8%8F-guardrail)
 
@@ -170,7 +213,7 @@ You can set model and system prompt when instantiate `AIAvatar`.
 ```python
 aiavatar_app = AIAvatar(
     openai_api_key="YOUR_OPENAI_API_KEY",
-    openai_model="gpt-4o",
+    llm_reasoning_effort="none",
     system_prompt="You are my cat."
 )
 ```
@@ -184,8 +227,7 @@ If you want to configure in detail, create instance of `ChatGPTService` with cus
 from aiavatar.sts.llm.chatgpt import ChatGPTService
 llm = ChatGPTService(
     openai_api_key=OPENAI_API_KEY,
-    model="gpt-4o",
-    temperature=0.0,
+    reasoning_effort="none",
     system_prompt="You are my cat."
 )
 
@@ -196,6 +238,31 @@ aiavatar_app = AIAvatar(
 )
 ```
 
+For Azure OpenAI and other custom configurations, construct the official client
+yourself and pass it through `openai_client`. `model` is always the actual model
+or Azure deployment name; it no longer needs to double as a provider switch.
+
+```python
+import os
+from openai import AsyncAzureOpenAI
+
+azure_client = AsyncAzureOpenAI(
+    api_key=os.environ["AZURE_OPENAI_API_KEY"],
+    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+    api_version=os.environ["AZURE_OPENAI_API_VERSION"],
+)
+llm = ChatGPTService(
+    openai_client=azure_client,
+    model=os.environ["AZURE_OPENAI_DEPLOYMENT"],
+    system_prompt="You are my cat.",
+)
+```
+
+The previous `model="azure"` detection remains available for compatibility but
+emits `DeprecationWarning`. `custom_openai_module` is deprecated in the same way;
+pass a client instance instead. Injected clients are caller-owned and are not
+closed by `ChatGPTService.close()`.
+
 ### OpenAI Responses API
 
 Use `OpenAIResponsesService` to leverage the OpenAI Responses API. Conversation history is managed server-side via `previous_response_id`, eliminating the need for client-side context management.
@@ -204,7 +271,7 @@ Use `OpenAIResponsesService` to leverage the OpenAI Responses API. Conversation 
 from aiavatar.sts.llm.openai_responses import OpenAIResponsesService
 llm = OpenAIResponsesService(
     openai_api_key=OPENAI_API_KEY,
-    model="gpt-5.4",
+    model="gpt-5.6-terra",
     system_prompt="You are my cat."
 )
 
@@ -214,6 +281,10 @@ aiavatar_app = AIAvatar(
 )
 ```
 
+`OpenAIResponsesService` also accepts `openai_client`, including a regular
+`AsyncOpenAI` configured for Azure's `/openai/v1/` endpoint. As with
+`ChatGPTService`, the injected client is caller-owned.
+
 For lower latency, use the WebSocket variant. This maintains persistent connections via a connection pool, which can reduce latency by up to 40%, especially in tool-call-heavy workflows.
 
 ```python
@@ -221,13 +292,17 @@ For lower latency, use the WebSocket variant. This maintains persistent connecti
 from aiavatar.sts.llm.openai_responses_websocket import OpenAIResponsesWebSocketService
 llm = OpenAIResponsesWebSocketService(
     openai_api_key=OPENAI_API_KEY,
-    model="gpt-5.4",
+    model="gpt-5.6-terra",
     reasoning_effort="low",
     system_prompt="You are my cat."
 )
 ```
 
-NOTE: The WebSocket variant does not support the `temperature` parameter. Use `reasoning_effort` ("none", "low", "medium", "high") instead to control response behavior. Dynamic Tool Calls are not supported in either variant, as the server-side history management via `previous_response_id` is incompatible with the pre-flight tool filtering calls.
+NOTE: The WebSocket variant does not support the `temperature` parameter. Use `reasoning_effort` ("none", "low", "medium", "high", "xhigh", "max") instead to control response behavior. Dynamic Tool Calls are not supported in either variant, as the server-side history management via `previous_response_id` is incompatible with the pre-flight tool filtering calls.
+
+The WebSocket variant uses the event protocol directly rather than an OpenAI
+HTTP client. For Azure, set `ws_url` to the resource's `/openai` WebSocket base
+and set `model` to the deployment name; no `"azure"` model sentinel is needed.
 
 
 ### Claude
@@ -361,43 +436,98 @@ llm = ChatGPTService(
 ```
 
 
-## 🗣️　Voice
+## 🗣️　Speech Synthesizer
 
-You can set speaker id and the base url for VOICEVOX server when instantiate `AIAvatar`.
+You can use a variety of text-to-speech (TTS) services as `SpeechSynthesizer` components.
+
+### VOICEVOX
+
+[VOICEVOX](https://voicevox.hiroshiba.jp) is a free text-to-speech engine popular for its wide variety of Japanese character voices. AIAvatarKit uses `VoicevoxSpeechSynthesizer` by default, and you can configure the speaker ID and VOICEVOX server URL directly when initializing an adapter.
 
 ```python
-aiavatar_app = AIAvatar(
+aiavatar_app = AIAvatarWebSocketServer(
     openai_api_key="YOUR_OPENAI_API_KEY",
     # 46 is Sayo. See http://127.0.0.1:50021/speakers to get all ids for characters
-    voicevox_speaker=46
+    voicevox_speaker=46,
+    voicevox_url="http://127.0.0.1:50021",
 )
 ```
 
-If you want to configure in detail, create instance of `VoicevoxSpeechSynthesizer` with custom parameters and set it to `AIAvatar`.
-Here is the example for [AivisSpeech](https://aivis-project.com).
+For more control, create a `VoicevoxSpeechSynthesizer` instance with custom parameters.
 
 ```python
-# Create VoicevoxSpeechSynthesizer with AivisSpeech configurations
 from aiavatar.sts.tts.voicevox import VoicevoxSpeechSynthesizer
-tts = VoicevoxSpeechSynthesizer(
-    base_url="http://127.0.0.1:10101",  # Your AivisSpeech API server
-    speaker="888753761"   # Anneli
-)
 
-# Create AIAvatar with VoicevoxSpeechSynthesizer
-aiavatar_app = AIAvatar(
-    tts=tts,
-    openai_api_key=OPENAI_API_KEY   # API Key for LLM and STT
+tts = VoicevoxSpeechSynthesizer(
+    base_url="http://127.0.0.1:50021",
+    speaker=46,  # Sayo; see /speakers on your VOICEVOX server for other IDs
+    timeout=10.0,
+    cache_dir="./tts_cache/voicevox",
+    debug=True,
 )
 ```
 
-You can also set speech controller that uses alternative Text-to-Speech services. We support Azure, Google, OpenAI and any other TTS services supported by [SpeechGateway](https://github.com/uezo/speech-gateway) such as Style-Bert-VITS2 and Aivis Cloud API.
+[AivisSpeech](https://aivis-project.com) can also be used with `VoicevoxSpeechSynthesizer` because it provides a VOICEVOX-compatible API.
+
+```python
+tts = VoicevoxSpeechSynthesizer(
+    base_url="http://127.0.0.1:10101",  # Your AivisSpeech API server
+    speaker="888753761",  # Anneli
+)
+```
+
+### Azure
 
 ```python
 from aiavatar.sts.tts.azure import AzureSpeechSynthesizer
+
+tts = AzureSpeechSynthesizer(
+    azure_api_key="YOUR_AZURE_API_KEY",
+    azure_region="YOUR_AZURE_REGION",
+    speaker="ja-JP-NanamiNeural",
+)
+```
+
+### Google
+
+```python
 from aiavatar.sts.tts.google import GoogleSpeechSynthesizer
+
+tts = GoogleSpeechSynthesizer(
+    google_api_key="YOUR_GOOGLE_API_KEY",
+    speaker="ja-JP-Neural2-B",
+)
+```
+
+### OpenAI
+
+```python
 from aiavatar.sts.tts.openai import OpenAISpeechSynthesizer
+
+tts = OpenAISpeechSynthesizer(
+    openai_api_key="YOUR_OPENAI_API_KEY",
+    speaker="sage",
+    audio_format="wav",
+    sample_rate=16000,
+)
+```
+
+`sample_rate` selects the final sample rate for synthesized audio. The built-in postprocessor resamples PCM WAV output in-process without ffmpeg. For other formats, add a compatible `TTSPostprocessor`.
+
+Irodori-TTS can also be used through `OpenAISpeechSynthesizer` with [Irodori-TTS-Server](https://github.com/Aratako/Irodori-TTS-Server/), an OpenAI Text-to-Speech API-compatible server.
+
+### SpeechGateway
+
+[SpeechGateway](https://github.com/uezo/speech-gateway) provides a unified API for speech synthesis, along with features such as response caching and language-based routing across TTS services.
+
+```python
 from aiavatar.sts.tts.speech_gateway import SpeechGatewaySpeechSynthesizer
+
+tts = SpeechGatewaySpeechSynthesizer(
+    service_name="sbv2",
+    speaker="0-0",
+    tts_url="http://127.0.0.1:8000/tts",
+)
 ```
 
 ### Instant TTS Synthesizer
@@ -563,7 +693,47 @@ tts = create_instant_synthesizer(
 The `{text}` and `{language}` placeholders in params, headers, and json will be automatically replaced with the processed text and language values during synthesis.
 
 
-You can also make custom tts components by impelemting `SpeechSynthesizer` interface.
+You can also make custom TTS components by implementing the `SpeechSynthesizer` interface. The base `synthesize()` method handles empty text, preprocessing, caching, and postprocessing, so a minimal implementation only needs to provide `generate()`. The default cache key uses the synthesizer class, processed text, style information, and language. Override `make_synthesis_cache_key()` when synthesis also depends on provider-specific request settings such as the model, speaker, or speed. The `text` passed to both methods has already been preprocessed.
+
+### TTS Routing
+
+Use `SpeechSynthesizerRouter` to select one of several TTS synthesizers for each request. Register a synchronous routing function with `@tts.route`; it receives the text, style information, and language, and returns a key from the `synthesizers` mapping.
+
+```python
+import os
+
+from aiavatar.sts.tts import SpeechSynthesizerRouter
+from aiavatar.sts.tts.openai import OpenAISpeechSynthesizer
+from aiavatar.sts.tts.voicevox import VoicevoxSpeechSynthesizer
+
+japanese_tts = VoicevoxSpeechSynthesizer(
+    sample_rate=16000,
+    cache_dir="./tts_cache/voicevox",
+)
+multilingual_tts = OpenAISpeechSynthesizer(
+    openai_api_key=os.environ["OPENAI_API_KEY"],
+    sample_rate=16000,
+    cache_dir="./tts_cache/openai",
+)
+
+tts = SpeechSynthesizerRouter(
+    synthesizers={
+        "ja": japanese_tts,
+        "multi": multilingual_tts,
+    },
+    default="ja",
+)
+
+@tts.route
+def select_tts(text, style_info, language):
+    if not language:
+        return None  # Use the default route
+    if language.lower().split("-", 1)[0] == "ja":
+        return "ja"
+    return "multi"
+```
+
+The router only selects and delegates. Preprocessors, postprocessors, sample-rate conversion, and caching belong to each registered synthesizer and run after routing. This allows language-specific processing, such as applying `AlphabetToKanaPreprocessor` only to the Japanese synthesizer. Cached audio is also stored and read by the selected synthesizer rather than by the router.
 
 ### TTS Caching
 
@@ -582,8 +752,7 @@ tts = AzureSpeechSynthesizer(
 - Cache files are stored as `{sha256_hash}.{cache_ext}` in the specified directory
 - The hash is computed from all request parameters (URL, headers, body, etc.)
 - Set `cache_dir=None` (default) to disable caching
-- Works with all TTS classes: Azure, OpenAI, Google, Voicevox, and InstantSynthesizer
-- `SpeechGatewaySpeechSynthesizer` does not use this cache as it caches on the gateway side
+- Works with all built-in TTS classes, including SpeechGateway and InstantSynthesizer
 
 ### Preprocessing
 
@@ -599,7 +768,6 @@ from aiavatar.sts.tts.preprocessor.alphabet2kana import AlphabetToKanaPreprocess
 # Create preprocessor with kana_map for pre-registered word-reading mappings
 alphabet2kana_preproc = AlphabetToKanaPreprocessor(
     openai_api_key=OPENAI_API_KEY,
-    model="gpt-4o-mini",                      # Model to use (default: gpt-4.1-mini)
     alphabet_length=3,                        # Minimum alphabet length to convert (default: 3)
     special_chars=".'-'−–",                   # Characters that connect words (default: ".'-'−–")
     use_kana_map=True,                        # Enable kana_map mode (default: True)
@@ -620,6 +788,8 @@ with open("kana_map.json", "w") as f:
 with open("kana_map.json") as f:
     kana_map = json.load(f)
 ```
+
+Preprocessors may optionally accept a keyword-only `synthesizer` argument to access shared TTS configuration such as `sample_rate`. Existing preprocessors with the original `process(text, style_info, language)` signature remain supported.
 
 Key features:
 - **kana_map**: Pre-register known word-reading mappings and automatically add LLM results to avoid repeated API calls
@@ -1138,6 +1308,7 @@ turn_end_gate = NamoTurnEndGate(
     name="namo",
     language="ja",   # Japanese model. Use language=None for the multilingual model.
     threshold=0.5,
+    force_end_phrases=["こんにちは"],
     timeout=1.5,
     debug=True,
 )
@@ -1153,6 +1324,10 @@ vad = SileroStreamSpeechDetector(
     debug=True,
 )
 ```
+
+`threshold` is the minimum predicted probability of class 1 ("End of Turn"). Higher values require stronger evidence before ending the turn, so they hold the turn more often.
+
+`force_end_phrases` is an optional list of exact utterances that should end the turn without running the model. Matching ignores case, whitespace, full-width variants, punctuation, and symbols, so `"こんにちは。"` matches `"こんにちは"`. Longer utterances such as `"こんにちは、今日は相談があります"` do not match.
 
 For long recordings, Namo keeps the end of the recognized text when tokenized text exceeds the model limit, because turn-end detection depends most on the final words. If no text is available, `NamoTurnEndGate` defaults to ending the turn. You can change this with `no_text_should_end=False`.
 
@@ -1217,6 +1392,52 @@ vad = SileroStreamSpeechDetector(
 When `depends_on` is set, the LLM gate runs only if one of the named previous gates returned wait. The value can be a string or a list of gate names. In the example above, normal utterances do not call the LLM; the LLM is only called when the filler or Namo gate waits. The primary gate first holds the turn for its own timeout. If the LLM finishes during that wait and returns wait, the manager extends the wait to the LLM timeout, so the `10.0` second LLM timeout takes priority. If the LLM is still pending at the primary gate timeout, the pending LLM result is ignored and the turn ends.
 
 `LLMTurnEndGate` accepts `temperature` and `reasoning_effort`, but only passes them to the API when they are explicitly set. Use the option supported by the model you choose.
+
+#### Session Hold Gate
+
+`SessionHoldTurnEndGate` lets application logic hold the next turn-end candidate for a specific session. Unlike gates that inspect the current audio or recognized text, this gate is armed in advance when the application knows that the next answer may need more thinking time.
+
+For example, a restaurant-search assistant may ask the user to choose a cuisine, describe their preferences, or recall an area or budget. These answers often begin with hesitation and contain pauses, such as "Well... maybe Italian." The assistant can prefix questions like these with a control tag such as `<require_restaurant_preferences />`. When the tag is detected, the session hold gate allows a longer pause for the next user answer instead of ending the turn at the normal silence threshold.
+
+```python
+from aiavatar.sts.llm import LLMResponse
+from aiavatar.sts.vad.silero import SileroSpeechDetector
+from aiavatar.sts.vad.turn_end_gates.session_hold import SessionHoldTurnEndGate
+
+REQUIRE_PREFERENCES_TAG = "<require_restaurant_preferences />"
+
+session_hold_gate = SessionHoldTurnEndGate(debug=True)
+
+vad = SileroSpeechDetector(
+    silence_duration_threshold=0.5,
+    turn_end_gates=[session_hold_gate],
+    debug=True,
+)
+
+# Pass vad to AIAvatar when creating aiavatar_app.
+
+# Prompt convention for the LLM:
+# Prefix a question with <require_restaurant_preferences /> when its answer may
+# require the user to recall details, compare options, or think aloud.
+# Example:
+# <require_restaurant_preferences />What kind of food are you in the mood for?
+
+@aiavatar_app.sts.process_llm_chunk
+async def hold_restaurant_preference_answer(
+    llm_chunk: LLMResponse,
+    session_id: str,
+    user_id: str,
+) -> dict:
+    if REQUIRE_PREFERENCES_TAG in (llm_chunk.text or ""):
+        session_hold_gate.hold(
+            session_id,
+            timeout=3.0,
+            reason="restaurant_preferences",
+        )
+    return {}
+```
+
+The tag is detected while the LLM response is streaming, before the next user turn, and AIAvatarKit removes control tags such as this one from the synthesized voice text. With the settings above, the normal turn-end candidate is detected after 0.5 seconds of silence, and the armed gate can keep the recording open for up to 3.0 additional seconds. The hold is consumed by that candidate; subsequent turns use the normal silence threshold unless another tagged response arms the gate again.
 
 #### Custom Gate
 
@@ -1497,6 +1718,110 @@ This allows emojis like 🥳 to be autonomously displayed in the terminal during
 ## 💃 Animation
 
 Now writing... ✍️
+
+
+## 🖼️ Artifacts
+
+Artifacts let an LLM display an image, chart, presentation, video, web app, or map alongside its spoken response. The Adapter parses registered `<artifact />` control tags, resolves their attributes, and exposes them through `AIAvatarResponse.control_tags`; rendering is implemented by the client. The bundled [WebSocket viewers](examples/websocket/README.md#artifacts-in-the-web-viewers) consume only these structured control tags and do not parse tags from response `text`. Both the standard and 3D viewers support images, charts, presentations, YouTube videos, sandboxed web apps, Google maps, and directions. Artifact tags are excluded from `voice_text`, so they are not read aloud.
+
+Register application-owned artifacts on the Adapter so the LLM only needs to select a short, stable ID:
+
+```python
+ARTIFACTS = {
+    "about_company": {
+        "type": "presentation",
+        "src": "https://speakerdeck.com/player/DECK_ID",
+        "slide": 1,
+        "aspect": "16:9",
+        "title": "About the company",
+    },
+}
+
+aiavatar_app.set_artifacts(ARTIFACTS)
+```
+
+The LLM can display the configured artifact with `<artifact id="about_company" />`. Display and navigation attributes supplied by the LLM override configured defaults, so `<artifact id="about_company" slide="5" />` starts at page 5. When an `id` is present, configured `type` and `src` values are protected and cannot be replaced by tag attributes. When the LLM knows a browser-accessible HTTPS URL, it can also display an image with `<artifact type="image" src="https://example.com/image.png" />` or a YouTube video with `<artifact type="video" src="https://www.youtube.com/watch?v=VIDEO_ID" autoplay-delay="3" />`. Use `<artifact action="clear" />` to hide the currently displayed artifact.
+
+YouTube watch, shortened `youtu.be`, and embed URLs are supported. `autoplay-delay` specifies a fixed delay of 0 to 3600 seconds from displaying the video until its first autoplay attempt and defaults to `0`. The `t` and `start` URL parameters select the initial position within the video; they do not affect the autoplay delay. Browsers may block autoplay with sound, in which case the embedded controls remain available for manual playback.
+
+Web apps use `<artifact type="webapp" src="https://example.com/app" />` and run in a sandboxed iframe. Maps use `<artifact type="map" location="Tokyo Station" />`; directions use `<artifact type="map" origin="Tokyo Station" destination="Tokyo Tower" travel-mode="walking" />`. Maps require a Maps Embed API key in the viewer HTML; restrict it to approved websites and the Maps Embed API. See the [WebSocket example documentation](examples/websocket/README.md#artifacts-in-the-web-viewers) for supported attributes and web-app invocation messages.
+
+The catalog can be changed at runtime:
+
+- `set_artifacts(configs)` replaces the complete catalog.
+- `update_artifacts(configs)` adds or replaces multiple entries while retaining other IDs.
+- `add_artifact(id, config)` adds or replaces one entry.
+
+The catalog belongs to the Adapter and is shared by all sessions. Use an application-level or session-level store instead when generated artifacts must remain private to one user.
+
+Direct artifact URLs cause the user's browser to request the resolved location. The server application is responsible for allowing only URLs that are safe for its users and network environment. `on_response` runs after artifact ID resolution, so it can validate, rewrite, or remove the resolved `control_tags` before delivery:
+
+```python
+from urllib.parse import urlsplit
+
+TRUSTED_ARTIFACT_HOSTS = {"cdn.example.com"}
+
+def is_trusted_artifact_url(source):
+    try:
+        url = urlsplit(source)
+        return (
+            url.scheme == "https"
+            and url.hostname in TRUSTED_ARTIFACT_HOSTS
+            and url.username is None
+            and url.password is None
+        )
+    except ValueError:
+        return False
+
+@aiavatar_app.on_response
+async def validate_artifact_urls(response, _):
+    if not response.control_tags:
+        return
+
+    validated = []
+    for tag in response.control_tags:
+        if tag.name != "artifact":
+            validated.append(tag)
+            continue
+
+        source = tag.attributes.get("src") or tag.attributes.get("href")
+        if source and not is_trusted_artifact_url(source):
+            continue
+        validated.append(tag)
+
+    response.control_tags = validated
+```
+
+A compact system-prompt section is usually sufficient:
+
+```markdown
+## Artifacts
+To display an image, chart, slide, video, map, or route, insert an `<artifact />` tag immediately before the relevant sentence in the response body. Do not read the tag aloud or explain it.
+
+- Registered artifact: `<artifact id="{ARTIFACT_ID}" />`
+- HTTPS URL: `<artifact type="{TYPE}" src="{HTTPS_URL}" />`
+  - Use `image` for an image, `chart` for a chart, `presentation` for slides, or `video` for a YouTube video.
+  - A Docswell viewing URL (`https://www.docswell.com/s/...`) can be used directly as a presentation `src`.
+  - Speaker Deck requires an embed URL (`https://speakerdeck.com/player/...`).
+  - YouTube videos accept `autoplay-delay` from `0` to `3600` as the number of seconds before the first autoplay attempt: `<artifact type="video" src="https://www.youtube.com/watch?v=VIDEO_ID" autoplay-delay="3" />`
+- Map: `<artifact type="map" location="{PLACE_NAME_OR_ADDRESS}" />`
+  - Use this when the user asks to display a map for a place name or address.
+  - Optionally set `zoom` to an integer from `0` to `21`.
+- Directions: `<artifact type="map" origin="{ORIGIN}" destination="{DESTINATION}" travel-mode="{TRAVEL_MODE}" />`
+  - Use `driving` for driving, `walking` for walking, `bicycling` for bicycling, or `transit` for public transit. Omit `travel-mode` when the user does not specify a mode of travel.
+- Presentation controls are available only with `type="presentation"`, not with images, charts, or videos.
+  - Move the displayed presentation to a numbered page: `<artifact type="presentation" slide="3" />`
+  - To set the starting page of a new presentation, specify `id` or `src` together with `slide` in the same tag.
+  - Move relative to the current page: `<artifact type="presentation" offset="+1" />`, `offset="-1"`, `offset="+2"`, and so on.
+  - For relative navigation, use a signed `offset` instead of `slide` and specify it in a single tag.
+  - Never use numbered page navigation when the request is relative to the current page.
+- Never invent unknown IDs or URLs.
+- Only the most recently specified artifact is displayed. A new artifact replaces the previous one.
+- To hide the current artifact, output `<artifact action="clear" />`.
+
+### Available Artifacts
+- `about_company`: Company overview presentation
+```
 
 
 ## 🥳 Character Management
@@ -2043,7 +2368,6 @@ You can build a LINE Bot using the LINE Messaging API.
 # Create LINE Bot adapter
 from aiavatar.adapter.linebot.server import AIAvatarLineBotServer
 aiavatar_app = AIAvatarLineBotServer(
-    openai_model="gpt-5.1",
     system_prompt="You are a cat.",
     openai_api_key=OPENAI_API_KEY,
     channel_access_token=LINEBOT_CHANNEL_ACCESS_TOKEN,
@@ -2116,7 +2440,6 @@ bridge = PostgreSQLChannelContextBridge(
 )
 
 aiavatar_app = AIAvatarLineBotServer(
-    openai_model="gpt-5.1",
     system_prompt="You are a cat.",
     openai_api_key=OPENAI_API_KEY,
     channel_access_token=LINEBOT_CHANNEL_ACCESS_TOKEN,
@@ -2422,7 +2745,9 @@ Admin Panel operations are available under `/admin/api` and use the same authent
 
 You can monitor the entire sequence - what requests are sent to the LLM, how they are interpreted, which tools are invoked, and what responses are generated from specific results or data - to support AIAvatar quality improvements and governance.
 
-Since AIAvatarKit lets you replace the OpenAI client module with an alternative, you can leverage that capability to integrate with [Langfuse](https://langfuse.com).
+AIAvatarKit accepts a pre-configured OpenAI-compatible client instance, so tracing
+wrappers such as [Langfuse](https://langfuse.com) can be configured before the LLM
+service is constructed.
 
 ```sh
 pip install langfuse
@@ -2431,18 +2756,22 @@ pip install langfuse
 ```sh
 export LANGFUSE_SECRET_KEY=sk-lf-XXXXXXXX
 export LANGFUSE_PUBLIC_KEY=pk-lf-XXXXXXXX
-export LANGFUSE_HOST=http://localhost:3000
+export LANGFUSE_BASE_URL=http://localhost:3000
 ```
 
 ```python
-from langfuse.openai import openai as langfuse_openai
+from langfuse.openai import AsyncOpenAI
+
+langfuse_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 llm = ChatGPTService(
-    openai_api_key=OPENAI_API_KEY,
+    openai_client=langfuse_client,
     system_prompt="You are a helpful assistant.",
-    model="gpt-4.1",
-    custom_openai_module=langfuse_openai,   # Set langfuse OpenAI compatible client module
 )
 ```
+
+The same client-injection pattern works with `OpenAIResponsesService`. The raw
+Responses WebSocket transport does not pass through the Langfuse OpenAI client;
+manual instrumentation is required if WebSocket tracing is needed.
 
 
 ## 🦜 AI Agent
@@ -2459,18 +2788,20 @@ weather_tool_spec = {
     "type": "function",
     "function": {
         "name": "get_weather",
+        "description": "Get the current weather and forecast for a location",
         "parameters": {
             "type": "object",
             "properties": {
                 "location": {"type": "string"}
             },
+            "required": ["location"],
         },
     }
 }
 
 # Implement tool and register it with spec
 @aiavatar_app.sts.llm.tool(weather_tool_spec)
-async def get_weather(location: str = None):
+async def get_weather(location: str):
     weather = await weather_api(location=location)  # Call weather API
     return weather  # {"weather": "clear", "temperature": 23.4}
 ```
@@ -2478,6 +2809,8 @@ async def get_weather(location: str = None):
 Alternatively, register the same tool programmatically:
 
 ```python
+from aiavatar.sts.llm import Tool
+
 aiavatar_app.sts.llm.add_tool(
     Tool("get_weather", weather_tool_spec, get_weather)
 )
@@ -2490,11 +2823,11 @@ Before creating your own tools, start with the example tools:
 
 ```python
 # Google Search
-from examples.tools.gemini_websearch import GeminiWebSearchTool
+from aiavatar.sts.llm.tools.gemini_websearch import GeminiWebSearchTool
 aiavatar_app.sts.llm.add_tool(GeminiWebSearchTool(gemini_api_key=GEMINI_API_KEY))
 
 # Web Scraper
-from examples.tools.webscraper import WebScraperTool
+from aiavatar.sts.llm.tools.webscraper import WebScraperTool
 aiavatar_app.sts.llm.add_tool(WebScraperTool())
 ```
 
@@ -3220,6 +3553,385 @@ openclaw_tool.update_openclaw_config("user_id", OpenClawConfig(
 ```
 
 
+## 📡 Channel Adapter
+
+A channel adapter connects a client or an external messaging service to an `STSPipeline`. An adapter can create its own pipeline from its convenience parameters, or attach to an existing pipeline through the `sts` parameter. Attaching multiple adapters to one pipeline lets all channels share the same VAD, STT, LLM, TTS, conversation store, and pipeline hooks.
+
+Each adapter registers itself as a response handler when it is created. No additional registration is required. A `session_id` must identify only one active adapter session within a shared pipeline so that responses can be routed to the correct channel.
+
+### Adapters
+
+The following examples assume that `app` is a FastAPI application and `sts` is an existing `STSPipeline`:
+
+```python
+import os
+from fastapi import FastAPI
+from aiavatar.sts import STSPipeline
+from aiavatar.sts.stt.openai import OpenAISpeechRecognizer
+
+app = FastAPI()
+sts = STSPipeline(
+    stt=OpenAISpeechRecognizer(
+        openai_api_key=os.environ["OPENAI_API_KEY"],
+    ),
+    llm_openai_api_key=os.environ["OPENAI_API_KEY"],
+    llm_system_prompt="You are a helpful assistant.",
+)
+```
+
+When `sts` is supplied to an adapter, configure pipeline-level behavior on that shared `STSPipeline`. The adapter's other arguments configure only its transport and channel-specific behavior.
+
+#### WebSocket Adapter
+
+`AIAvatarWebSocketServer` accepts streaming microphone audio and performs VAD on the server. Its default channel name is `"websocket"`.
+
+```python
+from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer
+
+websocket_adapter = AIAvatarWebSocketServer(
+    sts=sts,
+    channel="websocket",
+    api_key="YOUR_WEBSOCKET_API_KEY",  # Optional
+)
+app.include_router(websocket_adapter.get_websocket_router(path="/ws"))
+```
+
+See [WebSocket](#-websocket) for the wire protocol and client example.
+
+#### REST API Adapter
+
+`AIAvatarHttpServer` exposes the streaming HTTP/SSE API. Its default channel name is `"http"`.
+
+```python
+from aiavatar.adapter.http.server import AIAvatarHttpServer
+
+http_adapter = AIAvatarHttpServer(
+    sts=sts,
+    channel="http",
+    api_key="YOUR_HTTP_API_KEY",  # Optional
+)
+app.include_router(http_adapter.get_api_router(path="/chat"))
+```
+
+See [RESTful API (SSE)](#-restful-api-sse) for request and response formats.
+
+#### Twilio Voice Adapter
+
+`AIAvatarTwilioServer` connects Twilio Media Streams to the pipeline. Its default channel name is `"phone"`. If the router is mounted at `/twilio`, include that prefix in `webhook_base_url` so the generated WebSocket URL points to `/twilio/ws`.
+
+```python
+import os
+from aiavatar.adapter.twilio.server import AIAvatarTwilioServer
+
+twilio_voice_adapter = AIAvatarTwilioServer(
+    sts=sts,
+    account_sid=os.environ["TWILIO_ACCOUNT_SID"],
+    auth_token=os.environ["TWILIO_AUTH_TOKEN"],
+    phone_number=os.environ["TWILIO_PHONE_NUMBER"],
+    webhook_base_url="https://your-domain.example/twilio",
+    channel="phone",
+)
+app.include_router(twilio_voice_adapter.get_router(), prefix="/twilio")
+```
+
+Configure `https://your-domain.example/twilio/voice` as the Twilio voice webhook.
+
+#### Asterisk Adapter
+
+The Asterisk adapter connects ARI call control and a bidirectional Media
+WebSocket to an existing `STSPipeline`. Setup, transfer strategies, lifecycle
+behavior, Asterisk configuration examples, and operational constraints are
+documented in the [Asterisk adapter guide](https://github.com/uezo/aiavatarkit/blob/main/aiavatar/adapter/asterisk/README.md).
+
+#### Twilio SMS Adapter
+
+Voice and SMS use separate adapters because they have different session and response-delivery mechanisms. `AIAvatarTwilioSMSServer` requires an existing pipeline and defaults to the `"sms"` channel. It can reuse the Twilio client created by the voice adapter.
+
+```python
+from aiavatar.adapter.twilio.server import AIAvatarTwilioSMSServer
+
+twilio_sms_adapter = AIAvatarTwilioSMSServer(
+    sts=sts,
+    twilio_client=twilio_voice_adapter.twilio_client,
+    phone_number=os.environ["TWILIO_PHONE_NUMBER"],
+    channel="sms",
+)
+app.include_router(twilio_sms_adapter.get_router(path="/sms"), prefix="/twilio")
+```
+
+Configure `https://your-domain.example/twilio/sms` as the Twilio messaging webhook. If voice is not enabled, pass `account_sid` and `auth_token` directly instead of `twilio_client`.
+
+#### LINE Bot Adapter
+
+`AIAvatarLineBotServer` receives LINE Messaging API webhooks. Its default channel name is `"linebot"`.
+
+```python
+import os
+from aiavatar.adapter.linebot.server import AIAvatarLineBotServer
+
+line_adapter = AIAvatarLineBotServer(
+    sts=sts,
+    channel_access_token=os.environ["LINEBOT_CHANNEL_ACCESS_TOKEN"],
+    channel_secret=os.environ["LINEBOT_CHANNEL_SECRET"],
+    channel="linebot",
+)
+app.include_router(line_adapter.get_api_router(), prefix="/line")
+```
+
+Configure `https://your-domain.example/line/webhook` as the webhook URL in the LINE Developers Console. See [LINE Bot](#-line-bot) for supported messages and customization hooks.
+
+#### Chat Completions Adapter
+
+`AIAvatarChatCompletionsServer` exposes an experimental OpenAI-compatible Chat Completions endpoint. Its default channel ID is `"chatcompletions"`.
+
+```python
+from aiavatar.adapter.chatcompletions.server import AIAvatarChatCompletionsServer
+
+chat_completions_adapter = AIAvatarChatCompletionsServer(
+    sts=sts,
+    channel_id="chatcompletions",
+)
+app.include_router(chat_completions_adapter.get_api_router())
+```
+
+Every request must include a bearer token. The adapter uses that token as the channel-specific user key for context mapping, so callers should use a stable token for the same user and must not share a token between users.
+
+### Connecting Multiple Channels
+
+Create the pipeline once, then pass it to every additional adapter. For example, the following application creates the pipeline through the WebSocket adapter and then attaches a LINE Bot adapter to it:
+
+```python
+import os
+from fastapi import FastAPI
+from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer
+from aiavatar.adapter.linebot.server import AIAvatarLineBotServer
+
+app = FastAPI()
+
+# The first adapter creates and owns the shared pipeline configuration.
+websocket_adapter = AIAvatarWebSocketServer(
+    openai_api_key=os.environ["OPENAI_API_KEY"],
+    system_prompt="You are a helpful assistant.",
+    channel="websocket",
+)
+
+# The second adapter attaches to the exact same pipeline instance.
+line_adapter = AIAvatarLineBotServer(
+    sts=websocket_adapter.sts,
+    channel_access_token=os.environ["LINEBOT_CHANNEL_ACCESS_TOKEN"],
+    channel_secret=os.environ["LINEBOT_CHANNEL_SECRET"],
+    channel="linebot",
+)
+
+app.include_router(websocket_adapter.get_websocket_router(path="/ws"))
+app.include_router(line_adapter.get_api_router(), prefix="/line")
+```
+
+This shares pipeline components and conversation storage, but it does not by itself establish that a WebSocket user and a LINE user are the same person. Use a channel context bridge when conversation continuity must follow a user across channels.
+
+### Sharing Context Across Channels
+
+`ChannelContextBridge` maps each `(channel_id, channel_user_id)` pair to an application-level `user_id`, then stores the latest `context_id` for that application user. Adapters mapped to the same application user therefore resume the same conversation until the bridge timeout expires.
+
+Use one bridge instance for all adapters. LINE Bot and Chat Completions use their supplied bridge internally. Bind the bridge to the WebSocket adapter:
+
+```python
+import os
+from aiavatar.adapter.channel_context_bridge import SQLiteChannelContextBridge
+from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer
+from aiavatar.adapter.linebot.server import AIAvatarLineBotServer
+
+bridge = SQLiteChannelContextBridge(
+    db_path="channel_context_bridge.db",
+    timeout=3600,
+)
+
+websocket_adapter = AIAvatarWebSocketServer(
+    sts=sts,
+    channel="websocket",
+)
+bridge.bind(websocket_adapter, channel_id="websocket")
+
+line_adapter = AIAvatarLineBotServer(
+    sts=sts,
+    channel_access_token=os.environ["LINEBOT_CHANNEL_ACCESS_TOKEN"],
+    channel_secret=os.environ["LINEBOT_CHANNEL_SECRET"],
+    channel="linebot",
+    channel_context_bridge=bridge,
+)
+```
+
+The bridge's `channel_id` is the identity namespace used to look up a channel user. It should normally match the adapter's actual channel name—for example, bind an adapter created with `channel="websocket_m5"` using `channel_id="websocket_m5"`. A renamed tag such as `"desktop_robot"` in `insert_channel_tag` is only an LLM-facing label and is not used by the bridge.
+
+By default, an automatically created mapping uses the channel user ID as the application user ID. If both channels provide the same stable user ID, they therefore share context without an explicit link. When the channel user IDs differ, link both identities to one application user from a trusted account-linking or startup flow:
+
+```python
+await bridge.link_channel_user(
+    channel_id="websocket",
+    channel_user_id="web-user-123",
+    user_id="user-123",
+)
+await bridge.link_channel_user(
+    channel_id="linebot",
+    channel_user_id="U0123456789abcdef",
+    user_id="user-123",
+)
+```
+
+The WebSocket client should continue to send its channel-specific ID (`"web-user-123"`) as `user_id`; the bridge resolves it to `"user-123"` before the request reaches the pipeline. After `timeout` seconds without a context update, a request that does not supply its own `context_id` starts a new context.
+
+For PostgreSQL storage and custom user ID generation, see [Channel Context Bridge](#-channel-context-bridge) in Deep Dive.
+
+### Channel-aware Processing
+
+Every adapter assigns a channel to its requests. The adapters described above default to `"websocket"`, `"http"`, `"phone"`, `"sms"`, `"linebot"`, and `"chatcompletions"`. Override the adapter's `channel` (or `channel_id` for Chat Completions) when the application needs a more specific name, such as `"websocket_m5"`.
+
+Set `insert_channel_tag` on the shared pipeline to expose that channel to the LLM:
+
+```python
+sts.insert_channel_tag = [
+    "phone",                                  # Keep the channel name.
+    "sms",
+    ("websocket_m5", "desktop_robot"),       # Rename it for the LLM.
+]
+```
+
+The pipeline then transforms requests as follows before invoking the LLM:
+
+```text
+# phone
+<channel name='phone' />Hello
+
+# websocket_m5
+<channel name='desktop_robot' />Hello
+```
+
+Channels not included in the list receive no tag. Set `insert_channel_tag=True` to insert every request's channel without filtering, or `False` to disable insertion.
+
+Describe the desired behavior in the system prompt, for example:
+
+```text
+When <channel name='sms' /> is present, respond briefly without speech-oriented phrasing.
+When <channel name='phone' /> is present, use natural spoken language.
+When <channel name='desktop_robot' /> is present, you may refer to the robot's body and surroundings.
+```
+
+The LINE Bot, Twilio SMS, and Chat Completions adapters automatically add their channel names to the shared pipeline's `skip_tts_channels`. For another text-only adapter, add its channel explicitly:
+
+```python
+sts.skip_tts_channels.append("your_text_channel")
+```
+
+See [Channel-aware Processing](#-channel-aware-processing) in Deep Dive for additional details.
+
+
+## 💻 Command Line Interface
+
+The `aiavatar` command starts a ready-to-use WebSocket application when no script is supplied, or runs a custom Python ASGI application in script mode. Use `aiavatar --help` to list command-line options such as `--host` and `--port`.
+
+### Built-in Application
+
+The built-in application uses `SileroStreamSpeechDetector` with filler and Namo Turn gates, `OpenAISpeechRecognizer`, `OpenAIResponsesWebSocketService`, and the WebSocket Adapter. Japanese speech routes to `VoicevoxSpeechSynthesizer` with `AlphabetToKanaPreprocessor`; other languages route to `OpenAISpeechSynthesizer`.
+
+If the Namo Turn optional dependencies are unavailable in an interactive
+terminal, the command offers to install `aiavatar[namo-turn]` and continues the
+same launch after installation. Declining starts the application without Namo
+Turn. In a non-interactive environment, the command logs a warning and starts
+without Namo Turn rather than attempting an installation. Script mode does not
+inspect or install Namo Turn dependencies because the script owns its component
+graph.
+
+The command downloads the WebSocket example UI into `html/` only when that directory does not already exist. The application is then available at http://127.0.0.1:8000/, with the Admin Panel at http://127.0.0.1:8000/admin/.
+
+See [`.env.example`](.env.example) for all built-in application settings. The command automatically loads `.env` from the current working directory without overriding variables already present in the process environment:
+
+```sh
+cp .env.example .env
+# Edit OPENAI_API_KEY in .env
+aiavatar
+```
+
+The Admin Config view can update safe members of the running Pipeline, components, and Adapter. These changes are intentionally volatile and are discarded when the process exits. Component composition remains owned by Python application code.
+
+### OpenAI and LLM Configuration
+
+`OPENAI_API_KEY` and `OPENAI_BASE_URL` are the shared defaults for STT, LLM, and OpenAI TTS. A component-specific value takes precedence when set:
+
+| Component | API key | Base URL |
+| --- | --- | --- |
+| STT | `AIAVATAR_STT_OPENAI_API_KEY` | `AIAVATAR_STT_OPENAI_BASE_URL` |
+| LLM | `AIAVATAR_LLM_OPENAI_API_KEY` | `AIAVATAR_LLM_OPENAI_BASE_URL` |
+| TTS and its preprocessors | `AIAVATAR_TTS_OPENAI_API_KEY` | `AIAVATAR_TTS_OPENAI_BASE_URL` |
+
+Command options take precedence over their corresponding shared environment variables, so `--openai-api-key` and `--openai-base-url` affect the launched process. Component-specific environment variables still take precedence over those shared values. Prefer environment variables or the hidden API-key prompt because command arguments may be recorded in shell history and process listings.
+
+Set `AIAVATAR_LLM_MODEL` or `AIAVATAR_LLM_SYSTEM_PROMPT` before startup to override the default application's LLM model or system prompt:
+
+```sh
+AIAVATAR_LLM_MODEL=gpt-5.6-terra \
+AIAVATAR_LLM_SYSTEM_PROMPT="You are a helpful voice assistant." \
+OPENAI_API_KEY=sk-... aiavatar
+```
+
+The default LLM API is the OpenAI Responses WebSocket API. Set `AIAVATAR_LLM_API=chat-completions` or pass `--llm-api chat-completions` for an OpenAI-compatible service that only implements Chat Completions.
+
+For an OpenAI-compatible endpoint that uses `extra_body` instead of OpenAI's `reasoning_effort`, pass a JSON object through `AIAVATAR_LLM_EXTRA_BODY` or `--llm-extra-body`. Supplying a non-empty object disables the default `reasoning_effort="none"`; the command option takes precedence. Set `AIAVATAR_LLM_REASONING_EFFORT` when the provider needs an explicit value, or set it to `omit` to suppress the field independently of `extra_body`.
+
+```sh
+aiavatar --llm-extra-body '{"thinking":{"type":"disabled"}}'
+```
+
+For example, STT and TTS can continue using OpenAI while only the LLM uses an OpenAI-compatible Chat Completions endpoint:
+
+```sh
+OPENAI_API_KEY=sk-openai-... \
+AIAVATAR_LLM_OPENAI_API_KEY=provider-key \
+AIAVATAR_LLM_OPENAI_BASE_URL=https://provider.example/v1 \
+AIAVATAR_LLM_MODEL=provider/model \
+aiavatar --llm-api chat-completions
+```
+
+### Built-in TTS Routing
+
+Japanese and non-Japanese TTS are independent routes. `AIAVATAR_JA_TTS` defaults to `voicevox`, while `AIAVATAR_MULTI_TTS` defaults to `openai`; either route can select `voicevox`, `openai`, or `instant`. The corresponding `AIAVATAR_JA_TTS_CONFIG` and `AIAVATAR_MULTI_TTS_CONFIG` JSON objects override that route's provider options. `--ja-tts` and `--multi-tts` override only the provider selection.
+
+Shared VOICEVOX and OpenAI defaults remain available through `AIAVATAR_VOICEVOX_*` and `AIAVATAR_OPENAI_TTS_*`. Route config values take precedence. Japanese TTS enables `AlphabetToKanaPreprocessor` by default and the multi route disables it; set `"alphabet_to_kana": false` or `true` in the applicable route config to override that behavior.
+
+`instant` maps the route config to `create_instant_synthesizer()`. It is intentionally limited to a single HTTP request whose raw response body is uncompressed PCM WAV audio. Authentication headers, request parameters, and JSON bodies are supplied directly in the config. More complex response parsing, encoded audio extraction, conversion, or authentication logic belongs in a Python application script.
+
+For example, Aivis Cloud can be configured as an instant Japanese TTS. The API key is part of the private process environment and must not be committed:
+
+```sh
+AIAVATAR_JA_TTS=instant \
+AIAVATAR_JA_TTS_CONFIG='{"method":"POST","url":"https://api.aivis-project.com/v1/tts/synthesize","headers":{"Authorization":"Bearer YOUR_AIVIS_API_KEY","Content-Type":"application/json"},"json":{"model_uuid":"YOUR_MODEL_UUID","text":"{text}","output_format":"wav","output_sampling_rate":16000,"output_audio_channels":"mono","use_ssml":false},"cache_dir":"ttscache/aivis"}' \
+aiavatar
+```
+
+### Script Mode
+
+The command can also run a Python ASGI application that exports `app`:
+
+```sh
+aiavatar run.py
+```
+
+In script mode, the script owns the complete component graph, Adapter, Admin setup, routes, and lifespan. The command only loads the application, supplies process-level options such as `--host` and `--port`, and runs Uvicorn. `python -m uvicorn run:app` remains fully supported.
+
+Starter applications can reuse only the built-in component defaults while keeping the Pipeline and Adapter explicit and easy to customize:
+
+```python
+from aiavatar.cli import build_components
+
+components = build_components()
+vad, stt, llm, tts = components
+
+# Assemble STSPipeline, the Adapter, hooks, and FastAPI here.
+# Await components.close() from the application's shutdown path.
+```
+
+Pass any custom component to `build_components(vad=..., stt=..., llm=..., tts=...)`; only omitted components are created. If STT is supplied while VAD is omitted, the custom STT is used by the default streaming VAD. The helper deliberately does not create a Pipeline, Adapter, routes, or application lifespan.
+
+
 ## 🧪 Evaluation
 
 AIAvatarKit includes a comprehensive evaluation framework for testing and assessing AI avatar conversations. The `DialogEvaluator` enables scenario-based conversation execution with automatic evaluation capabilities.
@@ -3629,7 +4341,6 @@ First, define your `AIAvatar` instance with a system prompt containing placehold
 ```python
 aiavatar_app = AIAvatar(
     openai_api_key="YOUR_OPENAI_API_KEY",
-    model="gpt-4o",
     system_prompt="User's name is {name}."
 )
 ```
@@ -3651,17 +4362,17 @@ Placeholders in the system prompt, such as `{name}`, will be replaced with the c
 When calling `LLMService.chat_stream` directly (outside the Speech-to-Speech pipeline), you can override model-specific parameters on a per-request basis using `inline_llm_params`.
 
 ```python
-# Override model and temperature for a single call
+# Override provider-supported generation parameters for a single call
 async for chunk in llm.chat_stream(
     context_id="ctx_001",
     user_id="user_001",
     text="Hello!",
-    inline_llm_params={"model": "gpt-4.1-mini", "temperature": 0.0}
+    inline_llm_params={"reasoning_effort": "none", "temperature": 0.0}
 ):
     print(chunk.text, end="", flush=True)
 ```
 
-The key-value pairs in `inline_llm_params` are merged into the underlying API call parameters, so any parameter accepted by the provider's API can be specified. The exact keys depend on the LLM service:
+The key-value pairs in `inline_llm_params` are merged into the underlying API call parameters, so any parameter accepted by the provider's API can be specified. AIAvatarKit does not validate combinations such as `temperature` plus `reasoning_effort`; the selected endpoint and model must support them. The exact keys depend on the LLM service:
 
 | Service | Example keys |
 |---|---|
@@ -3835,140 +4546,8 @@ await self.llm.context_manager.add_histories(
 llm = ChatGPTService(
     openai_api_key=OPENAI_API_KEY,
     system_prompt="You are a helpful virtual assistant.",
-    model="gpt-4.1",
-    shared_context_id=["shared_context_id"]
+    shared_context_ids=["shared_context_id"]
 )
-```
-
-
-### 🔗 Channel Context Bridge
-
-`ChannelContextBridge` maps channel-specific user IDs (e.g. LINE user ID, Twilio phone number) to app-level user IDs and persists conversation context (`context_id`) per user across channels. This is essential when some channels (e.g. Twilio) cannot pass `context_id` from the client side.
-
-It manages two separate concerns:
-- **Channel Users**: keyed by `(channel_id, channel_user_id)`, maps to an app-level `user_id` with arbitrary `data`.
-- **User Contexts**: keyed by `user_id`, stores `context_id` with automatic expiry based on `timeout` (default: 3600 seconds).
-
-The LINE adapter uses `ChannelContextBridge` internally. For WebSocket or other adapters, use `bind()` to automatically sync context via adapter hooks:
-
-```python
-from aiavatar.adapter.channel_context_bridge import SQLiteChannelContextBridge
-
-bridge = SQLiteChannelContextBridge(db_path="aiavatar.db", timeout=3600)
-bridge.bind(aiavatar_app, channel_id="websocket")
-```
-
-Or register hooks manually:
-
-```python
-from aiavatar.adapter.channel_context_bridge import SQLiteChannelContextBridge, UserContext
-
-bridge = SQLiteChannelContextBridge(db_path="aiavatar.db", timeout=3600)
-
-@aiavatar_app.on_session_start
-async def on_session_start(request, session_data):
-    if not request.user_id:
-        return
-
-    channel_user = await bridge.get_channel_user("websocket", request.user_id, auto_create=True)
-
-    # Restore application-level user_id if mapped
-    if channel_user.user_id != request.user_id:
-        request.user_id = channel_user.user_id
-
-    # Restore context_id
-    ctx = await bridge.get_context(request.user_id)
-    if ctx and ctx.context_id:
-        request.context_id = ctx.context_id
-
-@aiavatar_app.on_response
-async def on_response(response, _):
-    if response.type == "start" and response.user_id and response.context_id:
-        await bridge.upsert_context(UserContext(
-            user_id=response.user_id,
-            context_id=response.context_id,
-        ))
-```
-
-**Auto-create behavior**: When `get_channel_user()` is called with `auto_create=True` and no matching record exists, a new channel user is automatically created. By default, the channel user ID is used as the app-level user ID (e.g. a LINE user ID becomes the app-level user ID). To generate a custom user ID instead, use the `create_user_id` decorator:
-
-```python
-from uuid import uuid4
-
-@bridge.create_user_id
-def create_user_id(channel_id, channel_user_id):
-    return str(uuid4())
-```
-
-The function receives `(channel_id, channel_user_id)` and returns the app-level user ID to assign.
-
-**Cross-channel context sharing**: When the same `user_id` is linked across multiple channels, they share the same `context_id`, maintaining conversation continuity. Use `link_channel_user()` to map different channel user IDs to a single app-level user.
-
-**PostgreSQL backend**:
-
-```python
-from aiavatar.adapter.channel_context_bridge.postgres import PostgreSQLChannelContextBridge
-
-bridge = PostgreSQLChannelContextBridge(
-    host="localhost",
-    port=5432,
-    dbname="aiavatar",
-    user="postgres",
-    password="your_password",
-    timeout=3600,
-)
-```
-
-
-### 📡 Channel-aware Processing
-
-When your AI avatar serves multiple channels (WebSocket, phone, SMS, LINE, etc.), you can make the pipeline aware of which channel each request comes from.
-
-#### Channel Tag Insertion
-
-Enable `insert_channel_tag` to automatically prepend a `<channel>` tag to the user's message before sending it to the LLM. This lets the LLM adjust its response style based on the channel.
-
-```python
-# Twilio adapter (channel defaults to "phone")
-app = AIAvatarTwilioServer(
-    channel="phone",
-    insert_channel_tag=True,
-)
-```
-
-With `insert_channel_tag=True`, the LLM receives input like:
-
-```
-<channel name='phone' />Hello, how are you?
-```
-
-You can instruct the LLM in the system prompt to behave differently per channel:
-
-```
-When <channel name='sms' />, keep responses short and text-friendly.
-When <channel name='phone' />, use natural conversational language.
-```
-
-For voice-based adapters (WebSocket, Twilio), the channel is stored in VAD session data and automatically set on each request. For text-based adapters (LINE Bot), the channel is set directly on the request.
-
-#### Skip TTS for Text Channels
-
-The Twilio adapter skips TTS for SMS by default (`skip_tts_channels=["sms"]`), since text messages don't need speech synthesis.
-
-```python
-# Default: skips TTS for SMS
-app = AIAvatarTwilioServer()
-
-# Customize which channels skip TTS
-app = AIAvatarTwilioServer(
-    skip_tts_channels=["sms", "chat"],
-)
-```
-
-In an omni-channel setup, you can also configure this on the pipeline directly:
-
-```python
-app.sts.skip_tts_channels = ["sms", "linebot"]
 ```
 
 
