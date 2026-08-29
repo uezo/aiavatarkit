@@ -118,16 +118,20 @@ async def test_chat(aiavatar_app: AIAvatar):
     try:
         # Just chat
         response = await chat(aiavatar_app, text="こんにちは", session_id=session_id)
-        assert "こんにちは" in response.text
-        assert response.context_id is not None
+        # Keep pytest assertion output from rendering response.audio_data.
+        response_text = response.text
         context_id = response.context_id
+        assert "こんにちは" in response_text
+        assert context_id is not None
 
         # Context
         await chat(aiavatar_app, text="旅行で悩んでいます。東京、京都、福岡のいずれかに。", session_id=session_id, context_id=context_id)
         response = await chat(aiavatar_app, text="おすすめはどこ？場所だけ答えて。それ以外は何も言わないで", session_id=session_id, context_id=context_id)
-        assert "東京" in response.text or "京都" in response.text or "福岡" in response.text
-        trans_text = transcribe(response.audio_data)
-        assert response.audio_data != b""
+        response_text = response.text
+        audio_data = response.audio_data
+        assert "東京" in response_text or "京都" in response_text or "福岡" in response_text
+        trans_text = transcribe(audio_data)
+        assert len(audio_data or b"") > 0
         assert "東京" in trans_text or "京都" in trans_text or "福岡" in trans_text
 
     finally:
@@ -174,31 +178,43 @@ async def test_chat_wakeword(aiavatar_app: AIAvatar):
     try:
         # Not triggered chat
         response = await chat(aiavatar_app, text="やあ", session_id=session_id)
-        assert response.type == "final"
-        assert response.text == ""
-        assert response.voice_text == ""
-        assert response.audio_data == b""
-        assert response.context_id is None
+        response_type = response.type
+        response_text = response.text
+        response_voice_text = response.voice_text
+        response_audio_length = len(response.audio_data or b"")
+        response_context_id = response.context_id
+        assert response_type == "final"
+        assert response_text == ""
+        assert response_voice_text == ""
+        assert response_audio_length == 0
+        assert response_context_id is None
 
         # Start chat
         response = await chat(aiavatar_app, text="こんにちは、元気？", session_id=session_id)
-        assert "こんにちは" in response.text
+        response_text = response.text
+        assert "こんにちは" in response_text
         context_id = response.context_id
 
         # Continue chat not by wakeword
         response = await chat(aiavatar_app, text="寿司とラーメンどっちが好き？", session_id=session_id, context_id=context_id)
-        assert "寿司" in response.text or "ラーメン" in response.text
+        response_text = response.text
+        assert "寿司" in response_text or "ラーメン" in response_text
 
         # Wait for wakeword timeout
         await asyncio.sleep(10)
 
         # Not triggered chat
         response = await chat(aiavatar_app, text="そうなんだ", session_id=session_id, context_id=context_id)
-        assert response.type == "final"
-        assert response.text == ""
-        assert response.voice_text == ""
-        assert response.audio_data == b""
-        assert response.context_id == context_id    # Context is still alive
+        response_type = response.type
+        response_text = response.text
+        response_voice_text = response.voice_text
+        response_audio_length = len(response.audio_data or b"")
+        response_context_id = response.context_id
+        assert response_type == "final"
+        assert response_text == ""
+        assert response_voice_text == ""
+        assert response_audio_length == 0
+        assert response_context_id == context_id    # Context is still alive
 
     finally:
         await aiavatar_app.stop_listening(session_id)
@@ -231,7 +247,8 @@ async def test_chat_vision(aiavatar_app: AIAvatar):
 
         # Check `aiavatar_app.last_response`, not response from chat
         response = await chat(aiavatar_app, text="画面を見て。今見えているアプリケーションは何かな？", session_id=session_id)
-        assert "visual" in response.text.lower()  # Run test on Visual Studio Code
+        response_text = response.text.lower()
+        assert "visual" in response_text  # Run test on Visual Studio Code
 
     finally:
         await aiavatar_app.stop_listening(session_id)
@@ -246,8 +263,9 @@ async def test_chat_function(aiavatar_app: AIAvatar):
 
     try:
         response = await chat(aiavatar_app, text="東京の天気を教えて。", session_id=session_id)
-        assert "晴" in response.text
-        assert "23.4" in response.text
+        response_text = response.text
+        assert "晴" in response_text
+        assert "23.4" in response_text
 
     finally:
         await aiavatar_app.stop_listening(session_id)
@@ -288,13 +306,13 @@ async def test_websocket_multiple_sessions_isolation():
         
         # Session 1: First conversation
         response_1_1 = await chat(aiavatar_1, text="私の名前は田中です。覚えてください。", session_id=session_id_1)
-        assert response_1_1.context_id is not None
         context_id_1 = response_1_1.context_id
+        assert context_id_1 is not None
         
         # Session 2: First conversation (different topic)
         response_2_1 = await chat(aiavatar_2, text="私の名前は鈴木です。覚えてください。", session_id=session_id_2)
-        assert response_2_1.context_id is not None
         context_id_2 = response_2_1.context_id
+        assert context_id_2 is not None
         
         # Verify different context IDs for different sessions
         assert context_id_1 != context_id_2
@@ -315,24 +333,33 @@ async def test_websocket_multiple_sessions_isolation():
         response_2_text = response_2_2.text.lower()
         assert "鈴木" in response_2_text
         assert "田中" not in response_2_text
-        
+
         # Verify that session IDs are correctly maintained
-        assert response_1_1.session_id == session_id_1
-        assert response_1_2.session_id == session_id_1
-        assert response_2_1.session_id == session_id_2
-        assert response_2_2.session_id == session_id_2
-        
+        response_session_ids = (
+            response_1_1.session_id,
+            response_1_2.session_id,
+            response_2_1.session_id,
+            response_2_2.session_id,
+        )
+        assert response_session_ids == (session_id_1, session_id_1, session_id_2, session_id_2)
+
         # Verify that user IDs are correctly maintained
-        assert response_1_1.user_id == user_id_1
-        assert response_1_2.user_id == user_id_1
-        assert response_2_1.user_id == user_id_2
-        assert response_2_2.user_id == user_id_2
-        
+        response_user_ids = (
+            response_1_1.user_id,
+            response_1_2.user_id,
+            response_2_1.user_id,
+            response_2_2.user_id,
+        )
+        assert response_user_ids == (user_id_1, user_id_1, user_id_2, user_id_2)
+
         # Verify that context IDs remain consistent within each session
-        assert response_1_1.context_id == context_id_1
-        assert response_1_2.context_id == context_id_1
-        assert response_2_1.context_id == context_id_2
-        assert response_2_2.context_id == context_id_2
+        response_context_ids = (
+            response_1_1.context_id,
+            response_1_2.context_id,
+            response_2_1.context_id,
+            response_2_2.context_id,
+        )
+        assert response_context_ids == (context_id_1, context_id_1, context_id_2, context_id_2)
 
     finally:
         await aiavatar_1.stop_listening(session_id_1)
@@ -388,7 +415,8 @@ async def test_chunked_audio_response():
                 audio_chunks.append(resp)
 
         # Verify we got a response with audio
-        assert response.text is not None and len(response.text) > 0
+        response_text = response.text
+        assert response_text is not None and len(response_text) > 0
         assert len(audio_chunks) > 10
 
         # Verify PCM format is provided

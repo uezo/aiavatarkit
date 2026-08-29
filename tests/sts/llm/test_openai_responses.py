@@ -283,6 +283,7 @@ async def test_openai_responses_service_tool_calls_response_formatter():
         if problem.strip() == "1+1":
             return {"answer": 2}
         else:
+            print(f"problem: {problem.strip()}")
             return {"answer": "unknown"}
 
     @service.tools["solve_math"].response_formatter

@@ -371,6 +371,7 @@ async def test_chatgpt_service_tool_calls():
         if problem.strip() == "1+1":
             return {"answer": 2}
         else:
+            print(f"problem: {problem.strip()}")
             return {"answer": "unknown"}
 
     @service.on_before_tool_calls
@@ -592,6 +593,7 @@ async def test_chatgpt_service_tool_calls_iter():
         if problem.strip() == "1+1":
             yield {"answer": 2}, True
         else:
+            print(f"problem: {problem.strip()}")
             yield {"answer": "unknown"}, True
 
     @service.on_before_tool_calls
