@@ -1,36 +1,6 @@
-from setuptools import setup, find_packages
+from setuptools import setup
 
-setup(
-    name="aiavatar",
-    version="0.8.19",
-    url="https://github.com/uezo/aiavatar",
-    author="uezo",
-    author_email="uezo@uezo.net",
-    maintainer="uezo",
-    maintainer_email="uezo@uezo.net",
-    description="🥰 Building AI-based conversational avatars lightning fast ⚡️💬",
-    long_description=open("README.md").read(),
-    long_description_content_type="text/markdown",
-    packages=find_packages(exclude=["examples*", "tests*"]),
-    package_data={"aiavatar": ["admin/static/*"]},
-    install_requires=[
-        "httpx>=0.27.0",
-        "openai>=1.55.3",
-        "aiofiles>=24.1.0",
-        "numpy>=2.2.3",
-        "silero-vad>=6.0.0",
-        "websockets>=13.0",
-        "fastapi>=0.115.0",
-        "uvicorn>=0.30.0",
-    ],
-    extras_require={
-        "local-audio": ["PyAudio>=0.2.14"],
-        "local": ["PyAudio>=0.2.14"],
-        "smart-turn": ["onnxruntime>=1.23.0", "transformers>=4.48.0", "huggingface-hub>=0.26.0"],
-        "namo-turn": ["onnxruntime>=1.23.0", "transformers>=4.48.0", "huggingface-hub>=0.26.0"],
-    },
-    license="Apache v2",
-    classifiers=[
-        "Programming Language :: Python :: 3"
-    ]
-)
+
+# Compatibility shim for tools that still expect setup.py.
+# Package metadata and build configuration live in pyproject.toml.
+setup()

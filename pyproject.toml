@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=65"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiavatar"
+version = "0.9.0"
+description = "🥰 Building AI-based conversational avatars lightning fast ⚡️💬"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "uezo", email = "uezo@uezo.net" },
+]
+maintainers = [
+    { name = "uezo", email = "uezo@uezo.net" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "httpx>=0.27.0",
+    "openai>=1.55.3",
+    "aiofiles>=24.1.0",
+    "audioop-lts>=0.2.2; python_version >= '3.13'",
+    "numpy>=2.2.3",
+    "silero-vad>=6.0.0",
+    "websockets>=13.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+local-audio = ["PyAudio>=0.2.14"]
+local = ["PyAudio>=0.2.14"]
+smart-turn = [
+    "onnxruntime>=1.23.0",
+    "transformers>=4.48.0",
+    "huggingface-hub>=0.26.0",
+]
+namo-turn = [
+    "onnxruntime>=1.23.0",
+    "transformers>=4.48.0",
+    "huggingface-hub>=0.26.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/uezo/aiavatarkit"
+
+[project.scripts]
+aiavatar = "aiavatar.cli.command:main"
+
+[tool.setuptools.packages.find]
+include = ["aiavatar*"]
+
+[tool.setuptools.package-data]
+aiavatar = [
+    "admin/static/*",
+    "admin_legacy/static/*",
+]
