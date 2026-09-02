@@ -432,6 +432,30 @@ test("VRM adapter uses the injected lip sync engine object", async () => {
     });
 });
 
+test("VRM adapter preserves an explicit zero face duration", async () => {
+    const calls = [];
+    const adapter = Object.create(VrmAdapter.prototype);
+    adapter.config = {
+        expression: { neutralName: "neutral", defaultDurationSeconds: 2 },
+        lipsync: {
+            usePhonemeBlend: false,
+            engine: { async initialize() {} },
+        },
+    };
+    adapter.idle = {
+        applyExpression(name, duration) {
+            calls.push([name, duration]);
+        },
+        clearVisemes() {},
+    };
+    const aiavatar = {};
+
+    await adapter.bind(aiavatar);
+    aiavatar.updateFace("neutral", 0);
+
+    assert.deepEqual(calls, [["neutral", 0]]);
+});
+
 test("Load settings expose a reset view button", () => {
     const previousDocument = globalThis.document;
 

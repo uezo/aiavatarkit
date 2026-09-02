@@ -266,16 +266,14 @@ class VRMIdle {
     applyExpression(faceName, duration) {
         faceName = (faceName || 'neutral').toLowerCase();
         faceName = VRMIdle.EXPRESSION_MAP[faceName] || faceName;
-        if (this.currentFaceName && this.currentFaceName !== 'neutral') {
+        if (this.currentFaceName) {
             this._setExpr(this.currentFaceName, 0);
         }
         this.currentFaceName = faceName;
-        if (faceName !== 'neutral') {
-            this._setExpr(faceName, 1.0);
-        }
+        this._setExpr(faceName, 1.0);
 
         if (this._exprTimeout) clearTimeout(this._exprTimeout);
-        if (duration > 0) {
+        if (faceName !== 'neutral' && duration > 0) {
             const updateId = ++this._exprUpdateId;
             this._exprTimeout = setTimeout(() => {
                 if (this._exprUpdateId === updateId) {
