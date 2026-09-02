@@ -262,7 +262,7 @@ export class VrmAdapter {
 
     async bind(aiavatar) {
         aiavatar.updateFace = (faceName, faceDuration) => {
-            this.idle.applyExpression(faceName, faceDuration || this.config.expression.defaultDurationSeconds);
+            this.idle.applyExpression(faceName, faceDuration ?? this.config.expression.defaultDurationSeconds);
         };
         aiavatar.resetFace = () => {
             this.idle.applyExpression(this.config.expression.neutralName);
