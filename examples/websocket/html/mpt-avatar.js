@@ -27,11 +27,10 @@ class MPTAvatar {
     }
 
     bind(aiavatar) {
-        aiavatar.onPlaybackAnalyze = ({ rms, centroid01 }) => {
+        aiavatar.onPlaybackAudio = (audio) => {
             this.lipsyncEngine.processAudioData({
-                rms: rms * this.rmsScale,
-                high: centroid01,
-                low: 1 - centroid01,
+                ...audio,
+                gain: this.rmsScale,
             });
         };
         aiavatar.onResetFace = () => this.reset();

@@ -331,9 +331,18 @@ class LipsyncEngine {
         }
     }
 
-    // AudioCaptureからデータを受け取るメソッド
+    // AIAvatarClientから再生中のPCMデータを受け取るメソッド
     processAudioData(data) {
         if (!data) return;
+
+        if (data.pcm) {
+            const { rms, centroid01 } = LipSyncEngine.analyze(data);
+            data = {
+                rms,
+                high: centroid01,
+                low: 1 - centroid01,
+            };
+        }
 
         if (this.hqAudioEnabled) {
             this.processAudioDataHQ(data);

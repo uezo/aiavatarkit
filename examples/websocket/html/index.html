@@ -105,6 +105,7 @@
     <script src="aiavatar.js"></script>
     <script src="vision-stream.js"></script>
     <script src="lipsync.js"></script>
+    <script src="mfcc-lipsync.js"></script>
     <script src="blink.js"></script>
     <script src="motionpngtuber/lipsync.js"></script>
     <script src="image-avatar.js"></script>
@@ -135,6 +136,10 @@
                 faceImage: document.getElementById("faceImage"),
                 mouthImage: document.getElementById("mouthImage"),
                 rmsScale: PLAYBACK_RMS_SCALE,
+                lipsyncEngine: new MFCCLipSyncEngine({
+                    profileUrl: "profiles/default-female.json",
+                    maxVolume: -0.8,
+                }),
                 faceImagePaths: {
                     neutral: "images/neutral.png",
                     joy: "images/joy.png",
@@ -172,7 +177,7 @@
             webSocketUrl: "../ws",
             ...avatar.aiAvatarOptions,
         });
-        avatar.bind(aiavatar);
+        await avatar.bind(aiavatar);
 
         // Shared UI
         const ui = new AvatarUI({

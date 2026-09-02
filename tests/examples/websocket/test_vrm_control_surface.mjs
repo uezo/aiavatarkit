@@ -365,6 +365,73 @@ test("reset view restores the default camera for the current mode without unload
     ]);
 });
 
+test("VRM adapter uses the injected lip sync engine object", async () => {
+    const events = [];
+    const engine = {
+        async initialize() {
+            events.push("initialize");
+        },
+        processAudioData(audio) {
+            events.push(["processAudioData", audio]);
+            return {
+                visemes: { A: 0.2, I: 0.1, U: 0, E: 0, O: 0 },
+                mainViseme: "A",
+                mainVisemeWeight: 0.75,
+            };
+        },
+    };
+    const adapter = Object.create(VrmAdapter.prototype);
+    adapter.config = {
+        expression: { neutralName: "neutral", defaultDurationSeconds: 2 },
+        lipsync: { engine, usePhonemeBlend: false },
+    };
+    adapter.idle = {
+        applyExpression() {},
+        applyVisemeWeights(weights) {
+            events.push(["weights", weights]);
+        },
+        clearVisemes() {},
+    };
+    const aiavatar = {};
+
+    await adapter.bind(aiavatar);
+    const audio = { pcm: new Float32Array([0.1]), sampleRate: 16000 };
+    aiavatar.onPlaybackAudio(audio);
+
+    assert.equal(adapter.lipsyncEngine, engine);
+    assert.deepEqual(events, [
+        "initialize",
+        ["processAudioData", audio],
+        ["weights", { A: 0.75, I: 0, U: 0, E: 0, O: 0 }],
+    ]);
+
+    adapter.config.lipsync.usePhonemeBlend = true;
+    assert.deepEqual(adapter.lipSyncWeights(engine.processAudioData(audio)), {
+        A: 0.2,
+        I: 0.1,
+        U: 0,
+        E: 0,
+        O: 0,
+    });
+
+    adapter.config.lipsync.maxVisemeWeight = 0.5;
+    assert.deepEqual(adapter.lipSyncWeights(engine.processAudioData(audio)), {
+        A: 0.1,
+        I: 0.05,
+        U: 0,
+        E: 0,
+        O: 0,
+    });
+    adapter.config.lipsync.usePhonemeBlend = false;
+    assert.deepEqual(adapter.lipSyncWeights(engine.processAudioData(audio)), {
+        A: 0.375,
+        I: 0,
+        U: 0,
+        E: 0,
+        O: 0,
+    });
+});
+
 test("Load settings expose a reset view button", () => {
     const previousDocument = globalThis.document;
 

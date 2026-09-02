@@ -181,4 +181,4 @@ uvicorn.run(
     ssl_keyfile=SSL_KEY_PATH
 )
 
-# open http://localhost:8000/static/vrm.html
+# open http://localhost:8000/static/3d.html

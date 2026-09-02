@@ -60,7 +60,7 @@ python openclaw.py
 
 ## Browser Setup
 
-Open http://localhost:8000/static/vrm.html in your browser.
+Open http://localhost:8000/static/3d.html in your browser.
 
 Click the CONFIG menu to open the inspector on the right side of the screen, and configure the following:
 

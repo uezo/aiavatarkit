@@ -71,7 +71,7 @@ export class VrmAdapter {
         this.loadLighting();
         this.applyLighting();
         installVrmSettings(this);
-        this.bind(aiavatar);
+        await this.bind(aiavatar);
         this.installResizeHandler();
         this.start();
         await this.restoreAssets();
@@ -260,7 +260,7 @@ export class VrmAdapter {
         this.controlSurface.hidden = false;
     }
 
-    bind(aiavatar) {
+    async bind(aiavatar) {
         aiavatar.updateFace = (faceName, faceDuration) => {
             this.idle.applyExpression(faceName, faceDuration || this.config.expression.defaultDurationSeconds);
         };
@@ -269,13 +269,31 @@ export class VrmAdapter {
             aiavatar.onResetFace?.();
         };
 
-        this.lipsyncEngine = new LipSyncEngine(this.config.lipsync);
-        aiavatar.onPlaybackAnalyze = ({ rms, centroid01, tSec }) => {
-            const shape = this.lipsyncEngine.update({ rms, centroid01, tSec });
-            this.idle.applyViseme(shape);
+        this.lipsyncEngine = this.config.lipsync?.engine;
+        await this.lipsyncEngine.initialize();
+        aiavatar.onPlaybackAudio = (audio) => {
+            const result = this.lipsyncEngine.processAudioData(audio);
+            this.idle.applyVisemeWeights(this.lipSyncWeights(result));
         };
         aiavatar.onResetFace = () => this.idle.clearVisemes();
         aiavatar.onPlaybackEnd = () => this.idle.clearVisemes();
+    }
+
+    lipSyncWeights(result) {
+        const configuredMax = Number(this.config.lipsync.maxVisemeWeight ?? 1);
+        const maxWeight = Number.isFinite(configuredMax)
+            ? Math.min(1, Math.max(0, configuredMax))
+            : 1;
+        const scale = (weight) => Math.min(1, Math.max(0, Number(weight) || 0)) * maxWeight;
+        const weights = this.config.lipsync.usePhonemeBlend
+            ? result.visemes
+            : { A: 0, I: 0, U: 0, E: 0, O: 0 };
+        if (!this.config.lipsync.usePhonemeBlend && result.mainViseme in weights) {
+            weights[result.mainViseme] = result.mainVisemeWeight;
+        }
+        return Object.fromEntries(
+            Object.entries(weights).map(([viseme, weight]) => [viseme, scale(weight)]),
+        );
     }
 
     async loadModelUrl(url, { cache = false } = {}) {

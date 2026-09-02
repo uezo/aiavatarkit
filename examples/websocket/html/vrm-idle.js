@@ -74,6 +74,15 @@ class VRMIdle {
     // --- Viseme names ---
     static VISEMES = ['aa', 'ih', 'ou', 'ee', 'oh'];
 
+    // Lip sync engine vowel names mapped to three-vrm expression preset names.
+    static VOWEL_TO_VISEME = {
+        A: 'aa',
+        I: 'ih',
+        U: 'ou',
+        E: 'ee',
+        O: 'oh',
+    };
+
     static MOUTH_TO_VISEME = {
         closed: null,
         half: { aa: 0.4 },
@@ -286,6 +295,15 @@ class VRMIdle {
             for (const [viseme, value] of Object.entries(mapping)) {
                 this._visemeTarget[viseme] = value;
             }
+        }
+    }
+
+    applyVisemeWeights(weights = {}) {
+        for (const [vowel, viseme] of Object.entries(VRMIdle.VOWEL_TO_VISEME)) {
+            const value = Number(weights[vowel] ?? 0);
+            this._visemeTarget[viseme] = Number.isFinite(value)
+                ? Math.max(0, Math.min(1, value))
+                : 0;
         }
     }
 
