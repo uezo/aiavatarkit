@@ -1,6 +1,160 @@
 class LipSyncEngine {
+    static VISEMES = Object.freeze(["A", "I", "U", "E", "O"]);
+
+    static MOUTH_VISEMES = Object.freeze({
+        closed: Object.freeze({}),
+        half: Object.freeze({ A: 0.4 }),
+        open: Object.freeze({ A: 1.0 }),
+        u: Object.freeze({ U: 0.8 }),
+        e: Object.freeze({ E: 0.7 }),
+    });
+
+    static clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    static input(input) {
+        if (ArrayBuffer.isView(input) || Array.isArray(input)) {
+            return {
+                pcm: input,
+                sampleRate: 16000,
+                samplePosition: input.length,
+                tSec: 0,
+                gain: 1,
+            };
+        }
+        const pcm = input?.pcm;
+        if (!pcm || typeof pcm.length !== "number") {
+            throw new TypeError("Lip sync input must include a pcm array");
+        }
+        const sampleRate = Number(input.sampleRate);
+        if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+            throw new RangeError("Lip sync input sampleRate must be greater than zero");
+        }
+        return {
+            pcm,
+            sampleRate,
+            samplePosition: Number.isFinite(input.samplePosition)
+                ? input.samplePosition
+                : pcm.length,
+            tSec: Number.isFinite(input.tSec) ? input.tSec : 0,
+            gain: Number.isFinite(input.gain) ? Math.max(0, input.gain) : 1,
+        };
+    }
+
+    static frame(input, {
+        sampleCount = 256,
+        targetSampleRate = null,
+        timeOffsetSec = 0,
+    } = {}) {
+        const audio = LipSyncEngine.input(input);
+        const count = Math.max(1, Math.trunc(sampleCount));
+        const targetRate = Number.isFinite(targetSampleRate) && targetSampleRate > 0
+            ? targetSampleRate
+            : audio.sampleRate;
+        const sourceCount = Math.max(1, Math.ceil(count * audio.sampleRate / targetRate));
+        const end = LipSyncEngine.clamp(
+            Math.floor(audio.samplePosition + timeOffsetSec * audio.sampleRate),
+            0,
+            audio.pcm.length,
+        );
+        const start = end - sourceCount;
+        const frame = new Float64Array(sourceCount);
+        const sourceStart = Math.max(0, start);
+        const targetStart = sourceStart - start;
+        for (let i = sourceStart; i < end; i++) {
+            const value = Number(audio.pcm[i]);
+            frame[targetStart + i - sourceStart] = Number.isFinite(value) ? value : 0;
+        }
+        return { ...audio, pcm: frame };
+    }
+
+    static rms(pcm) {
+        if (!pcm.length) return 0;
+        let sum = 0;
+        for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
+        return Math.sqrt(sum / pcm.length);
+    }
+
+    static analyze(input, { sampleCount = 256 } = {}) {
+        const audio = LipSyncEngine.frame(input, { sampleCount });
+        const rms = LipSyncEngine.rms(audio.pcm) * audio.gain;
+        const fftSize = LipSyncEngine.nextPowerOfTwo(audio.pcm.length);
+        const windowed = new Float64Array(fftSize);
+        const denominator = Math.max(1, audio.pcm.length - 1);
+        for (let i = 0; i < audio.pcm.length; i++) {
+            const window = 0.54 - 0.46 * Math.cos(2 * Math.PI * i / denominator);
+            windowed[i] = audio.pcm[i] * window;
+        }
+        const spectrum = LipSyncEngine.fftMagnitude(windowed);
+        const nyquistBin = fftSize / 2;
+        let weighted = 0;
+        let total = 0;
+        for (let i = 0; i < nyquistBin; i++) {
+            const magnitude = spectrum[i];
+            weighted += magnitude * i;
+            total += magnitude;
+        }
+        const centroid01 = total > 0
+            ? LipSyncEngine.clamp((weighted / total) / nyquistBin, 0, 1)
+            : 0;
+        return { rms, centroid01 };
+    }
+
+    static nextPowerOfTwo(value) {
+        let result = 1;
+        while (result < value) result *= 2;
+        return result;
+    }
+
+    static fftMagnitude(data) {
+        const n = data.length;
+        if (n === 0 || (n & (n - 1)) !== 0) {
+            throw new RangeError("FFT input length must be a non-zero power of two");
+        }
+        const real = Float64Array.from(data);
+        const imag = new Float64Array(n);
+
+        for (let i = 1, j = 0; i < n; i++) {
+            let bit = n >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) {
+                [real[i], real[j]] = [real[j], real[i]];
+            }
+        }
+
+        for (let length = 2; length <= n; length *= 2) {
+            const angle = -2 * Math.PI / length;
+            const stepReal = Math.cos(angle);
+            const stepImag = Math.sin(angle);
+            for (let offset = 0; offset < n; offset += length) {
+                let twiddleReal = 1;
+                let twiddleImag = 0;
+                const half = length / 2;
+                for (let i = 0; i < half; i++) {
+                    const even = offset + i;
+                    const odd = even + half;
+                    const oddReal = real[odd] * twiddleReal - imag[odd] * twiddleImag;
+                    const oddImag = real[odd] * twiddleImag + imag[odd] * twiddleReal;
+                    real[odd] = real[even] - oddReal;
+                    imag[odd] = imag[even] - oddImag;
+                    real[even] += oddReal;
+                    imag[even] += oddImag;
+                    const nextReal = twiddleReal * stepReal - twiddleImag * stepImag;
+                    twiddleImag = twiddleReal * stepImag + twiddleImag * stepReal;
+                    twiddleReal = nextReal;
+                }
+            }
+        }
+
+        const magnitude = new Float64Array(n);
+        for (let i = 0; i < n; i++) magnitude[i] = Math.hypot(real[i], imag[i]);
+        return magnitude;
+    }
+
     constructor({
-        audioHz = 60,
+        audioHz = 30,
         cutoffHz = 8.0,
         minVowelInterval = 0.12,
         peakMargin = 0.02,
@@ -8,17 +162,11 @@ class LipSyncEngine {
         thresholds = {},
         levels = [],
         vowelBands = [],
-        applyTarget = null,
-        mouthPathTemplate = "images/mouth_{mouth}.png",
-        hideOnClosed = true,
+        analysisSampleCount = 256,
     } = {}) {
         const cfg = { audioHz, cutoffHz, minVowelInterval, peakMargin, historySeconds };
         this.cfg = Object.freeze(cfg);
-        this.applyTarget = applyTarget;
-        this.mouthPathTemplate = mouthPathTemplate;
-        this.hideOnClosed = hideOnClosed;
-        this.mouthCache = new Map(); // mouth -> object URL
-        this.mouthPreloaded = false;
+        this.analysisSampleCount = analysisSampleCount;
 
         // Default mouth opening levels and vowel bands
         const defaultLevels = [
@@ -80,13 +228,29 @@ class LipSyncEngine {
         this.mouthShape = "closed";
         this.env = 0;
         this.centroid = 0;
-
-        // fire-and-forget preload for default shapes
-        this.preloadDefaultMouths();
+        this.processedFrameCount = 0;
     }
 
-    // Update mouth shape based on analysis results
-    update(inputOrRmsRaw, centroid01, tSec) {
+    initialize() {
+        return this;
+    }
+
+    processAudioData(audio) {
+        const input = LipSyncEngine.input(audio);
+        const { rms, centroid01 } = LipSyncEngine.analyze(input, {
+            sampleCount: this.analysisSampleCount,
+        });
+        const mouthShape = this._update({ rms, centroid01, tSec: input.tSec });
+        const visemes = this.visemesForShape(mouthShape);
+        const [mainViseme, mainVisemeWeight] = this.mainViseme(visemes);
+        return {
+            visemes,
+            mainViseme,
+            mainVisemeWeight,
+        };
+    }
+
+    _update(inputOrRmsRaw, centroid01, tSec) {
         const input = (typeof inputOrRmsRaw === "object" && inputOrRmsRaw !== null)
             ? inputOrRmsRaw
             : { rmsRaw: inputOrRmsRaw, centroid01, tSec };
@@ -125,9 +289,11 @@ class LipSyncEngine {
         histories.centroid.push(this.centroid);
         if (histories.env.length > histories.max) histories.env.shift();
         if (histories.centroid.length > histories.max) histories.centroid.shift();
+        this.processedFrameCount++;
 
         // Threshold auto-update roughly every second
-        if (histories.env.length > this.cfg.audioHz * 3 && (histories.env.length % this.cfg.audioHz === 0)) {
+        if (histories.env.length > this.cfg.audioHz * 3
+            && this.processedFrameCount % this.cfg.audioHz === 0) {
             this.autoUpdateThresholds();
         }
 
@@ -159,31 +325,23 @@ class LipSyncEngine {
         return this.mouthShape;
     }
 
-    // Convenience: update + apply to image element using a path template
-    apply({ rms, centroid01, tSec }) {
-        const mouth = this.update({ rms, centroid01, tSec });
-        const target = this.applyTarget;
-        if (!target) return mouth;
-
-        if (mouth === "closed" && this.hideOnClosed) {
-            target.src = "";
-            target.style.display = "none";
-            return mouth;
-        }
-
-        if (!this.mouthPreloaded) return mouth; // skip until preload finishes
-        const cached = this.mouthCache.get(mouth);
-        if (!cached) return mouth; // skip if missing
-
-        target.src = cached;
-        target.style.display = "block";
-        return mouth;
+    visemesForShape(mouthShape) {
+        const weights = Object.fromEntries(LipSyncEngine.VISEMES.map((name) => [name, 0]));
+        Object.assign(weights, LipSyncEngine.MOUTH_VISEMES[mouthShape] || {});
+        return weights;
     }
 
-    reset() {
-        if (!this.applyTarget) return;
-        this.applyTarget.src = "";
-        this.applyTarget.style.display = "none";
+    mainViseme(visemes) {
+        let mainViseme = null;
+        let mainVisemeWeight = 0;
+        for (const viseme of LipSyncEngine.VISEMES) {
+            const weight = Number(visemes[viseme]) || 0;
+            if (weight > mainVisemeWeight) {
+                mainViseme = viseme;
+                mainVisemeWeight = weight;
+            }
+        }
+        return [mainViseme, mainVisemeWeight];
     }
 
     autoUpdateThresholds() {
@@ -289,36 +447,6 @@ class LipSyncEngine {
         const eIdx = this.vowelBands.findIndex(b => b.shape === "e");
         if (eIdx >= 0) this.vowelBands[eIdx].upper = this.thresholds.e;
         this.vowelBands = this.sortVowelBands(this.vowelBands);
-    }
-
-    async preloadDefaultMouths() {
-        const mouths = new Set();
-        this.levels.forEach(l => mouths.add(l.shape));
-        this.vowelBands.forEach(v => mouths.add(v.shape));
-        mouths.delete("closed"); // skip closed
-        const tasks = [...mouths].map(mouth => this.fetchMouth(mouth).catch((err) => {
-            console.warn(`LipSyncEngine: failed to preload mouth "${mouth}"`, err);
-        }));
-        try {
-            await Promise.all(tasks);
-        } finally {
-            this.mouthPreloaded = true;
-        }
-    }
-
-    async fetchMouth(mouth) {
-        if (this.mouthCache.has(mouth)) return this.mouthCache.get(mouth);
-        const path = this.buildMouthPath(mouth);
-        const res = await fetch(path);
-        if (!res.ok) throw new Error(`Failed to load mouth: ${mouth}`);
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        this.mouthCache.set(mouth, url);
-        return url;
-    }
-
-    buildMouthPath(mouth) {
-        return this.mouthPathTemplate.replace("{mouth}", mouth);
     }
 
     clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }

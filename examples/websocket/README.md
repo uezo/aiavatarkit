@@ -42,6 +42,93 @@ uvicorn server:app
 Set `AVATAR_MODE` in `html/index.html` to `"image"` or `"mpt"`. Then visit http://localhost:8000/static/index.html, click `Start`, and try talking to the avatar.
 
 
+## Lip sync engines
+
+The Image, VRM, and MMD viewers can use either the legacy `LipSyncEngine` or the MFCC-based `MFCCLipSyncEngine`. Both receive decoded playback PCM from `AIAvatarClient` and expose the same interface:
+
+```javascript
+await engine.initialize();
+const result = engine.processAudioData(audio);
+// result.visemes: { A, I, U, E, O } (volume-scaled blend weights)
+// result.mainViseme: "A" | "I" | "U" | "E" | "O" | null
+// result.mainVisemeWeight: 0.0 ... 1.0
+```
+
+Set the engine independently in the VRM or MMD model options:
+
+```javascript
+lipsync: {
+    usePhonemeBlend: false,
+    maxVisemeWeight: 0.5,
+    engine: new MFCCLipSyncEngine({
+        profileUrl: "profiles/default-female.json",
+        minVolume: -2.5,
+        maxVolume: -0.8,
+        volumeGain: 1,
+    }),
+},
+```
+
+Use `engine: new LipSyncEngine({...})` for the legacy implementation. The adapters call the injected object without branching on its class. `profile` can be used instead of `profileUrl` to pass an already parsed Profile object. For VRM and MMD, `maxVisemeWeight` scales the final viseme weights proportionally: `0.5` makes an engine weight of `0.7` apply as `0.35`. It defaults to `1.0` when omitted.
+
+The Image viewer injects an `MFCCLipSyncEngine` into `ImageAvatar` by default. Omitting `lipsyncEngine` keeps the legacy engine as a fallback. Image mouths are selected statelessly from each result: silence closes the mouth, a low-volume `A` or `O` and an ambiguous viseme distribution use `half`, stronger `A` or `O` use `open`, `U` uses `u`, and `I` or `E` uses `e`. MotionPNGTuber continues to use its own dedicated lip sync implementation.
+
+`MFCCLipSyncEngine` reads MFCC Profile JSON compatible with the [uLipSync](https://github.com/hecomi/uLipSync) v3 format. The bundled `default-female.json` was independently calibrated for the example's default female TTS voice and contains no uLipSync Sample Profile data. The engine always returns both volume-scaled blend weights and the highest-scoring viseme with its full normalized opening weight. The 3D adapter's `lipsync.usePhonemeBlend` setting decides which representation to apply: `false` applies only `mainViseme` at `mainVisemeWeight`, while `true` applies `visemes`. Profiles are voice-dependent, so replace the default with one calibrated for the target voice when better accuracy is required. The VRM adapter maps the common `A/I/U/E/O` output to the three-vrm expression presets `aa/ih/ou/ee/oh`; three-vrm exposes these unified names for both VRM 0.x and 1.0 models.
+
+### Generate an MFCC Profile for a TTS voice
+
+Create five files containing Japanese vowels (for example, `あー` rather than the spoken letter name). A sustained vowel about 1.5 seconds long is ideal. If the TTS cannot prolong a sound, several short repetitions such as `あ、あ、あ、あ、あ、あ` are also supported; separate them with short audible pauses. Include a little silence before and after the speech:
+
+```text
+calibration/
+  a.wav
+  i.wav
+  u.wav
+  e.wav
+  o.wav
+```
+
+The WAV files must be uncompressed 16 kHz PCM or IEEE-float audio. Mono is recommended; for a multichannel file, only the first channel is analyzed. The tool deliberately does not resample calibration audio, so an accidental sample-rate mismatch is reported instead of being hidden.
+
+From `examples/websocket`, generate a Profile with:
+
+```sh
+node tools/build-mfcc-profile.mjs calibration html/profiles/custom-voice.json
+```
+
+When the output argument is omitted, the tool writes `calibration/mfcc-profile.json`. It first looks for one sufficiently long voiced section. If none exists, it automatically combines the stable centers of repeated short sections; no option is required. It then selects 16 distributed MFCC frames and prints a five-vowel self-check plus a quality analysis. The analysis reports leave-one-out (LOO) classification, within-vowel stability, the margin from the nearest competing vowel, the closest vowel pairs, and heuristic warnings for variable or overlapping calibration data. The self-check is a basic training-data sanity check; a perfect score can still accompany a thin classification margin, so inspect the LOO result and warnings as well. These metrics are calibration hints rather than a guarantee for arbitrary sentences. They are printed to the terminal and are not added to the compatible Profile JSON.
+
+The generated Profile contains `A/I/U/E/O`; silence still closes the mouth through the engine's volume gate, so a `-.wav` file is not required. Select the generated file with `profileUrl` in the engine options shown above. A low self-check or LOO score usually means that a clip contains the wrong vowel, has too few usable repetitions, or changes voice quality between repetitions.
+
+### Acknowledgements
+
+The MFCC processing in `html/mfcc-lipsync.js` was developed with reference to the [uLipSync v3 processing pipeline](https://github.com/hecomi/uLipSync). Its Profile JSON reader remains compatible with uLipSync v3 so existing calibrated profiles can be reused. No uLipSync runtime, library, or official Sample Profile data is bundled with this example.
+
+uLipSync is Copyright (c) 2021 hecomi and is distributed under the MIT License.
+
+<details>
+<summary>uLipSync MIT License</summary>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+</details>
+
 ## Artifacts in the web viewers
 
 `html/index.html` and `html/3d.html` can display an image, chart, presentation, YouTube video, sandboxed web app, or Google map when an AI response contains a self-closing `artifact` tag. The adapter parses and resolves registered tags into `AIAvatarResponse.control_tags`, which is the viewer's only artifact command source. The viewer does not parse tags from response `text`. The surrounding speech continues to use `voice_text`.

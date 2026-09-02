@@ -43,8 +43,8 @@ export class MmdAdapter {
         this.activeExpressionMorphs = new Set();
         this.expressionTimers = new Map();
         this.currentExpressionKey = "neutral";
-        this.mouthTargets = { a: 0, u: 0, e: 0 };
-        this.mouthValues = { a: 0, u: 0, e: 0 };
+        this.mouthTargets = { a: 0, i: 0, u: 0, e: 0, o: 0 };
+        this.mouthValues = { a: 0, i: 0, u: 0, e: 0, o: 0 };
         this.blinkValue = 0;
         this.blinkPhase = "idle";
         this.idleBones = null;
@@ -62,7 +62,7 @@ export class MmdAdapter {
         this.settingsHost = createMmdSettingsHost();
         this.createScene();
         this.bindLoader();
-        this.bindAvatar(aiavatar);
+        await this.bindAvatar(aiavatar);
         installMmdSettings(this);
         this.startRenderLoop();
         await this.restoreAssets();
@@ -144,7 +144,7 @@ export class MmdAdapter {
         });
     }
 
-    bindAvatar(aiavatar) {
+    async bindAvatar(aiavatar) {
         aiavatar.updateFace = (name, duration) => {
             this.applyExpression(name, duration ?? this.config.expression.defaultDurationSeconds);
         };
@@ -152,18 +152,35 @@ export class MmdAdapter {
             this.applyExpression(this.config.expression.neutralName, 0);
             aiavatar.onResetFace?.();
         };
-        this.lipsyncEngine = new LipSyncEngine(this.config.lipsync);
-        aiavatar.onPlaybackAnalyze = ({ rms, centroid01, tSec }) => {
-            const shape = this.lipsyncEngine.update({
-                rms: rms * this.faceMotion.lipGain,
-                centroid01,
-                tSec,
+        this.lipsyncEngine = this.config.lipsync?.engine;
+        await this.lipsyncEngine.initialize();
+        aiavatar.onPlaybackAudio = (audio) => {
+            const result = this.lipsyncEngine.processAudioData({
+                ...audio,
+                gain: this.faceMotion.lipGain,
             });
-            this.applyViseme(shape);
+            this.applyVisemeWeights(this.lipSyncWeights(result));
         };
         aiavatar.onResetFace = () => this.clearVisemes();
         aiavatar.onPlaybackEnd = () => this.clearVisemes();
         this.configureBlinkController();
+    }
+
+    lipSyncWeights(result) {
+        const configuredMax = Number(this.config.lipsync.maxVisemeWeight ?? 1);
+        const maxWeight = Number.isFinite(configuredMax)
+            ? Math.min(1, Math.max(0, configuredMax))
+            : 1;
+        const scale = (weight) => Math.min(1, Math.max(0, Number(weight) || 0)) * maxWeight;
+        const weights = this.config.lipsync.usePhonemeBlend
+            ? result.visemes
+            : { A: 0, I: 0, U: 0, E: 0, O: 0 };
+        if (!this.config.lipsync.usePhonemeBlend && result.mainViseme in weights) {
+            weights[result.mainViseme] = result.mainVisemeWeight;
+        }
+        return Object.fromEntries(
+            Object.entries(weights).map(([viseme, weight]) => [viseme, scale(weight)]),
+        );
     }
 
     async ensureRuntime() {
@@ -792,17 +809,28 @@ export class MmdAdapter {
     applyViseme(shape) {
         const target = this.config.faceMotion.mouthShapes[shape]
             || this.config.faceMotion.mouthShapes.closed;
+        this.clearVisemes();
         Object.assign(this.mouthTargets, target);
     }
 
+    applyVisemeWeights(weights = {}) {
+        Object.assign(this.mouthTargets, {
+            a: weights.A || 0,
+            i: weights.I || 0,
+            u: weights.U || 0,
+            e: weights.E || 0,
+            o: weights.O || 0,
+        });
+    }
+
     clearVisemes() {
-        Object.assign(this.mouthTargets, { a: 0, u: 0, e: 0 });
+        Object.assign(this.mouthTargets, { a: 0, i: 0, u: 0, e: 0, o: 0 });
     }
 
     updateMouth(dt) {
         const response = 0.08 + (100 - this.faceMotion.lipSmooth) / 160;
         const amount = Math.min(1, Math.max(0.03, response * dt * 60));
-        for (const key of ["a", "u", "e"]) {
+        for (const key of ["a", "i", "u", "e", "o"]) {
             this.mouthValues[key] += (this.mouthTargets[key] - this.mouthValues[key]) * amount;
             this.setFirstMorph(this.config.faceMotion.mouthMorphCandidates[key], this.mouthValues[key]);
         }

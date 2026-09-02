@@ -1,10 +1,10 @@
 class AIAvatarClient {
-    constructor({ webSocketUrl, faceImage, faceImagePaths, sampleRate = 16000, playbackAnalyzeHz = 60, apiKey = null }) {
+    constructor({ webSocketUrl, faceImage, faceImagePaths, sampleRate = 16000, playbackAudioHz = 30, apiKey = null }) {
         this.webSocketUrl = webSocketUrl;
         this.faceImage = faceImage;
         this.faceImagePaths = faceImagePaths;
         this.sampleRate = sampleRate;
-        this.playbackAnalyzeHz = playbackAnalyzeHz;
+        this.playbackAudioHz = playbackAudioHz;
         this.apiKey = apiKey;
 
         this.ws = null;
@@ -14,15 +14,17 @@ class AIAvatarClient {
         this.isAudioPlaying = false;
         this.messageQueue = [];
         this.processingQueue = false;
+        this.queueGeneration = 0;
         this.currentAudioSource = null;
+        this.currentAudioFinalize = null;
+        this.playbackGeneration = 0;
         this.latestFaceUpdate = null;
         this.faceTimeout = null;
         this.currentFaceName = null;
         this.onResetFace = null;
         this.onMicrophoneDataSend = () => { };
         this.onResponseReceived = () => { };
-        this.analyser = null;
-        this.onPlaybackAnalyze = null;
+        this.onPlaybackAudio = null;
         this.isMicrophoneMuted = () => this.isAudioPlaying;
         this.getStartMetadata = () => null;
         this._userMuted = false;
@@ -32,11 +34,15 @@ class AIAvatarClient {
     }
 
     async startListening(sessionId, userId) {
+        const queueGeneration = ++this.queueGeneration;
+        this.messageQueue.length = 0;
+        this.processingQueue = false;
         const protocols = this.apiKey
             ? ["Authorization." + btoa(this.apiKey)]
             : undefined;
         this.ws = new WebSocket(this.webSocketUrl, protocols);
         this.ws.onopen = () => {
+            if (queueGeneration !== this.queueGeneration) return;
             console.log(`Connected to server: ${this.webSocketUrl}`);
             const metadata = this.getStartMetadata?.() || null;
             const startMessage = {
@@ -51,6 +57,7 @@ class AIAvatarClient {
         };
 
         this.ws.onmessage = (event) => {
+            if (queueGeneration !== this.queueGeneration) return;
             try {
                 const msg = JSON.parse(event.data);
                 this.onResponseReceived(msg);
@@ -59,7 +66,7 @@ class AIAvatarClient {
                         this.chatContextId = msg.context_id;
                     }
                     this.messageQueue.push(msg);
-                    if (!this.processingQueue) this.processQueue();
+                    if (!this.processingQueue) this.processQueue(queueGeneration);
                 } else if (msg.type === "connected") {
                     userId = msg.user_id;   // Update userId (Created on server if not exists)
                     console.log(`Session: sessionId=${msg.session_id}, userId=${msg.user_id}, contextId=${msg.context_id}`);
@@ -127,21 +134,16 @@ class AIAvatarClient {
                 this.gainNode.connect(this.audioContext.destination);
             }
 
-            // Setup analyzer
-            if (!this.analyser) {
-                const a = this.audioContext.createAnalyser();
-                a.fftSize = 256;
-                a.smoothingTimeConstant = 0.6;
-                this.analyser = a;
-            }
         } catch (err) {
             console.error("Error during microphone activation:", err);
         }
     }
 
-    async processQueue() {
+    async processQueue(queueGeneration = this.queueGeneration) {
+        if (queueGeneration !== this.queueGeneration) return;
         this.processingQueue = true;
-        while (this.messageQueue.length > 0) {
+        while (this.messageQueue.length > 0
+            && queueGeneration === this.queueGeneration) {
             const msg = this.messageQueue.shift();
             if (msg.metadata && msg.metadata.request_text) {
                 console.log("User:", msg.metadata.request_text);
@@ -160,14 +162,18 @@ class AIAvatarClient {
                 } catch (e) {
                     console.error("Error during audio playback:", e);
                 } finally {
-                    this.isAudioPlaying = false;
+                    if (queueGeneration === this.queueGeneration) {
+                        this.isAudioPlaying = false;
+                    }
                 }
             }
         }
-        this.processingQueue = false;
+        if (queueGeneration === this.queueGeneration) this.processingQueue = false;
     }
 
     playAudioSync(audioDataBase64) {
+        this.stopAudio();
+        const playbackGeneration = this.playbackGeneration;
         return new Promise((resolve, reject) => {
             try {
                 const binaryString = atob(audioDataBase64);
@@ -180,64 +186,94 @@ class AIAvatarClient {
                 this.audioContext.decodeAudioData(
                     buffer,
                     (decodedData) => {
+                        if (playbackGeneration !== this.playbackGeneration
+                            || this.audioContext?.state === "closed") {
+                            resolve();
+                            return;
+                        }
                         const source = this.audioContext.createBufferSource();
                         source.buffer = decodedData;
 
                         const dest = this.gainNode || this.audioContext.destination;
-                        const canAnalyze = this.analyser && typeof this.onPlaybackAnalyze === "function";
-                        if (canAnalyze) {
-                            source.connect(this.analyser);
-                            this.analyser.connect(dest);  // analyser -> gainNode -> destination
+                        const playbackAudioCallback = typeof this.onPlaybackAudio === "function"
+                            ? this.onPlaybackAudio
+                            : null;
+                        const playbackPcm = decodedData.getChannelData(0);
+                        const playbackSampleRate = decodedData.sampleRate;
+                        source.connect(dest);
 
-                            // Analyze audio
-                            const freqData = new Float32Array(this.analyser.frequencyBinCount);
-                            const timeData = new Float32Array(this.analyser.fftSize);
-                            let lastAnalyzeT = 0;
+                        const startedAt = this.audioContext.currentTime;
+                        this.currentAudioSource = source;
+                        source.start(0);
+
+                        const playbackFrame = () => {
+                            const tSec = this.audioContext.currentTime;
+                            const playbackTimeSec = Math.max(0, tSec - startedAt);
+                            const samplePosition = Math.min(
+                                playbackPcm.length,
+                                Math.floor(playbackTimeSec * playbackSampleRate),
+                            );
+                            return {
+                                pcm: playbackPcm,
+                                sampleRate: playbackSampleRate,
+                                samplePosition,
+                                tSec,
+                            };
+                        };
+                        let playbackFinalized = false;
+                        const finalizePlayback = () => {
+                            if (playbackFinalized) return;
+                            playbackFinalized = true;
+                            const currentSource = this.currentAudioSource;
+                            const superseded = currentSource != null && currentSource !== source;
+                            if (currentSource === source) {
+                                this.currentAudioSource = null;
+                                this.currentAudioFinalize = null;
+                            }
+                            try {
+                                if (!superseded) this.onPlaybackEnd?.();
+                            } catch (error) {
+                                console.error("Error handling playback end:", error);
+                            } finally {
+                                resolve();
+                            }
+                        };
+                        this.currentAudioFinalize = finalizePlayback;
+
+                        if (playbackAudioCallback) {
+                            // Preserve the deadline phase across rounded rAF timestamps.
+                            const callbackIntervalMs = 1000 / (this.playbackAudioHz || 30);
+                            const timestampToleranceMs = 1;
+                            let nextCallbackT = null;
                             const tick = (ts) => {
-                                if (!this.currentAudioSource) return; // Exit on playback ends
-                                if (!this.analyser) return; // Analyzer disposed after stopListening
-                                // Throttle by playbackAnalyzeHz
-                                const analyzeIntervalMs = 1000 / (this.playbackAnalyzeHz || 60);
-                                if (ts - lastAnalyzeT >= analyzeIntervalMs) {
-                                    lastAnalyzeT = ts;
-                                    // RMS (time domain)
-                                    this.analyser.getFloatTimeDomainData(timeData);
-                                    let sum = 0;
-                                    for (let i = 0; i < timeData.length; i++) sum += timeData[i] * timeData[i];
-                                    const rms = Math.sqrt(sum / timeData.length);
-
-                                    // Spectral centroid (0..1)
-                                    this.analyser.getFloatFrequencyData(freqData); // dB
-                                    const nyq = this.audioContext.sampleRate / 2;
-                                    let num = 0, den = 0;
-                                    for (let i = 0; i < freqData.length; i++) {
-                                        const mag = Math.pow(10, freqData[i] / 20); // dB->amp
-                                        const freq = (i / freqData.length) * nyq;
-                                        num += mag * freq;
-                                        den += mag;
+                                if (this.currentAudioSource !== source) return;
+                                if (nextCallbackT == null
+                                    || ts + timestampToleranceMs >= nextCallbackT) {
+                                    if (nextCallbackT == null) {
+                                        nextCallbackT = ts + callbackIntervalMs;
+                                    } else {
+                                        const intervalsToNextDeadline = Math.max(
+                                            1,
+                                            Math.ceil(
+                                                (ts + timestampToleranceMs - nextCallbackT)
+                                                / callbackIntervalMs,
+                                            ),
+                                        );
+                                        nextCallbackT += intervalsToNextDeadline
+                                            * callbackIntervalMs;
                                     }
-                                    const centroid01 = den > 0 ? Math.min(1, (num / den) / nyq) : 0;
-
-                                    this.onPlaybackAnalyze?.({ rms, centroid01, tSec: ts / 1000 });
+                                    playbackAudioCallback(playbackFrame());
                                 }
                                 requestAnimationFrame(tick);
                             };
                             requestAnimationFrame(tick);
-                        } else {
-                            // No analyzer or callback: connect directly and skip analysis loop
-                            source.connect(dest);
                         }
 
-                        this.currentAudioSource = source;
-                        source.start(0);
-                        source.onended = () => {
-                            this.currentAudioSource = null;
-                            this.onPlaybackEnd?.();     // e.g. reset current volume
-                            resolve();
-                        };
+                        source.onended = finalizePlayback;
                     },
                     (error) => {
-                        reject(error);
+                        if (playbackGeneration !== this.playbackGeneration) resolve();
+                        else reject(error);
                     }
                 );
             } catch (e) {
@@ -297,13 +333,17 @@ class AIAvatarClient {
     }
 
     stopAudio() {
+        this.playbackGeneration++;
         if (this.currentAudioSource) {
+            const source = this.currentAudioSource;
+            this.currentAudioFinalize?.();
             try {
-                this.currentAudioSource.stop();
+                source.stop();
             } catch (error) {
                 console.error("Error stopping audio:", error);
             }
-            this.currentAudioSource = null;
+            if (this.currentAudioSource === source) this.currentAudioSource = null;
+            this.currentAudioFinalize = null;
         }
     }
 
@@ -365,19 +405,31 @@ class AIAvatarClient {
 
     async stopListening(sessionId) {
         this.resetFace();
+        this.queueGeneration++;
         this.processingQueue = false;
+        this.messageQueue.length = 0;
+        const ws = this.ws;
+        this.ws = null;
+        if (ws) {
+            ws.onopen = null;
+            ws.onmessage = null;
+            ws.onerror = null;
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "stop", session_id: sessionId }));
+            }
+            if (ws.readyState === WebSocket.CONNECTING
+                || ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
+        }
+        this.stopAudio();
         if (this.scriptNode) {
             this.scriptNode.disconnect();
         }
         if (this.audioContext) {
             await this.audioContext.close();
-            this.analyser = null;
             this.gainNode = null;
             this.isAudioPlaying = false;
-        }
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: "stop", session_id: sessionId }));
-            this.ws.close();
         }
         if (this.micStream) {
             this.micStream.getTracks().forEach(track => track.stop());

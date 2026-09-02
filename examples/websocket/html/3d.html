@@ -68,6 +68,7 @@
     <script src="aiavatar.js"></script>
     <script src="vision-stream.js"></script>
     <script src="lipsync.js"></script>
+    <script src="mfcc-lipsync.js"></script>
     <script src="ui.js"></script>
 
     <script type="importmap">
@@ -136,7 +137,6 @@
 
             audio: {
                 sampleRate: 16000,
-                playbackAnalyzeHz: 60,
                 voiceDetectMode: "rms",
                 voiceHoldDurationMs: 1000,
                 initialVolume: 1.0,
@@ -260,11 +260,14 @@
                                 defaultDurationSeconds: 2,
                             },
                             lipsync: {
-                                audioHz: 60,
-                                cutoffHz: 8.0,
-                                minVowelInterval: 0.12,
-                                peakMargin: 0.02,
-                                historySeconds: 10,
+                                usePhonemeBlend: false,
+                                maxVisemeWeight: 0.5,
+                                engine: new MFCCLipSyncEngine({
+                                    profileUrl: "profiles/default-female.json",
+                                    maxVolume: -0.8,
+                                }),
+                                // To use the legacy engine instead:
+                                // engine: new LipSyncEngine(),
                             },
                         },
                     },
@@ -395,22 +398,28 @@
                                 },
                                 mouthMorphCandidates: {
                                     a: ["あ", "a"],
+                                    i: ["い", "i"],
                                     u: ["う", "u"],
                                     e: ["え", "e"],
+                                    o: ["お", "o"],
                                 },
                             },
                             lipsync: {
-                                audioHz: 60,
-                                cutoffHz: 8.0,
-                                minVowelInterval: 0.12,
-                                peakMargin: 0.02,
-                                historySeconds: 10,
+                                usePhonemeBlend: false,
+                                maxVisemeWeight: 0.5,
+                                engine: new MFCCLipSyncEngine({
+                                    profileUrl: "profiles/default-female.json",
+                                    maxVolume: -0.8,
+                                }),
+                                // To use the legacy engine instead:
+                                // engine: new LipSyncEngine(),
                             },
                         },
                     },
                 },
             },
         });
+
     </script>
 </body>
 

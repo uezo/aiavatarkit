@@ -35,7 +35,7 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
         webSocketUrl: config.connection.webSocketUrl,
         apiKey: config.connection.apiKey,
         sampleRate: config.audio.sampleRate,
-        playbackAnalyzeHz: config.audio.playbackAnalyzeHz,
+        playbackAudioHz: config.audio.playbackAudioHz,
         faceImage: null,
         faceImagePaths: null,
     });
