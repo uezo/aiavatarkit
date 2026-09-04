@@ -116,3 +116,18 @@ test("shared UI remains compatible with pages without a microphone slider", () =
         else globalThis.document = previousDocument;
     }
 });
+
+test("backlog audio mutes the microphone even when barge-in is enabled", () => {
+    const ui = Object.create(AvatarUI.prototype);
+    Object.assign(ui, {
+        aiavatar: {
+            isAudioPlaying: false,
+            isBacklogAudioPlaying: true,
+        },
+        interruptEnabled: true,
+        isServerProcessing: false,
+        isBargeInBlocked: false,
+    });
+    ui._setupMicrophoneMute();
+    assert.equal(ui.aiavatar.isMicrophoneMuted(), true);
+});

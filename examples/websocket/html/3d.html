@@ -70,6 +70,7 @@
                         </div>
                     </div>
                 </div>
+                <button class="vn-menu-btn" id="backlogBtn">LOG</button>
                 <button class="vn-menu-btn" id="configBtn">CONFIG</button>
             </div>
             <div id="messageText" class="message-text"></div>
@@ -105,6 +106,28 @@
                 <button type="submit" class="request-text-submit">SEND</button>
             </form>
         </div>
+    </div>
+
+    <div
+        id="backlogOverlay"
+        class="backlog-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="backlogTitle"
+        hidden
+    >
+        <section class="backlog-panel">
+            <header class="backlog-header">
+                <div>
+                    <h2 id="backlogTitle">BACKLOG</h2>
+                    <span id="backlogCount" class="backlog-count">0 / 100</span>
+                </div>
+                <button type="button" id="backlogClose" class="backlog-close" aria-label="Close backlog">×</button>
+            </header>
+            <div id="backlogList" class="backlog-list">
+                <p id="backlogEmpty" class="backlog-empty">No conversation history yet.</p>
+            </div>
+        </section>
     </div>
 
     <div id="toolStatus" hidden></div>
@@ -219,6 +242,11 @@
                 toolLabels: {
                     send_query_to_openclaw: "Asking OpenClaw🦞",
                 },
+            },
+
+            backlog: {
+                enabled: true,
+                maxEntries: 100,
             },
 
             vision: {

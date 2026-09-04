@@ -78,6 +78,7 @@ test("request form attaches one image and clears it after sending", async () => 
     };
     const chatCalls = [];
     const messages = [];
+    const sentRequests = [];
     const canvas = {
         width: 0,
         height: 0,
@@ -119,6 +120,7 @@ test("request form attaches one image and clears it after sending", async () => 
                 userId: "user-1",
                 updateMessage: (...args) => messages.push(args),
             },
+            onSent: (request) => sentRequests.push(request),
         });
 
         imageButton.dispatch("click");
@@ -137,6 +139,10 @@ test("request form attaches one image and clears it after sending", async () => 
             "data:image/jpeg;base64,BBBB",
         ]]);
         assert.deepEqual(messages, [["user", "📎 Image", false]]);
+        assert.deepEqual(sentRequests, [{
+            text: "",
+            imageDataUrl: "data:image/jpeg;base64,BBBB",
+        }]);
         assert.equal(imageInput.value, "");
         assert.equal(imagePreview.hidden, true);
         assert.equal(imagePreview.src, "");

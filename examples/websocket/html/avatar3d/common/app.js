@@ -1,5 +1,7 @@
 import { DisplayController } from "./display-controller.js";
 import { assertAvatarAdapter } from "./avatar-adapter.js";
+import { installBacklog } from "./backlog-controller.js";
+import { createBacklogStore } from "./backlog-store.js";
 import { installMessageController } from "./message-controller.js";
 import { installPageControls } from "./page-controls.js";
 import { installRequestInput } from "./request-input-controller.js";
@@ -27,6 +29,7 @@ function validateConfig(config) {
     if (config.ui.messageBoxOpacity < 0 || config.ui.messageBoxOpacity > 100) {
         throw new RangeError("ui.messageBoxOpacity must be between 0 and 100");
     }
+    if (config.backlog != null) requireObject(config.backlog, "backlog");
 }
 
 const IMAGE_FILE_EXTENSION = /\.(?:avif|bmp|gif|heic|heif|ico|jfif|jpe?g|png|svg|tiff?|webp)$/i;
@@ -91,6 +94,23 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
         state: display.state,
         autoHideDelayMs: config.ui.autoHideDelayMs,
     });
+    const backlogConfig = {
+        enabled: true,
+        maxEntries: 100,
+        ...config.backlog,
+    };
+    const backlogStore = createBacklogStore({
+        enabled: config.persistence.enabled && backlogConfig.enabled,
+        databaseName: `${config.persistence.databaseName}_backlog`,
+        maxEntries: backlogConfig.maxEntries,
+    });
+    const backlog = installBacklog({
+        aiavatar,
+        ui,
+        store: backlogStore,
+        maxEntries: backlogConfig.maxEntries,
+    });
+    await backlog.ready;
     const requestInput = installRequestInput({
         aiavatar,
         ui,
@@ -98,6 +118,7 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
             maxLongEdge: config.vision.maxLongEdge,
             jpegQuality: config.vision.jpegQuality,
         },
+        onSent: (request) => backlog.stageUser(request),
     });
     const vision = new VisionController({ aiavatar, ui, config: config.vision });
     const artifacts = new ArtifactController({
@@ -144,6 +165,7 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
     document.addEventListener("drop", onDrop);
 
     aiavatar.onResponseReceived = (response) => {
+        backlog.handleResponse(response);
         artifacts.handleResponse(response);
         modelAdapter.handleResponse(response);
         vision.handleResponse(response);
@@ -161,6 +183,7 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
         document.removeEventListener("dragleave", onDragLeave);
         document.removeEventListener("drop", onDrop);
         controls.dispose();
+        backlog.dispose();
         messages.dispose();
         requestInput.dispose();
         toasts.dispose();
@@ -171,7 +194,7 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
     };
     window.addEventListener("pagehide", dispose, { once: true });
 
-    const app = { aiavatar, ui, modelAdapter, display, vision, artifacts, dispose };
+    const app = { aiavatar, ui, modelAdapter, display, vision, artifacts, backlog, dispose };
     globalThis.avatar3d = app;
     return app;
 }

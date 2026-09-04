@@ -45,7 +45,7 @@ export async function prepareImageDataUrl(file, {
     }
 }
 
-export function installRequestInput({ aiavatar, ui, imageOptions = {} }) {
+export function installRequestInput({ aiavatar, ui, imageOptions = {}, onSent = () => {} }) {
     const form = document.getElementById("requestTextForm");
     const input = document.getElementById("requestTextInput");
     const imageButton = document.getElementById("requestImageButton");
@@ -110,6 +110,7 @@ export function installRequestInput({ aiavatar, ui, imageOptions = {} }) {
         if (!text && !imageDataUrl) return;
         if (!aiavatar.chat(ui.sessionId, ui.userId, text, imageDataUrl)) return;
 
+        onSent({ text, imageDataUrl });
         input.value = "";
         clearImage();
         ui.updateMessage("user", text || "📎 Image", false);

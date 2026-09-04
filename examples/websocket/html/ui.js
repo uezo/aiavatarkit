@@ -126,10 +126,15 @@ class AvatarUI {
             if (this.aiavatar.isAudioPlaying) {
                 this.isServerProcessing = false;
             }
-            if (!this.aiavatar.isAudioPlaying && !this.isServerProcessing) {
+            if (!this.aiavatar.isAudioPlaying
+                && !this.aiavatar.isBacklogAudioPlaying
+                && !this.isServerProcessing) {
                 this.isBargeInBlocked = false;
             }
 
+            if (this.aiavatar.isBacklogAudioPlaying) {
+                return true;
+            }
             if (this.isBargeInBlocked) {
                 return true;
             }

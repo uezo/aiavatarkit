@@ -12,6 +12,7 @@ class AIAvatarClient {
         this.scriptNode = null;
         this.micStream = null;
         this.isAudioPlaying = false;
+        this.isBacklogAudioPlaying = false;
         this.messageQueue = [];
         this.processingQueue = false;
         this.queueGeneration = 0;
