@@ -10,11 +10,11 @@ const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ENGINE_PATH = resolve(SCRIPT_DIRECTORY, "../html/mfcc-lipsync.js");
 
 export const VOWELS = Object.freeze([
-    { fileName: "a.wav", phoneme: "A" },
-    { fileName: "i.wav", phoneme: "I" },
-    { fileName: "u.wav", phoneme: "U" },
-    { fileName: "e.wav", phoneme: "E" },
-    { fileName: "o.wav", phoneme: "O" },
+    { fileName: "a.wav", referenceFileName: "a_reference.wav", phoneme: "A" },
+    { fileName: "i.wav", referenceFileName: "i_reference.wav", phoneme: "I" },
+    { fileName: "u.wav", referenceFileName: "u_reference.wav", phoneme: "U" },
+    { fileName: "e.wav", referenceFileName: "e_reference.wav", phoneme: "E" },
+    { fileName: "o.wav", referenceFileName: "o_reference.wav", phoneme: "O" },
 ]);
 
 export const PROFILE_SETTINGS = Object.freeze({
@@ -272,6 +272,67 @@ function selectDistributedFrames(frames, count) {
     return selected;
 }
 
+function selectReferenceGuidedFrames(stableRuns, phoneme, referenceCentroids, count) {
+    const ownCentroid = referenceCentroids.get(phoneme);
+    const competitorCentroids = [...referenceCentroids.entries()]
+        .filter(([candidate]) => candidate !== phoneme)
+        .map(([, centroid]) => centroid);
+    if (!ownCentroid || competitorCentroids.length !== VOWELS.length - 1) {
+        fail(`Reference centroids are incomplete for ${phoneme}`);
+    }
+
+    const scoredRuns = stableRuns.map((run) => run.map((frame) => {
+        const ownSimilarity = cosineSimilarity(frame.mfcc, ownCentroid);
+        const competitorSimilarity = Math.max(
+            ...competitorCentroids.map((centroid) => cosineSimilarity(frame.mfcc, centroid)),
+        );
+        return {
+            ...frame,
+            referenceSimilarity: ownSimilarity,
+            referenceMargin: ownSimilarity - competitorSimilarity,
+        };
+    }).sort((left, right) => (
+        right.referenceMargin - left.referenceMargin
+        || left.samplePosition - right.samplePosition
+    )));
+    if (scoredRuns.length === 0) {
+        fail(`No stable candidate sections were found for ${phoneme}`);
+    }
+
+    // Keep the candidate pool balanced across pronunciations before choosing
+    // the strongest discriminative frames globally. Ten consonant contexts
+    // therefore contribute at most two candidates each for a 16-frame Profile.
+    const perRunCandidateLimit = Math.max(2, Math.ceil(count / scoredRuns.length));
+    const candidates = scoredRuns.flatMap((run) => run.slice(0, perRunCandidateLimit));
+    if (candidates.length < count) {
+        const included = new Set(candidates);
+        const remaining = scoredRuns
+            .flatMap((run) => run.slice(perRunCandidateLimit))
+            .filter((frame) => !included.has(frame))
+            .sort((left, right) => (
+                right.referenceMargin - left.referenceMargin
+                || left.samplePosition - right.samplePosition
+            ));
+        candidates.push(...remaining.slice(0, count - candidates.length));
+    }
+    if (candidates.length < count) {
+        fail(
+            `${phoneme} has only ${candidates.length} reference-guided candidate frames; `
+            + `provide more or longer pronunciations`,
+        );
+    }
+    candidates.sort((left, right) => (
+        right.referenceMargin - left.referenceMargin
+        || left.samplePosition - right.samplePosition
+    ));
+    return {
+        selectedFrames: candidates.slice(0, count),
+        candidateFrameCount: candidates.length,
+        candidateRunCount: scoredRuns.length,
+        perRunCandidateLimit,
+    };
+}
+
 export function analyzeVowel(engine, audio, phoneme, sourceName) {
     if (audio.sampleRate !== PROFILE_SETTINGS.targetSampleRate) {
         fail(
@@ -352,6 +413,7 @@ export function analyzeVowel(engine, audio, phoneme, sourceName) {
         stableFrames,
         PROFILE_SETTINGS.mfccDataCount,
     );
+    const allStableRuns = combinedStableFrames(runs).stableRuns;
     const toRange = (run) => ({
         startSec: run[0].samplePosition / audio.sampleRate,
         endSec: run.at(-1).samplePosition / audio.sampleRate,
@@ -376,6 +438,7 @@ export function analyzeVowel(engine, audio, phoneme, sourceName) {
         stableStartSec: selectionMode === "continuous" ? stableRanges[0].startSec : null,
         stableEndSec: selectionMode === "continuous" ? stableRanges[0].endSec : null,
         stableRanges,
+        allStableRuns,
         selectedFrames,
     };
 }
@@ -684,7 +747,10 @@ export async function buildProfile({
         outputPath ?? join(absoluteInputDirectory, "mfcc-profile.json"),
     );
     const inputPaths = VOWELS.map(({ fileName }) => join(absoluteInputDirectory, fileName));
-    if (inputPaths.includes(absoluteOutputPath)) {
+    const referencePaths = VOWELS.map(({ referenceFileName }) => (
+        join(absoluteInputDirectory, referenceFileName)
+    ));
+    if ([...inputPaths, ...referencePaths].includes(absoluteOutputPath)) {
         fail(`Output path would overwrite a calibration WAV: ${absoluteOutputPath}`);
     }
     const Engine = await loadMfccLipSyncEngine(enginePath);
@@ -704,6 +770,64 @@ export async function buildProfile({
         analyses.push(analyzeVowel(analyzer, audio, phoneme, sourcePath));
     }
 
+    const referenceInputs = [];
+    for (let index = 0; index < VOWELS.length; index++) {
+        const sourcePath = referencePaths[index];
+        try {
+            referenceInputs.push({
+                sourcePath,
+                wav: await readFile(sourcePath),
+            });
+        } catch (error) {
+            if (error?.code === "ENOENT") {
+                referenceInputs.push(null);
+                continue;
+            }
+            throw error;
+        }
+    }
+    const presentReferenceCount = referenceInputs.filter(Boolean).length;
+    if (presentReferenceCount > 0 && presentReferenceCount < VOWELS.length) {
+        const missing = referenceInputs
+            .map((input, index) => (input ? null : VOWELS[index].referenceFileName))
+            .filter(Boolean)
+            .join(", ");
+        fail(`Reference set is incomplete; missing: ${missing}`);
+    }
+
+    let referenceAnalyses = null;
+    if (presentReferenceCount === VOWELS.length) {
+        referenceAnalyses = referenceInputs.map(({ wav, sourcePath }, index) => {
+            const { phoneme } = VOWELS[index];
+            return analyzeVowel(
+                analyzer,
+                decodeWav(wav, sourcePath),
+                phoneme,
+                sourcePath,
+            );
+        });
+        const referenceCentroids = new Map(referenceAnalyses.map((analysis) => [
+            analysis.phoneme,
+            averageMfcc(analysis.selectedFrames),
+        ]));
+        for (let index = 0; index < analyses.length; index++) {
+            const analysis = analyses[index];
+            const guided = selectReferenceGuidedFrames(
+                analysis.allStableRuns,
+                analysis.phoneme,
+                referenceCentroids,
+                PROFILE_SETTINGS.mfccDataCount,
+            );
+            analysis.originalSelectionMode = analysis.selectionMode;
+            analysis.selectionMode = "reference-guided";
+            analysis.referenceSourceName = referenceAnalyses[index].sourceName;
+            analysis.selectedFrames = guided.selectedFrames;
+            analysis.referenceCandidateFrameCount = guided.candidateFrameCount;
+            analysis.referenceCandidateRunCount = guided.candidateRunCount;
+            analysis.referenceCandidatesPerRun = guided.perRunCandidateLimit;
+        }
+    }
+
     const profile = {
         ...PROFILE_SETTINGS,
         mfccs: analyses.map(({ phoneme, selectedFrames }) => ({
@@ -721,6 +845,7 @@ export async function buildProfile({
         outputPath: absoluteOutputPath,
         profile,
         analyses,
+        referenceAnalyses,
         validation,
     };
 }
@@ -735,12 +860,24 @@ function formatQualityNumber(value, digits = 3) {
 
 function printResult(result) {
     console.log(`Wrote MFCC Profile: ${result.outputPath}`);
+    if (result.referenceAnalyses) {
+        console.log(
+            "Selection: reference-guided "
+            + "(a_reference.wav through o_reference.wav)",
+        );
+    }
     for (const analysis of result.analyses) {
-        const selection = analysis.selectionMode === "combined"
-            ? `mode=combined, runs=${analysis.usedRunCount}, `
-                + `stableFrames=${analysis.stableFrameCount}`
-            : `mode=continuous, stable=${formatSeconds(analysis.stableStartSec)}`
+        let selection;
+        if (analysis.selectionMode === "reference-guided") {
+            selection = `mode=reference-guided, runs=${analysis.referenceCandidateRunCount}, `
+                + `candidates=${analysis.referenceCandidateFrameCount}`;
+        } else if (analysis.selectionMode === "combined") {
+            selection = `mode=combined, runs=${analysis.usedRunCount}, `
+                + `stableFrames=${analysis.stableFrameCount}`;
+        } else {
+            selection = `mode=continuous, stable=${formatSeconds(analysis.stableStartSec)}`
                 + `-${formatSeconds(analysis.stableEndSec)}`;
+        }
         console.log(
             `${analysis.phoneme}: ${formatSeconds(analysis.durationSec)}, `
             + `${selection}, `
@@ -817,6 +954,9 @@ The directory must contain uncompressed 16 kHz PCM or IEEE-float WAV files named
   a.wav  i.wav  u.wav  e.wav  o.wav
 
 Each file may contain one sustained vowel or several repetitions separated by silence.
+
+For reference-guided selection, also provide the complete clean-vowel set:
+  a_reference.wav  i_reference.wav  u_reference.wav  e_reference.wav  o_reference.wav
 
 When output.json is omitted, mfcc-profile.json is written in the WAV directory.`);
 }

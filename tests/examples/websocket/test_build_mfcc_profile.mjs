@@ -138,6 +138,7 @@ async function writeCalibrationWavs(directory, {
     format = "pcm16",
     omit = null,
     signalFactory = calibrationSignal,
+    fileSuffix = "",
 } = {}) {
     const signals = {};
     await Promise.all(Object.entries(VOWEL_FREQUENCIES).map(async ([phoneme, frequencies]) => {
@@ -145,7 +146,7 @@ async function writeCalibrationWavs(directory, {
         const samples = signalFactory(frequencies);
         signals[phoneme] = samples;
         await writeFile(
-            join(directory, `${phoneme.toLowerCase()}.wav`),
+            join(directory, `${phoneme.toLowerCase()}${fileSuffix}.wav`),
             monoWav(samples, { format }),
         );
     }));
@@ -371,6 +372,79 @@ test("profile builder automatically combines repeated short vowel sections", asy
         }
         assert.deepEqual([...usedRanges].sort((a, b) => a - b), [0, 1, 2, 3]);
     }
+});
+
+test("profile builder uses a complete clean reference set to select calibration frames", async (t) => {
+    const directory = await temporaryDirectory(t);
+    await writeCalibrationWavs(directory, {
+        signalFactory: repeatedCalibrationSignal,
+    });
+    await writeCalibrationWavs(directory, {
+        fileSuffix: "_reference",
+    });
+
+    const result = await buildProfile({ inputDirectory: directory });
+
+    assertProfileShape(result.profile);
+    assert.equal(result.referenceAnalyses.length, 5);
+    for (const analysis of result.analyses) {
+        assert.equal(analysis.selectionMode, "reference-guided");
+        assert.equal(analysis.originalSelectionMode, "combined");
+        assert.equal(analysis.referenceCandidateRunCount, 4);
+        assert.equal(analysis.referenceCandidatesPerRun, 4);
+        assert.equal(analysis.referenceCandidateFrameCount, 16);
+        assert.equal(analysis.selectedFrames.length, 16);
+        assert.ok(analysis.referenceSourceName.endsWith(
+            `${analysis.phoneme.toLowerCase()}_reference.wav`,
+        ));
+        assert.ok(analysis.selectedFrames.every((frame) => (
+            Number.isFinite(frame.referenceSimilarity)
+            && Number.isFinite(frame.referenceMargin)
+        )));
+        const profileEntry = result.profile.mfccs.find(({ name }) => (
+            name === analysis.phoneme
+        ));
+        assert.deepEqual(
+            profileEntry.mfccCalibrationDataList.map(({ array }) => array),
+            analysis.selectedFrames.map(({ mfcc }) => (
+                Array.from(mfcc, (value) => Math.fround(value))
+            )),
+        );
+    }
+
+    const { stdout, stderr } = await runCli(
+        directory,
+        join(directory, "reference-profile.json"),
+    );
+    assert.match(stdout, /Selection: reference-guided/);
+    assert.equal(stdout.match(/mode=reference-guided/g)?.length, 5);
+    assert.equal(stderr, "");
+});
+
+test("profile builder rejects an incomplete clean reference set", async (t) => {
+    const directory = await temporaryDirectory(t);
+    const outputPath = join(directory, "incomplete-reference-profile.json");
+    await writeCalibrationWavs(directory);
+    await writeCalibrationWavs(directory, {
+        fileSuffix: "_reference",
+        omit: "O",
+    });
+
+    await assert.rejects(
+        runCli(directory, outputPath),
+        (error) => {
+            assert.equal(error.code, 1);
+            assert.match(
+                error.stderr,
+                /Reference set is incomplete; missing: o_reference\.wav/,
+            );
+            return true;
+        },
+    );
+    await assert.rejects(
+        access(outputPath),
+        (error) => error.code === "ENOENT",
+    );
 });
 
 test("profile quality analysis warns about unstable and overlapping calibrations", async (t) => {
