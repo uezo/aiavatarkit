@@ -44,6 +44,7 @@ export class VrmAdapter {
         this.normalCameraState = null;
         this.normalMaxDistance = null;
         this.onAnimationListChanged = () => {};
+        this.defaultMaxVisemeWeight = this.getMaxVisemeWeight();
         this.lighting = { ...config.lighting };
         this.lightDefinitions = [
             { key: "ambient", label: "Ambient", min: 0, max: 5, step: 0.1, format: (value) => value.toFixed(1) },
@@ -69,6 +70,7 @@ export class VrmAdapter {
 
         this.createScene();
         this.loadLighting();
+        this.loadLipSyncSettings();
         this.applyLighting();
         installVrmSettings(this);
         await this.bind(aiavatar);
@@ -280,10 +282,7 @@ export class VrmAdapter {
     }
 
     lipSyncWeights(result) {
-        const configuredMax = Number(this.config.lipsync.maxVisemeWeight ?? 1);
-        const maxWeight = Number.isFinite(configuredMax)
-            ? Math.min(1, Math.max(0, configuredMax))
-            : 1;
+        const maxWeight = this.getMaxVisemeWeight();
         const scale = (weight) => Math.min(1, Math.max(0, Number(weight) || 0)) * maxWeight;
         const weights = this.config.lipsync.usePhonemeBlend
             ? result.visemes
@@ -294,6 +293,56 @@ export class VrmAdapter {
         return Object.fromEntries(
             Object.entries(weights).map(([viseme, weight]) => [viseme, scale(weight)]),
         );
+    }
+
+    getMaxVisemeWeight() {
+        const configuredMax = Number(this.config.lipsync.maxVisemeWeight ?? 1);
+        return Number.isFinite(configuredMax)
+            ? Math.min(1, Math.max(0, configuredMax))
+            : 1;
+    }
+
+    setMaxVisemeWeight(value, { save = true } = {}) {
+        const maxWeight = Number(value);
+        this.config.lipsync.maxVisemeWeight = Number.isFinite(maxWeight)
+            ? Math.min(1, Math.max(0, maxWeight))
+            : 1;
+        if (save && this.persistence.enabled && this.persistence.lipSyncKey) {
+            localStorage.setItem(this.persistence.lipSyncKey, JSON.stringify({
+                maxVisemeWeight: this.config.lipsync.maxVisemeWeight,
+            }));
+        }
+        return this.config.lipsync.maxVisemeWeight;
+    }
+
+    loadLipSyncSettings() {
+        if (!this.persistence.enabled || !this.persistence.restoreUserSettings || !this.persistence.lipSyncKey) return;
+        try {
+            const saved = JSON.parse(localStorage.getItem(this.persistence.lipSyncKey) || "null");
+            if (saved?.maxVisemeWeight != null) {
+                this.setMaxVisemeWeight(saved.maxVisemeWeight, { save: false });
+            }
+        } catch (error) {
+            console.warn("Could not restore lip sync settings:", error);
+        }
+    }
+
+    resetLipSyncSettings() {
+        this.setMaxVisemeWeight(this.defaultMaxVisemeWeight, { save: false });
+        if (this.persistence.enabled && this.persistence.lipSyncKey) {
+            localStorage.removeItem(this.persistence.lipSyncKey);
+        }
+        this.idle.clearVisemes();
+    }
+
+    previewViseme(viseme = null) {
+        const visemes = { A: 0, I: 0, U: 0, E: 0, O: 0 };
+        if (viseme in visemes) visemes[viseme] = 1;
+        this.idle.applyVisemeWeights(this.lipSyncWeights({
+            visemes,
+            mainViseme: viseme,
+            mainVisemeWeight: viseme ? 1 : 0,
+        }));
     }
 
     async loadModelUrl(url, { cache = false } = {}) {

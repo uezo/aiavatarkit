@@ -178,6 +178,15 @@ test("MMD adapter scales blended and winner-only visemes by its configured maxim
         E: 0,
         O: 0,
     });
+
+    adapter.config.lipsync.maxVisemeWeight = 2;
+    assert.deepEqual(adapter.lipSyncWeights(result), {
+        A: 0.7,
+        I: 0,
+        U: 0,
+        E: 0,
+        O: 0,
+    });
 });
 
 test("MFCC cosine scores use uLipSync Float32 underflow before classification", () => {
@@ -481,6 +490,9 @@ test("VRM mouth weights use three-vrm expression preset names", () => {
 
     assert.deepEqual(calls.map(({ name }) => name), ["aa", "ih", "ou", "ee", "oh"]);
     assert.deepEqual(calls.map(({ value }) => value), [0.1, 0.2, 0.3, 0.4, 0.5]);
+
+    idle.applyVisemeWeights({ A: 1.5 });
+    assert.equal(idle._visemeTarget.aa, 1);
     assert.doesNotMatch(
         vrmIdleSource,
         /getExpression|VISEME_ALIASES|mixed\/fallback|_logVisemeMapping|console\./,

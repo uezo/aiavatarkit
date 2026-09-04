@@ -430,6 +430,79 @@ test("VRM adapter uses the injected lip sync engine object", async () => {
         E: 0,
         O: 0,
     });
+
+    adapter.config.lipsync.maxVisemeWeight = 2;
+    assert.deepEqual(adapter.lipSyncWeights(engine.processAudioData(audio)), {
+        A: 0.75,
+        I: 0,
+        U: 0,
+        E: 0,
+        O: 0,
+    });
+});
+
+test("VRM adapter previews mouth shapes using the configured lip sync maximum", () => {
+    const calls = [];
+    const adapter = Object.create(VrmAdapter.prototype);
+    adapter.config = {
+        lipsync: { usePhonemeBlend: false, maxVisemeWeight: 0.8 },
+    };
+    adapter.idle = {
+        applyVisemeWeights(weights) {
+            calls.push(weights);
+        },
+    };
+
+    adapter.previewViseme("U");
+    adapter.previewViseme();
+
+    assert.deepEqual(calls, [
+        { A: 0, I: 0, U: 0.8, E: 0, O: 0 },
+        { A: 0, I: 0, U: 0, E: 0, O: 0 },
+    ]);
+});
+
+test("VRM adapter persists and restores the lip sync maximum", () => {
+    const previousLocalStorage = globalThis.localStorage;
+    const values = new Map();
+    globalThis.localStorage = {
+        getItem(key) {
+            return values.get(key) ?? null;
+        },
+        setItem(key, value) {
+            values.set(key, value);
+        },
+        removeItem(key) {
+            values.delete(key);
+        },
+    };
+
+    try {
+        const adapter = Object.create(VrmAdapter.prototype);
+        adapter.config = { lipsync: { maxVisemeWeight: 1 } };
+        adapter.persistence = {
+            enabled: true,
+            restoreUserSettings: true,
+            lipSyncKey: "vrm_lipsync",
+        };
+        adapter.defaultMaxVisemeWeight = 1;
+        adapter.idle = { clearVisemes() {} };
+
+        assert.equal(adapter.setMaxVisemeWeight(0.6), 0.6);
+        assert.deepEqual(JSON.parse(values.get("vrm_lipsync")), { maxVisemeWeight: 0.6 });
+
+        adapter.config.lipsync.maxVisemeWeight = 0;
+        adapter.loadLipSyncSettings();
+        assert.equal(adapter.getMaxVisemeWeight(), 0.6);
+
+        assert.equal(adapter.setMaxVisemeWeight(3), 1);
+        adapter.resetLipSyncSettings();
+        assert.equal(adapter.getMaxVisemeWeight(), 1);
+        assert.equal(values.has("vrm_lipsync"), false);
+    } finally {
+        if (previousLocalStorage === undefined) delete globalThis.localStorage;
+        else globalThis.localStorage = previousLocalStorage;
+    }
 });
 
 test("VRM adapter preserves an explicit zero face duration", async () => {
@@ -456,7 +529,7 @@ test("VRM adapter preserves an explicit zero face duration", async () => {
     assert.deepEqual(calls, [["neutral", 0]]);
 });
 
-test("Load settings expose a reset view button", () => {
+test("Load settings expose view, mouth preview, and lip sync maximum controls", () => {
     const previousDocument = globalThis.document;
 
     class FakeElement {
@@ -492,6 +565,8 @@ test("Load settings expose a reset view button", () => {
     try {
         const panels = {};
         let resetCount = 0;
+        const previewedVisemes = [];
+        const maximums = [];
         const adapter = {
             settingsHost: {
                 addTab(name, render) {
@@ -507,6 +582,16 @@ test("Load settings expose a reset view button", () => {
             resetView() {
                 resetCount += 1;
             },
+            getMaxVisemeWeight() {
+                return 1;
+            },
+            setMaxVisemeWeight(value) {
+                maximums.push(value);
+                return value;
+            },
+            previewViseme(viseme) {
+                previewedVisemes.push(viseme ?? null);
+            },
         };
 
         installVrmSettings(adapter);
@@ -516,6 +601,25 @@ test("Load settings expose a reset view button", () => {
         assert.ok(resetButton);
         resetButton.click();
         assert.equal(resetCount, 1);
+
+        const descendants = (element) => [
+            element,
+            ...element.children.flatMap(descendants),
+        ];
+        const controls = descendants(panels.Load);
+        const maxWeightSlider = controls.find(
+            (element) => element.type === "range" && element.max === 1,
+        );
+        assert.ok(maxWeightSlider);
+        assert.equal(maxWeightSlider.min, 0);
+        assert.equal(maxWeightSlider.step, 0.1);
+        maxWeightSlider.value = "0.7";
+        maxWeightSlider.listeners.input();
+        assert.deepEqual(maximums, [0.7]);
+
+        controls.find((element) => element.textContent === "U").click();
+        controls.find((element) => element.textContent === "Close").click();
+        assert.deepEqual(previewedVisemes, ["U", null]);
     } finally {
         if (previousDocument === undefined) delete globalThis.document;
         else globalThis.document = previousDocument;

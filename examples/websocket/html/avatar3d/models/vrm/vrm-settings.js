@@ -69,6 +69,45 @@ export function installVrmSettings(adapter) {
         unloadButton.addEventListener("click", () => adapter.unloadModel({ clearCache: true }));
         panel.appendChild(unloadButton);
 
+        const mouthSection = document.createElement("div");
+        mouthSection.style.marginTop = "16px";
+        mouthSection.appendChild(heading("Lip sync"));
+
+        const lipSyncGrid = document.createElement("div");
+        lipSyncGrid.className = "vrmi-sliders";
+        const maxWeightLabel = document.createElement("span");
+        maxWeightLabel.textContent = "Max weight";
+        const maxWeightSlider = document.createElement("input");
+        maxWeightSlider.type = "range";
+        maxWeightSlider.min = 0;
+        maxWeightSlider.max = 1;
+        maxWeightSlider.step = 0.1;
+        maxWeightSlider.value = adapter.getMaxVisemeWeight();
+        const maxWeightDisplay = document.createElement("span");
+        maxWeightDisplay.textContent = adapter.getMaxVisemeWeight().toFixed(1);
+        maxWeightSlider.addEventListener("input", () => {
+            const value = adapter.setMaxVisemeWeight(Number.parseFloat(maxWeightSlider.value));
+            maxWeightDisplay.textContent = value.toFixed(1);
+        });
+        lipSyncGrid.append(maxWeightLabel, maxWeightSlider, maxWeightDisplay);
+        mouthSection.appendChild(lipSyncGrid);
+
+        const mouthLabel = heading("Mouth shape");
+        mouthLabel.style.marginTop = "10px";
+        mouthSection.appendChild(mouthLabel);
+        const mouthButtons = document.createElement("div");
+        mouthButtons.style.cssText = "display:flex;gap:5px;flex-wrap:wrap";
+        for (const viseme of ["A", "I", "U", "E", "O"]) {
+            const visemeButton = button(viseme);
+            visemeButton.addEventListener("click", () => adapter.previewViseme(viseme));
+            mouthButtons.appendChild(visemeButton);
+        }
+        const closeMouthButton = button("Close");
+        closeMouthButton.addEventListener("click", () => adapter.previewViseme());
+        mouthButtons.appendChild(closeMouthButton);
+        mouthSection.appendChild(mouthButtons);
+        panel.appendChild(mouthSection);
+
         const animationSection = document.createElement("div");
         animationSection.style.marginTop = "16px";
         animationSection.appendChild(heading("VRMA"));
@@ -176,6 +215,9 @@ export function installVrmSettings(adapter) {
     }, { position: 1 });
 
     settings.onTabReset("Light", () => adapter.resetLighting());
-    settings.onTabReset("Load", () => adapter.clearModelCache());
+    settings.onTabReset("Load", () => {
+        adapter.resetLipSyncSettings();
+        adapter.clearModelCache();
+    });
     adapter.onAnimationListChanged = refreshAnimationList;
 }
