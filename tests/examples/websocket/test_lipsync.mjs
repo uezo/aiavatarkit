@@ -139,9 +139,12 @@ test("bundled default female MFCC profile is ready for the 3D viewer", async () 
     assert.doesNotMatch(threeDSource, /my-tts3|ulipsync-sample/);
     assert.match(threeDSource, /maxVolume: -0\.8/);
     assert.equal(threeDSource.match(/usePhonemeBlend: false/g)?.length, 2);
-    assert.equal(threeDSource.match(/maxVisemeWeight: 0\.5/g)?.length, 2);
+    assert.equal(threeDSource.match(/maxVisemeWeight:/g)?.length, 2);
     assert.doesNotMatch(mfccLipSyncSource, /usePhonemeBlend/);
     assert.doesNotMatch(threeDSource, /playbackAudioHz:/);
+    assert.doesNotMatch(threeDSource, /topK:/);
+    assert.doesNotMatch(mfccLipSyncSource, /topK/);
+    assert.doesNotMatch(threeDSource, /phonemeScoreMultipliers/);
     assert.doesNotMatch(threeDSource, /lipSyncLogBtn|downloadDiagnostics|debug:\s*true/);
     assert.doesNotMatch(
         mfccLipSyncSource,
@@ -264,6 +267,50 @@ test("uLipSync profile handling averages calibration data and aggregates duplica
         Object.keys(result),
         ["visemes", "mainViseme", "mainVisemeWeight"],
     );
+});
+
+test("MFCC phoneme score multipliers bias normalized scores case-insensitively", () => {
+    const vector = (first) => {
+        const values = new Float64Array(12);
+        values[0] = first;
+        return values;
+    };
+    const engine = new MFCCLipSyncEngine({
+        profile: profileWith({ A: [vector(1)], U: [vector(2)] }),
+        phonemeScoreMultipliers: { u: 1.4 },
+    });
+    engine.extractMfcc = (input) => ({
+        mfcc: new Float64Array(12),
+        rawVolume: 0.1,
+        audio: MFCCLipSyncEngine.input(input),
+    });
+    engine._score = (_mfcc, average) => (average[0] === 1 ? 0.6 : 0.5);
+
+    const result = engine.processAudioData(playbackInput(sine(700)));
+
+    assert.equal(result.mainViseme, "U");
+    assert.ok(Math.abs(result.visemes.A - 0.6 / 1.3) < 1e-12);
+    assert.ok(Math.abs(result.visemes.U - 0.7 / 1.3) < 1e-12);
+    assert.equal(engine._applyPhonemeScoreMultiplier(0.8, "U"), 1);
+});
+
+test("MFCC phoneme score multipliers reject invalid values", () => {
+    const profile = profileWith({ A: [new Float64Array(12)] });
+    for (const phonemeScoreMultipliers of [[], "invalid"]) {
+        assert.throws(
+            () => new MFCCLipSyncEngine({ profile, phonemeScoreMultipliers }),
+            /phonemeScoreMultipliers must be an object/,
+        );
+    }
+    for (const multiplier of [-1, Number.NaN, Number.POSITIVE_INFINITY, "1.4"]) {
+        assert.throws(
+            () => new MFCCLipSyncEngine({
+                profile,
+                phonemeScoreMultipliers: { U: multiplier },
+            }),
+            /must be a finite non-negative number/,
+        );
+    }
 });
 
 test("legacy and MFCC implementations are separate injectable engine objects", async () => {

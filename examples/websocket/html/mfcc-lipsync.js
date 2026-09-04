@@ -143,6 +143,7 @@ class MFCCLipSyncEngine {
         maxVolume = -1.5,
         volumeGain = 1,
         timeOffsetSec = 0,
+        phonemeScoreMultipliers = {},
         phonemeMap = MFCCLipSyncEngine.DEFAULT_PHONEME_MAP,
     } = {}) {
         this.profileUrl = profileUrl;
@@ -150,6 +151,9 @@ class MFCCLipSyncEngine {
         this.maxVolume = maxVolume;
         this.volumeGain = volumeGain;
         this.timeOffsetSec = timeOffsetSec;
+        this.phonemeScoreMultipliers = this._normalizePhonemeScoreMultipliers(
+            phonemeScoreMultipliers,
+        );
         this.phonemeMap = { ...phonemeMap };
         this.profile = null;
         this.entries = [];
@@ -304,8 +308,9 @@ class MFCCLipSyncEngine {
             return this._emptyResult();
         }
 
-        const scores = this.entries.map((entry) => (
-            this._score(features.mfcc, entry.average)
+        const scores = this.entries.map((entry) => this._applyPhonemeScoreMultiplier(
+            this._score(features.mfcc, entry.average),
+            entry.name,
         ));
         let scoreSum = 0;
         for (let i = 0; i < scores.length; i++) {
@@ -461,6 +466,34 @@ class MFCCLipSyncEngine {
 
     _score(mfcc, phoneme) {
         return this._scoreDetail(mfcc, phoneme).score;
+    }
+
+    _normalizePhonemeScoreMultipliers(value) {
+        if (value == null) return {};
+        if (typeof value !== "object" || Array.isArray(value)) {
+            throw new TypeError("phonemeScoreMultipliers must be an object");
+        }
+        const normalized = {};
+        for (const [phoneme, multiplier] of Object.entries(value)) {
+            if (typeof multiplier !== "number"
+                || !Number.isFinite(multiplier)
+                || multiplier < 0) {
+                throw new TypeError(
+                    `phonemeScoreMultipliers.${phoneme} must be a finite non-negative number`,
+                );
+            }
+            normalized[phoneme.toUpperCase()] = multiplier;
+        }
+        return normalized;
+    }
+
+    _applyPhonemeScoreMultiplier(score, phoneme) {
+        if (!Number.isFinite(score) || score <= 0) return 0;
+        const key = phoneme.toUpperCase();
+        const multiplier = Object.hasOwn(this.phonemeScoreMultipliers, key)
+            ? this.phonemeScoreMultipliers[key]
+            : 1;
+        return Math.min(1, score * multiplier);
     }
 
     _scoreDetail(mfcc, phoneme) {

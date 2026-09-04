@@ -69,7 +69,7 @@ lipsync: {
 },
 ```
 
-Use `engine: new LipSyncEngine({...})` for the legacy implementation. The adapters call the injected object without branching on its class. `profile` can be used instead of `profileUrl` to pass an already parsed Profile object. For VRM and MMD, `maxVisemeWeight` scales the final viseme weights proportionally: `0.5` makes an engine weight of `0.7` apply as `0.35`. It defaults to `1.0` when omitted.
+Use `engine: new LipSyncEngine({...})` for the legacy implementation. The adapters call the injected object without branching on its class. `profile` can be used instead of `profileUrl` to pass an already parsed Profile object. `phonemeScoreMultipliers`, such as `{ U: 1.4 }`, can bias individual Profile phoneme scores before normalization when a calibrated mouth shape is systematically under-selected. Keys are case-insensitive, omitted multipliers default to `1.0`, and adjusted scores are capped at `1.0`. This changes which viseme is selected, not how far the mouth opens. For VRM and MMD, `maxVisemeWeight` scales the final viseme weights proportionally: `0.5` makes an engine weight of `0.7` apply as `0.35`. It defaults to `1.0` when omitted.
 
 The Image viewer injects an `MFCCLipSyncEngine` into `ImageAvatar` by default. Omitting `lipsyncEngine` keeps the legacy engine as a fallback. Image mouths are selected statelessly from each result: silence closes the mouth, a low-volume `A` or `O` and an ambiguous viseme distribution use `half`, stronger `A` or `O` use `open`, `U` uses `u`, and `I` or `E` uses `e`. MotionPNGTuber continues to use its own dedicated lip sync implementation.
 
@@ -88,6 +88,27 @@ calibration/
   o.wav
 ```
 
+For a higher-quality context-aware Profile, use the unsuffixed files for
+consonant-vowel calibration recordings and optionally add a complete clean-vowel
+reference set:
+
+```text
+calibration/
+  a.wav             a_reference.wav
+  i.wav             i_reference.wav
+  u.wav             u_reference.wav
+  e.wav             e_reference.wav
+  o.wav             o_reference.wav
+```
+
+When all five reference files are present, the Profile data still comes only
+from `a.wav` through `o.wav`. The clean reference set is used to rank stable
+candidate frames by similarity to the intended vowel and separation from the
+other four vowels. Candidate selection is balanced across the voiced sections
+before the best 16 frames are stored. A partial reference set is rejected so
+that every vowel is selected under the same conditions. Without reference
+files, generation behaves exactly as described below.
+
 The WAV files must be uncompressed 16 kHz PCM or IEEE-float audio. Mono is recommended; for a multichannel file, only the first channel is analyzed. The tool deliberately does not resample calibration audio, so an accidental sample-rate mismatch is reported instead of being hidden.
 
 From `examples/websocket`, generate a Profile with:
@@ -96,7 +117,7 @@ From `examples/websocket`, generate a Profile with:
 node tools/build-mfcc-profile.mjs calibration html/profiles/custom-voice.json
 ```
 
-When the output argument is omitted, the tool writes `calibration/mfcc-profile.json`. It first looks for one sufficiently long voiced section. If none exists, it automatically combines the stable centers of repeated short sections; no option is required. It then selects 16 distributed MFCC frames and prints a five-vowel self-check plus a quality analysis. The analysis reports leave-one-out (LOO) classification, within-vowel stability, the margin from the nearest competing vowel, the closest vowel pairs, and heuristic warnings for variable or overlapping calibration data. The self-check is a basic training-data sanity check; a perfect score can still accompany a thin classification margin, so inspect the LOO result and warnings as well. These metrics are calibration hints rather than a guarantee for arbitrary sentences. They are printed to the terminal and are not added to the compatible Profile JSON.
+When the output argument is omitted, the tool writes `calibration/mfcc-profile.json`. Without a reference set, it first looks for one sufficiently long voiced section. If none exists, it automatically combines the stable centers of repeated short sections; no option is required. It then selects 16 distributed MFCC frames and prints a five-vowel self-check plus a quality analysis. The analysis reports leave-one-out (LOO) classification, within-vowel stability, the margin from the nearest competing vowel, the closest vowel pairs, and heuristic warnings for variable or overlapping calibration data. The self-check is a basic training-data sanity check; a perfect score can still accompany a thin classification margin, so inspect the LOO result and warnings as well. These metrics are calibration hints rather than a guarantee for arbitrary sentences. They are printed to the terminal and are not added to the compatible Profile JSON.
 
 The generated Profile contains `A/I/U/E/O`; silence still closes the mouth through the engine's volume gate, so a `-.wav` file is not required. Select the generated file with `profileUrl` in the engine options shown above. A low self-check or LOO score usually means that a clip contains the wrong vowel, has too few usable repetitions, or changes voice quality between repetitions.
 
