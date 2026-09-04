@@ -2,6 +2,7 @@ import { DisplayController } from "./display-controller.js";
 import { assertAvatarAdapter } from "./avatar-adapter.js";
 import { installMessageController } from "./message-controller.js";
 import { installPageControls } from "./page-controls.js";
+import { installRequestInput } from "./request-input-controller.js";
 import { installToolToasts } from "./tool-toast.js";
 import { VisionController } from "./vision-controller.js";
 import { ArtifactController } from "../../artifact/artifact-controller.js";
@@ -90,6 +91,14 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
         state: display.state,
         autoHideDelayMs: config.ui.autoHideDelayMs,
     });
+    const requestInput = installRequestInput({
+        aiavatar,
+        ui,
+        imageOptions: {
+            maxLongEdge: config.vision.maxLongEdge,
+            jpegQuality: config.vision.jpegQuality,
+        },
+    });
     const vision = new VisionController({ aiavatar, ui, config: config.vision });
     const artifacts = new ArtifactController({
         plugins: artifactPlugins,
@@ -153,6 +162,7 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
         document.removeEventListener("drop", onDrop);
         controls.dispose();
         messages.dispose();
+        requestInput.dispose();
         toasts.dispose();
         artifacts.dispose();
         vision.dispose();

@@ -86,7 +86,15 @@ export function installMessageController({ aiavatar, ui, state, autoHideDelayMs 
     };
 
     const interval = setInterval(() => {
-        if (!state.autoHide || autoHidden) return;
+        if (!state.autoHide || state.showRequestInput) {
+            if (autoHidden) {
+                autoHidden = false;
+                lastActivityAt = Date.now();
+                messageBox.classList.remove("auto-hidden");
+            }
+            return;
+        }
+        if (autoHidden) return;
         if (aiavatar.isAudioPlaying || timer) {
             lastActivityAt = Date.now();
             return;

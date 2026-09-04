@@ -36,6 +36,7 @@ export class DisplayController {
             showAIText: config.showAIText,
             showMicGlow: config.showMicGlow,
             showMenu: config.showMenu,
+            showRequestInput: config.showRequestInput ?? false,
             autoHide: config.autoHide,
             messageSpeed: config.messageSpeed,
         };
@@ -62,6 +63,7 @@ export class DisplayController {
                 showAIText: "showAIText",
                 showMicGlow: "showMicGlow",
                 showVnMenu: "showMenu",
+                showRequestInput: "showRequestInput",
                 autoHideMsgBox: "autoHide",
                 msgSpeed: "messageSpeed",
             };
@@ -83,6 +85,7 @@ export class DisplayController {
             showAIText: this.state.showAIText,
             showMicGlow: this.state.showMicGlow,
             showVnMenu: this.state.showMenu,
+            showRequestInput: this.state.showRequestInput,
             autoHideMsgBox: this.state.autoHide,
             msgSpeed: this.state.messageSpeed,
         }));
@@ -95,6 +98,9 @@ export class DisplayController {
         if (menu) menu.style.display = this.state.showMenu ? "flex" : "none";
         const messageBox = document.getElementById("messageBox");
         messageBox.classList.toggle("auto-hidden", this.state.autoHide);
+        const requestTextForm = document.getElementById("requestTextForm");
+        if (requestTextForm) requestTextForm.hidden = !this.state.showRequestInput;
+        if (this.state.showRequestInput) messageBox.classList.remove("auto-hidden");
         this.ui.speakerLabelAI = this.state.characterName || "AI";
         this.ui.speakerLabelUser = this.state.userName || "User";
         if (!this.state.showMicGlow) document.getElementById("micGlow").classList.remove("active");
@@ -185,6 +191,7 @@ export class DisplayController {
             ["Show AI speech", "showAIText"],
             ["Auto-hide", "autoHide"],
             ["Show menu buttons", "showMenu"],
+            ["Show text input", "showRequestInput"],
         ];
         for (const [label, key] of toggleDefinitions) {
             const toggle = createToggle(label, this.state[key], (value) => {
