@@ -48,6 +48,8 @@ class AvatarUI {
         this.volumePopup = document.getElementById("volumePopup");
         this.volumeSlider = document.getElementById("volumeSlider");
         this.volumeValue = document.getElementById("volumeValue");
+        this.microphoneVolumeSlider = document.getElementById("microphoneVolumeSlider");
+        this.microphoneVolumeValue = document.getElementById("microphoneVolumeValue");
         this.volumeControl = document.getElementById("volumeControl");
         this.messageBox = document.getElementById("messageBox");
         this.messageSpeaker = document.getElementById("messageSpeaker");
@@ -200,10 +202,16 @@ class AvatarUI {
         });
 
         this.volumeSlider.addEventListener("input", () => {
-            const val = parseInt(this.volumeSlider.value) / 100;
+            const val = Number.parseInt(this.volumeSlider.value, 10) / 100;
             this.aiavatar.setVolume(val);
             this.volumeValue.textContent = this.volumeSlider.value;
             this.volumeBtn.textContent = val === 0 ? "\u{1f507}" : val < 0.5 ? "\u{1f509}" : "\u{1f50a}";
+        });
+
+        this.microphoneVolumeSlider?.addEventListener("input", () => {
+            const val = Number.parseInt(this.microphoneVolumeSlider.value, 10) / 100;
+            this.aiavatar.setMicrophoneVolume(val);
+            this.microphoneVolumeValue.textContent = this.microphoneVolumeSlider.value;
         });
     }
 

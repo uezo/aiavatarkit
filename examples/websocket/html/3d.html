@@ -36,15 +36,38 @@
                 <div class="vn-vol-wrap" id="volumeControl">
                     <button class="vn-menu-btn" id="volumeBtn">VOL</button>
                     <div class="volume-popup" id="volumePopup">
-                        <input
-                            type="range"
-                            id="volumeSlider"
-                            class="volume-slider-vertical"
-                            min="0"
-                            max="100"
-                            value="100"
-                        >
-                        <span class="volume-value" id="volumeValue">100</span>
+                        <div class="volume-channels">
+                            <label class="volume-channel">
+                                <span class="volume-label" aria-hidden="true">🔊</span>
+                                <span class="volume-slider-slot">
+                                    <input
+                                        type="range"
+                                        id="volumeSlider"
+                                        class="volume-slider-vertical"
+                                        min="0"
+                                        max="100"
+                                        value="100"
+                                        aria-label="Speaker volume"
+                                    >
+                                </span>
+                                <span class="volume-value"><span id="volumeValue">100</span>%</span>
+                            </label>
+                            <label class="volume-channel">
+                                <span class="volume-label" aria-hidden="true">🎙️</span>
+                                <span class="volume-slider-slot">
+                                    <input
+                                        type="range"
+                                        id="microphoneVolumeSlider"
+                                        class="volume-slider-vertical"
+                                        min="0"
+                                        max="200"
+                                        value="100"
+                                        aria-label="Microphone volume"
+                                    >
+                                </span>
+                                <span class="volume-value"><span id="microphoneVolumeValue">100</span>%</span>
+                            </label>
+                        </div>
                     </div>
                 </div>
                 <button class="vn-menu-btn" id="configBtn">CONFIG</button>
@@ -140,6 +163,7 @@
                 voiceDetectMode: "rms",
                 voiceHoldDurationMs: 1000,
                 initialVolume: 1.0,
+                initialMicrophoneVolume: 1.0,
                 bargeInEnabled: false,
             },
 

@@ -62,6 +62,7 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
         faceImagePaths: null,
     });
     aiavatar.setVolume(config.audio.initialVolume);
+    aiavatar.setMicrophoneVolume(config.audio.initialMicrophoneVolume ?? 1.0);
 
     const ui = new AvatarUI({
         aiavatar,
@@ -106,6 +107,11 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
     const volumePercent = Math.round(config.audio.initialVolume * 100);
     document.getElementById("volumeSlider").value = volumePercent;
     document.getElementById("volumeValue").textContent = volumePercent;
+    const microphoneVolumePercent = Math.round(
+        (config.audio.initialMicrophoneVolume ?? 1.0) * 100,
+    );
+    document.getElementById("microphoneVolumeSlider").value = microphoneVolumePercent;
+    document.getElementById("microphoneVolumeValue").textContent = microphoneVolumePercent;
 
     const dropOverlay = document.getElementById("dropOverlay");
     const onDragOver = (event) => {
