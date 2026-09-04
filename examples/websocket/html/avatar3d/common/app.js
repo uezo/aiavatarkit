@@ -28,6 +28,28 @@ function validateConfig(config) {
     }
 }
 
+const IMAGE_FILE_EXTENSION = /\.(?:avif|bmp|gif|heic|heif|ico|jfif|jpe?g|png|svg|tiff?|webp)$/i;
+
+function isImageFile(file) {
+    return String(file?.type || "").toLowerCase().startsWith("image/")
+        || IMAGE_FILE_EXTENSION.test(String(file?.name || ""));
+}
+
+export async function importDroppedFiles(files, { display, modelAdapter }) {
+    const modelFiles = [];
+    let backgroundFile = null;
+
+    for (const file of files) {
+        if (isImageFile(file)) backgroundFile = file;
+        else modelFiles.push(file);
+    }
+
+    const imports = [];
+    if (backgroundFile) imports.push(display.storeBackground(backgroundFile));
+    if (modelFiles.length) imports.push(modelAdapter.importFiles(modelFiles));
+    await Promise.all(imports);
+}
+
 export async function startAvatarApp({ config, modelAdapter, blobStore, artifactPlugins = [] }) {
     validateConfig(config);
     assertAvatarAdapter(modelAdapter);
@@ -97,9 +119,9 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
         event.preventDefault();
         dropOverlay.classList.remove("show");
         try {
-            await modelAdapter.importFiles(Array.from(event.dataTransfer.files || []));
+            await importDroppedFiles(Array.from(event.dataTransfer.files || []), { display, modelAdapter });
         } catch (error) {
-            console.error("Failed to import model files:", error);
+            console.error("Failed to import dropped files:", error);
         }
     };
     document.addEventListener("dragover", onDragOver);

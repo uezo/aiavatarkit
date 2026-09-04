@@ -147,7 +147,7 @@ export function installVrmSettings(adapter) {
 
         const hint = document.createElement("div");
         hint.style.cssText = "margin-top:12px;font-size:11px;color:#999";
-        hint.textContent = "You can also drag & drop .vrm / .vrma files onto the screen.";
+        hint.textContent = "You can also drag & drop .vrm / .vrma / image files onto the screen.";
         panel.appendChild(hint);
     }, { position: 0, active: true });
 
