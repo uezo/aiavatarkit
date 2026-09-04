@@ -23,7 +23,7 @@
     <div class="mic-glow" id="micGlow"></div>
 
     <div class="drop-overlay" id="dropOverlay">
-        <div class="drop-overlay-text">VRM / VRMA file をドロップ</div>
+        <div class="drop-overlay-text">Drop a VRM, VRMA, or image file</div>
     </div>
 
     <div id="messageBox" class="message-box hidden">
@@ -36,21 +36,98 @@
                 <div class="vn-vol-wrap" id="volumeControl">
                     <button class="vn-menu-btn" id="volumeBtn">VOL</button>
                     <div class="volume-popup" id="volumePopup">
-                        <input
-                            type="range"
-                            id="volumeSlider"
-                            class="volume-slider-vertical"
-                            min="0"
-                            max="100"
-                            value="100"
-                        >
-                        <span class="volume-value" id="volumeValue">100</span>
+                        <div class="volume-channels">
+                            <label class="volume-channel">
+                                <span class="volume-label" aria-hidden="true">🔊</span>
+                                <span class="volume-slider-slot">
+                                    <input
+                                        type="range"
+                                        id="volumeSlider"
+                                        class="volume-slider-vertical"
+                                        min="0"
+                                        max="100"
+                                        value="100"
+                                        aria-label="Speaker volume"
+                                    >
+                                </span>
+                                <span class="volume-value"><span id="volumeValue">100</span>%</span>
+                            </label>
+                            <label class="volume-channel">
+                                <span class="volume-label" aria-hidden="true">🎙️</span>
+                                <span class="volume-slider-slot">
+                                    <input
+                                        type="range"
+                                        id="microphoneVolumeSlider"
+                                        class="volume-slider-vertical"
+                                        min="0"
+                                        max="200"
+                                        value="100"
+                                        aria-label="Microphone volume"
+                                    >
+                                </span>
+                                <span class="volume-value"><span id="microphoneVolumeValue">100</span>%</span>
+                            </label>
+                        </div>
                     </div>
                 </div>
+                <button class="vn-menu-btn" id="backlogBtn">LOG</button>
                 <button class="vn-menu-btn" id="configBtn">CONFIG</button>
             </div>
             <div id="messageText" class="message-text"></div>
+            <form id="requestTextForm" class="request-text-form" autocomplete="off" hidden>
+                <span class="request-image-control">
+                    <button
+                        type="button"
+                        id="requestImageButton"
+                        class="request-image-button"
+                        aria-label="Attach image"
+                        title="Attach image"
+                    >
+                        <span id="requestImageIcon" aria-hidden="true">📎</span>
+                        <img id="requestImagePreview" class="request-image-preview" alt="Selected image" hidden>
+                    </button>
+                    <button
+                        type="button"
+                        id="requestImageRemove"
+                        class="request-image-remove"
+                        aria-label="Remove attached image"
+                        title="Remove attached image"
+                        hidden
+                    >×</button>
+                    <input type="file" id="requestImageInput" accept="image/*" hidden>
+                </span>
+                <input
+                    type="text"
+                    id="requestTextInput"
+                    class="request-text-input"
+                    placeholder="Type a message..."
+                    aria-label="Request text"
+                >
+                <button type="submit" class="request-text-submit">SEND</button>
+            </form>
         </div>
+    </div>
+
+    <div
+        id="backlogOverlay"
+        class="backlog-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="backlogTitle"
+        hidden
+    >
+        <section class="backlog-panel">
+            <header class="backlog-header">
+                <div>
+                    <h2 id="backlogTitle">BACKLOG</h2>
+                    <span id="backlogCount" class="backlog-count">0 / 100</span>
+                </div>
+                <button type="button" id="backlogClose" class="backlog-close" aria-label="Close backlog">×</button>
+            </header>
+            <div id="backlogList" class="backlog-list">
+                <p id="backlogEmpty" class="backlog-empty">No conversation history yet.</p>
+            </div>
+        </section>
     </div>
 
     <div id="toolStatus" hidden></div>
@@ -140,6 +217,7 @@
                 voiceDetectMode: "rms",
                 voiceHoldDurationMs: 1000,
                 initialVolume: 1.0,
+                initialMicrophoneVolume: 1.0,
                 bargeInEnabled: false,
             },
 
@@ -154,6 +232,7 @@
                 showAIText: true,
                 showMicGlow: true,
                 showMenu: true,
+                showRequestInput: false,
                 toastDurationMs: 4000,
                 controls: {
                     start: "START",
@@ -163,6 +242,11 @@
                 toolLabels: {
                     send_query_to_openclaw: "Asking OpenClaw🦞",
                 },
+            },
+
+            backlog: {
+                enabled: true,
+                maxEntries: 100,
             },
 
             vision: {
@@ -212,7 +296,7 @@
                         labels: {
                             title: "AIAvatarKit 3D Avatar (VRM)",
                             placeholder: "Drop or load a VRM file",
-                            drop: "VRM / VRMA file をドロップ",
+                            drop: "Drop a VRM, VRMA, or image file",
                         },
                         persistence: {
                             databaseName: "vrm_galge_cache",
@@ -221,6 +305,7 @@
                             legacyBackgroundKey: "vrm_bg_image",
                             cameraKey: "vrm_camera",
                             lightingKey: "vrm_lighting",
+                            lipSyncKey: "vrm_lipsync",
                             modelKey: "vrm_file",
                             animationNamesKey: "vrma_names",
                             animationKeyPrefix: "vrma_",
@@ -286,7 +371,7 @@
                         labels: {
                             title: "AIAvatarKit 3D Avatar (MMD)",
                             placeholder: "Drop or load a PMX/PMD file",
-                            drop: "PMX / PMD / VMD file をドロップ",
+                            drop: "Drop a PMX, PMD, VMD, or image file",
                         },
                         persistence: {
                             databaseName: "mmd_galge_cache",

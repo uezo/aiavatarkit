@@ -12,6 +12,7 @@ class AIAvatarClient {
         this.scriptNode = null;
         this.micStream = null;
         this.isAudioPlaying = false;
+        this.isBacklogAudioPlaying = false;
         this.messageQueue = [];
         this.processingQueue = false;
         this.queueGeneration = 0;
@@ -29,6 +30,7 @@ class AIAvatarClient {
         this.getStartMetadata = () => null;
         this._userMuted = false;
         this.volume = 1.0;
+        this.microphoneVolume = 1.0;
         this.gainNode = null;
         this.chatContextId = null;
     }
@@ -108,11 +110,18 @@ class AIAvatarClient {
                     if (!this._userMuted && !this.isMicrophoneMuted()) {
                         let sum = 0;
                         for (let i = 0; i < inputData.length; i++) {
-                            sum += inputData[i] * inputData[i];
+                            const sample = Math.max(
+                                -1,
+                                Math.min(1, inputData[i] * this.microphoneVolume),
+                            );
+                            sum += sample * sample;
                         }
                         const rms = Math.sqrt(sum / inputData.length);
                         this.onMicrophoneDataSend(rms);
-                        const pcmBuffer = this.float32To16BitPCMBuffer(inputData);
+                        const pcmBuffer = this.float32To16BitPCMBuffer(
+                            inputData,
+                            this.microphoneVolume,
+                        );
                         const base64Data = this.arrayBufferToBase64(pcmBuffer);
                         this.ws.send(JSON.stringify({ type: "data", session_id: sessionId, audio_data: base64Data }));
                     } else {
@@ -306,6 +315,10 @@ class AIAvatarClient {
         }
     }
 
+    setMicrophoneVolume(value) {
+        this.microphoneVolume = Math.max(0, Math.min(2, value));
+    }
+
     chat(sessionId, userId, text, imageDataUrl) {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
         const msg = {
@@ -380,12 +393,12 @@ class AIAvatarClient {
         return this.currentFaceName;
     }
 
-    float32To16BitPCMBuffer(floatBuffer) {
+    float32To16BitPCMBuffer(floatBuffer, gain = 1) {
         const len = floatBuffer.length;
         const buffer = new ArrayBuffer(len * 2);
         const view = new DataView(buffer);
         for (let i = 0; i < len; i++) {
-            let sample = floatBuffer[i];
+            let sample = floatBuffer[i] * gain;
             sample = Math.max(-1, Math.min(1, sample));
             const intSample = sample < 0 ? sample * 32768 : sample * 32767;
             view.setInt16(i * 2, intSample, true);

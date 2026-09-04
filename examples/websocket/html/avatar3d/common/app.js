@@ -1,7 +1,10 @@
 import { DisplayController } from "./display-controller.js";
 import { assertAvatarAdapter } from "./avatar-adapter.js";
+import { installBacklog } from "./backlog-controller.js";
+import { createBacklogStore } from "./backlog-store.js";
 import { installMessageController } from "./message-controller.js";
 import { installPageControls } from "./page-controls.js";
+import { installRequestInput } from "./request-input-controller.js";
 import { installToolToasts } from "./tool-toast.js";
 import { VisionController } from "./vision-controller.js";
 import { ArtifactController } from "../../artifact/artifact-controller.js";
@@ -26,6 +29,29 @@ function validateConfig(config) {
     if (config.ui.messageBoxOpacity < 0 || config.ui.messageBoxOpacity > 100) {
         throw new RangeError("ui.messageBoxOpacity must be between 0 and 100");
     }
+    if (config.backlog != null) requireObject(config.backlog, "backlog");
+}
+
+const IMAGE_FILE_EXTENSION = /\.(?:avif|bmp|gif|heic|heif|ico|jfif|jpe?g|png|svg|tiff?|webp)$/i;
+
+function isImageFile(file) {
+    return String(file?.type || "").toLowerCase().startsWith("image/")
+        || IMAGE_FILE_EXTENSION.test(String(file?.name || ""));
+}
+
+export async function importDroppedFiles(files, { display, modelAdapter }) {
+    const modelFiles = [];
+    let backgroundFile = null;
+
+    for (const file of files) {
+        if (isImageFile(file)) backgroundFile = file;
+        else modelFiles.push(file);
+    }
+
+    const imports = [];
+    if (backgroundFile) imports.push(display.storeBackground(backgroundFile));
+    if (modelFiles.length) imports.push(modelAdapter.importFiles(modelFiles));
+    await Promise.all(imports);
 }
 
 export async function startAvatarApp({ config, modelAdapter, blobStore, artifactPlugins = [] }) {
@@ -40,6 +66,7 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
         faceImagePaths: null,
     });
     aiavatar.setVolume(config.audio.initialVolume);
+    aiavatar.setMicrophoneVolume(config.audio.initialMicrophoneVolume ?? 1.0);
 
     const ui = new AvatarUI({
         aiavatar,
@@ -67,6 +94,32 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
         state: display.state,
         autoHideDelayMs: config.ui.autoHideDelayMs,
     });
+    const backlogConfig = {
+        enabled: true,
+        maxEntries: 100,
+        ...config.backlog,
+    };
+    const backlogStore = createBacklogStore({
+        enabled: config.persistence.enabled && backlogConfig.enabled,
+        databaseName: `${config.persistence.databaseName}_backlog`,
+        maxEntries: backlogConfig.maxEntries,
+    });
+    const backlog = installBacklog({
+        aiavatar,
+        ui,
+        store: backlogStore,
+        maxEntries: backlogConfig.maxEntries,
+    });
+    await backlog.ready;
+    const requestInput = installRequestInput({
+        aiavatar,
+        ui,
+        imageOptions: {
+            maxLongEdge: config.vision.maxLongEdge,
+            jpegQuality: config.vision.jpegQuality,
+        },
+        onSent: (request) => backlog.stageUser(request),
+    });
     const vision = new VisionController({ aiavatar, ui, config: config.vision });
     const artifacts = new ArtifactController({
         plugins: artifactPlugins,
@@ -84,6 +137,11 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
     const volumePercent = Math.round(config.audio.initialVolume * 100);
     document.getElementById("volumeSlider").value = volumePercent;
     document.getElementById("volumeValue").textContent = volumePercent;
+    const microphoneVolumePercent = Math.round(
+        (config.audio.initialMicrophoneVolume ?? 1.0) * 100,
+    );
+    document.getElementById("microphoneVolumeSlider").value = microphoneVolumePercent;
+    document.getElementById("microphoneVolumeValue").textContent = microphoneVolumePercent;
 
     const dropOverlay = document.getElementById("dropOverlay");
     const onDragOver = (event) => {
@@ -97,9 +155,9 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
         event.preventDefault();
         dropOverlay.classList.remove("show");
         try {
-            await modelAdapter.importFiles(Array.from(event.dataTransfer.files || []));
+            await importDroppedFiles(Array.from(event.dataTransfer.files || []), { display, modelAdapter });
         } catch (error) {
-            console.error("Failed to import model files:", error);
+            console.error("Failed to import dropped files:", error);
         }
     };
     document.addEventListener("dragover", onDragOver);
@@ -107,6 +165,7 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
     document.addEventListener("drop", onDrop);
 
     aiavatar.onResponseReceived = (response) => {
+        backlog.handleResponse(response);
         artifacts.handleResponse(response);
         modelAdapter.handleResponse(response);
         vision.handleResponse(response);
@@ -124,7 +183,9 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
         document.removeEventListener("dragleave", onDragLeave);
         document.removeEventListener("drop", onDrop);
         controls.dispose();
+        backlog.dispose();
         messages.dispose();
+        requestInput.dispose();
         toasts.dispose();
         artifacts.dispose();
         vision.dispose();
@@ -133,7 +194,7 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
     };
     window.addEventListener("pagehide", dispose, { once: true });
 
-    const app = { aiavatar, ui, modelAdapter, display, vision, artifacts, dispose };
+    const app = { aiavatar, ui, modelAdapter, display, vision, artifacts, backlog, dispose };
     globalThis.avatar3d = app;
     return app;
 }
