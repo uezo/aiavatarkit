@@ -65,8 +65,8 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
         preroll_buffer_count: int = 5,
         to_linear16: Optional[Callable[[bytes], bytes]] = None,
         debug: bool = False,
-        # Backward-compatible custom JIT model override. Prefer hub_cache_path
-        # for fully local Silero VAD model + utils loading.
+        # Custom ONNX model override. Use hub_cache_path for fully local
+        # Silero VAD model + utils loading.
         model_path: Optional[str] = None,
         hub_cache_path: Optional[str] = None,
         speech_probability_threshold: float = 0.5,
@@ -431,13 +431,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
     def get_session(self, session_id: str):
         session = self.recording_sessions.get(session_id)
         if session is None:
-            # Create VAD iterator for this session using assigned model
-            model, _ = self._get_model_and_lock(session_id)
-            vad_iterator = self.VADIteratorClass(
-                model,
-                threshold=self.speech_probability_threshold,
-                sampling_rate=self.sample_rate
-            )
+            vad_iterator = self._create_vad_iterator(session_id)
             session = RecordingSession(session_id, self.preroll_buffer_count, vad_iterator)
             self.recording_sessions[session_id] = session
         if session.amplitude_threshold is None:

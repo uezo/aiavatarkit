@@ -128,7 +128,10 @@ The built-in application uses `SileroStreamSpeechDetector` with the filler and N
 
 ### Semantic VAD dependencies
 
-Namo Turn needs `onnxruntime`, `transformers`, and `huggingface-hub`, none of which ship with the base package. The command checks for them before it builds anything, and what happens next depends on where it is running:
+Namo Turn needs `onnxruntime`, `transformers`, and `huggingface-hub`. ONNX Runtime
+is included in the base package for Silero VAD; the other two are provided by the
+`aiavatar[namo-turn]` extra. The command checks for all three before it builds
+anything, and what happens next depends on where it is running:
 
 | Situation | Behaviour |
 | --- | --- |

@@ -328,17 +328,22 @@ def test_new_admin_updates_safe_members_without_persisting(tmp_path):
 
 
 def test_vad_threshold_change_applies_to_new_sessions(monkeypatch, tmp_path):
+    class FakeVadModel:
+        def reset_states(self):
+            pass
+
     class FakeVadIterator:
         def __init__(self, model, threshold, sampling_rate):
             self.model = model
             self.threshold = threshold
             self.sampling_rate = sampling_rate
+            self.reset_states()
 
         def reset_states(self):
-            pass
+            self.model.reset_states()
 
     def initialize_fake_model_pool(self, *_):
-        self.model_pool = [object()]
+        self.model_pool = [FakeVadModel()]
         self.model_locks = [threading.Lock()]
         self.VADIteratorClass = FakeVadIterator
 
