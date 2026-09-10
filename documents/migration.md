@@ -61,6 +61,33 @@ shutdown path. The Responses WebSocket service continues to use `openai_api_key`
 and `model` directly because it speaks the WebSocket event protocol rather than using the
 OpenAI HTTP client.
 
+## Silero VAD ONNX models
+
+`SileroSpeechDetector` and `SileroStreamSpeechDetector` now use ONNX Runtime on
+CPU. ONNX Runtime is included in the base package dependencies, and the default
+model requires no configuration changes.
+
+If you set `model_path`, replace the custom `.jit` model with a compatible
+Silero `.onnx` model, or omit the option to use the default model. JIT files are
+no longer accepted. For example, with a local hub directory:
+
+```python
+from aiavatar.sts.vad.silero import SileroSpeechDetector
+
+vad = SileroSpeechDetector(
+    hub_cache_path="/models/silero-vad",
+    model_path="/models/custom_silero_vad.onnx",
+)
+```
+
+The hub directory must include its bundled ONNX model and compatible utilities,
+even when a custom model is supplied. See [Local models](vad.md#local-models)
+for the loading behavior. Probability values can differ between JIT and ONNX;
+check any tuned speech probability threshold with representative audio.
+
+The default `model_pool_size=1` supports multiple sessions with separate
+inference histories. Existing pool settings remain supported.
+
 ## See also
 
 - [Getting started](getting-started.md) — installation and the current setup

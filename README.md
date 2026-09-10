@@ -334,6 +334,9 @@ The recognizer is passed twice on purpose. `SileroStreamSpeechDetector` uses it 
 segments mid-utterance, and the pipeline keeps it for requests that arrive as audio rather
 than as already-recognised text.
 
+Silero VAD runs on CPU using ONNX Runtime. For a local hub directory or a custom
+`.onnx` model, see [Local Silero models](documents/vad.md#local-models).
+
 → [Pipeline guide](documents/pipeline.md)
 
 ### Serve two channels from one pipeline

@@ -23,7 +23,11 @@ AIAvatarKit includes Voice Activity Detection (VAD) components to automatically 
 
 ## Silero Speech Detector
 
-The default Speech Detector is `SileroSpeechDetector`, which employs AI-based voice activity detection using the Silero VAD model:
+The default Speech Detector is `SileroSpeechDetector`, which uses the Silero VAD
+ONNX model on CPU. ONNX Runtime is included in the base package dependencies.
+Inference engines are shared, while inference history and speech-boundary state
+are maintained separately for each session. This also applies to
+`SileroStreamSpeechDetector` and both settings of `use_vad_iterator`.
 
 ```python
 from aiavatar.sts.vad.silero import SileroSpeechDetector
@@ -37,43 +41,16 @@ vad = SileroSpeechDetector(
     sample_rate=16000,                   # Audio sample rate
     channels=1,                          # Audio channels
     chunk_size=512,                      # Audio processing chunk size
-    model_pool_size=1,                   # Number of parallel AI models
+    model_pool_size=1,                   # Number of shared ONNX inference engines
     debug=True
 )
 
 aiavatar_app = AIAvatarWebSocketServer(vad=vad, openai_api_key=OPENAI_API_KEY)
 ```
 
-For high-concurrency applications:
-
-```python
-vad = SileroSpeechDetector(
-    speech_probability_threshold=0.6,    # Stricter threshold for noisy environments
-    model_pool_size=4,                   # 4 parallel AI models for load balancing
-    debug=False
-)
-```
-
-To use a local Silero VAD hub repository/cache instead of downloading from the network, set `hub_cache_path`.
-The path must point to a Silero VAD repository/cache directory that contains `hubconf.py`:
-
-```python
-vad = SileroSpeechDetector(
-    hub_cache_path="/models/silero-vad"
-)
-```
-
-When `hub_cache_path` is set, the detector loads the Silero model and utility functions from that local path only.
-If the path does not exist, initialization fails instead of downloading from the network.
-
-For custom JIT model files, `model_path` is still supported. In that case, the detector first loads the Silero utilities from `hub_cache_path` or the default Torch Hub source, then replaces the model with the local JIT file:
-
-```python
-vad = SileroSpeechDetector(
-    hub_cache_path="/models/silero-vad",
-    model_path="path/to/silero_vad.jit"
-)
-```
+Keep the default `model_pool_size=1` for normal use, including multiple sessions.
+Each engine has an inference lock. A larger pool loads additional engines and
+uses more memory; it does not parallelize inference within a single event loop.
 
 Turn detection is only half the decision. Silence long enough to trip
 `silence_duration_threshold` still means "the user stopped talking", not "the user is
@@ -84,6 +61,42 @@ threshold is reached to confirm the utterance is actually complete.
 What the detector receives is also worth deciding deliberately. Room noise, an over-hot
 microphone, and a second person talking nearby all reach it as speech unless something
 removes them first — see [audio filters](vad-filters.md).
+
+### Local models
+
+To use a local Silero VAD hub repository/cache instead of downloading from the network, set `hub_cache_path`.
+The directory must contain `hubconf.py`, the Silero utilities, and the bundled
+ONNX model required by that hub version:
+
+```python
+vad = SileroSpeechDetector(
+    hub_cache_path="/models/silero-vad"
+)
+```
+
+When `hub_cache_path` is set, the detector loads the Silero model and utility functions from that local path only.
+If the path does not exist, initialization fails instead of downloading from the network.
+
+To use a custom Silero ONNX model, also set `model_path` to a `.onnx` file
+compatible with that hub version's streaming input, state, and output interface:
+
+```python
+vad = SileroSpeechDetector(
+    hub_cache_path="/models/silero-vad",
+    model_path="/models/custom_silero_vad.onnx"
+)
+```
+
+The detector first loads the hub's model and utilities, then loads the custom
+model with the same ONNX wrapper. The local hub therefore still needs its
+bundled ONNX model when `model_path` is set. Setting `model_path` alone uses the
+default Torch Hub source for this initial load and may access the network;
+set both paths for fully local VAD loading.
+
+These options work the same way with `SileroStreamSpeechDetector`.
+For an existing `.jit` configuration, switch to the corresponding `.onnx` model
+or omit `model_path` to use the default model. See the
+[Silero ONNX migration notes](migration.md#silero-vad-onnx-models).
 
 ## Silero Stream Speech Detector
 
@@ -338,6 +351,35 @@ before it is sent upstream.
 
 Because detection and recognition happen in one place, do not also configure a
 `SpeechRecognizer` for this detector.
+
+## Session isolation regression tests
+
+The deterministic tests use a fake inference engine to check session-owned state,
+isolated versus interleaved inference, session lifecycle operations, and threshold
+updates in both Silero detectors and inference modes. Run from the repository root:
+
+```sh
+python -m pytest -c /dev/null --rootdir=. -p no:cacheprovider \
+  tests/sts/vad/test_silero_session_isolation.py -q
+```
+
+To verify session isolation with real audio, the opt-in regression test stitches
+the repository's `hello.wav` into two different speech streams and a silent
+stream. It compares each stream in isolation with interleaved processing and
+with another session's creation, reset, and deletion. It uses locally installed
+Silero model files and a fake recognizer; no model downloads or external STT
+requests occur during the test:
+
+```sh
+AIAVATAR_TEST_REAL_SILERO=1 python -m pytest -c /dev/null --rootdir=. \
+  -p no:cacheprovider tests/sts/vad/test_silero_session_isolation_real.py -q
+```
+
+The real-model test requires `torch`, `torchaudio`, `silero-vad`, `onnxruntime`,
+`pytest`, and `pytest-asyncio` locally. Set `AIAVATAR_SILERO_ARTIFACT_DIR` to an
+explicit temporary output directory to retain the WAV inputs and JSON/CSV
+comparisons. Both detectors and both inference modes are checked. Each comparison
+uses the same backend; JIT-versus-ONNX numerical equality is not required.
 
 ## See also
 

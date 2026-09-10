@@ -45,6 +45,11 @@ contains only speech-pipeline-specific rules.
   overrides belong to the stream VAD. Keep both override paths scoped by session.
 - Do not mutate a shared recognizer to switch one session. Concurrent sessions may
   require different engines, and reset behavior must preserve session isolation.
+- Keep VAD recurrent state and audio context session-owned when sharing inference
+  engines; an inference lock alone does not isolate state. Preserve this across
+  session creation, reset, deletion, and threshold updates. When changing model
+  sharing, validate isolated versus interleaved streams in both Silero detectors
+  and inference modes; see [VAD regression tests](../../documents/vad.md#session-isolation-regression-tests).
 - Use explicit audio-state reset when a boundary must discard buffered audio;
   the streaming implementation also uses it to cancel pending recognition.
   Preserve the normal per-turn reset behavior that retains pre-roll/VAD buffering

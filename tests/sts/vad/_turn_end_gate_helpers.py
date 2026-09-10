@@ -15,15 +15,20 @@ from aiavatar.sts.stt.base import SpeechRecognizer
 from aiavatar.sts.vad.turn_end_gates import TurnEndDecision, TurnEndGate
 
 
-class DummyVADIterator:
-    def __init__(self, *args, **kwargs):
+class DummyVADModel:
+    def reset_states(self):
         pass
+
+
+class DummyVADIterator:
+    def __init__(self, model, *args, **kwargs):
+        self.model = model
 
     def reset_states(self):
         pass
 
 def fake_init_silero_model(self, model_path=None, hub_cache_path=None):
-    self.model_pool = [object()]
+    self.model_pool = [DummyVADModel()]
     self.model_locks = [threading.Lock()]
     self.VADIteratorClass = DummyVADIterator
 

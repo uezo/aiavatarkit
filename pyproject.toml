@@ -25,6 +25,7 @@ dependencies = [
     "audioop-lts>=0.2.2; python_version >= '3.13'",
     "numpy>=2.2.3",
     "silero-vad>=6.0.0",
+    "onnxruntime>=1.23.0",
     "websockets>=13.0",
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",

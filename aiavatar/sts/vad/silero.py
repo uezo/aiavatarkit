@@ -1,4 +1,5 @@
 import asyncio
+from copy import copy
 from datetime import datetime, timedelta, timezone
 import logging
 import numpy as np
@@ -75,8 +76,8 @@ class SileroSpeechDetector(SpeechDetector):
         preroll_buffer_count: int = 5,
         to_linear16: Optional[Callable[[bytes], bytes]] = None,
         debug: bool = False,
-        # Backward-compatible custom JIT model override. Prefer hub_cache_path
-        # for fully local Silero VAD model + utils loading.
+        # Custom ONNX model override. Use hub_cache_path for fully local
+        # Silero VAD model + utils loading.
         model_path: Optional[str] = None,
         hub_cache_path: Optional[str] = None,
         speech_probability_threshold: float = 0.5,
@@ -173,8 +174,14 @@ class SileroSpeechDetector(SpeechDetector):
             logger.debug("Volume threshold disabled (set to None)")
 
     def _init_silero_model(self, model_path: Optional[str] = None, hub_cache_path: Optional[str] = None):
-        """Initialize Silero VAD model pool"""
+        """Load shared ONNX engines; inference history belongs to each session."""
         try:
+            if model_path and os.path.splitext(model_path)[1].lower() != ".onnx":
+                raise ValueError(
+                    "model_path must be a Silero ONNX (.onnx) model. Custom JIT "
+                    "models are no longer supported; provide the corresponding "
+                    "ONNX model or omit model_path to use the default model."
+                )
             # Initialize model pool and locks
             self.model_pool = []
             self.model_locks = []
@@ -188,7 +195,8 @@ class SileroSpeechDetector(SpeechDetector):
                         repo_or_dir=hub_cache_path,
                         model="silero_vad",
                         source="local",
-                        onnx=False,
+                        onnx=True,
+                        force_onnx_cpu=True,
                     )
             else:
                 def load_hub_model_and_utils():
@@ -197,7 +205,8 @@ class SileroSpeechDetector(SpeechDetector):
                         repo_or_dir="snakers4/silero-vad",
                         model="silero_vad",
                         force_reload=False,
-                        onnx=False,
+                        onnx=True,
+                        force_onnx_cpu=True,
                     )
 
             hub_model, utils = load_hub_model_and_utils()
@@ -212,9 +221,9 @@ class SileroSpeechDetector(SpeechDetector):
             
             for i in range(self.model_pool_size):
                 if model_path:
-                    # Keep model_path as a backward-compatible override for
-                    # callers that pass a custom JIT model file.
-                    model = torch.jit.load(model_path)
+                    # Use the wrapper from the same hub source as the utilities,
+                    # including when hub_cache_path points to a local checkout.
+                    model = type(hub_model)(model_path, force_onnx_cpu=True)
                 else:
                     if i == 0:
                         model = hub_model
@@ -240,13 +249,27 @@ class SileroSpeechDetector(SpeechDetector):
         return audio_float32
 
     def _get_model_and_lock(self, session_id: str):
-        """Get model and lock for a session using consistent hashing"""
+        """Select an ONNX engine template and lock, not session inference state."""
         if self.model_pool_size == 1:
             return self.model_pool[0], self.model_locks[0]
         
         # Use session_id hash to consistently assign model
         model_idx = hash(session_id) % self.model_pool_size
         return self.model_pool[model_idx], self.model_locks[model_idx]
+
+    def _create_vad_iterator(self, session_id: str, model=None):
+        if model is None:
+            template, _ = self._get_model_and_lock(session_id)
+            # OnnxWrapper.reset_states replaces its recurrent state, context,
+            # sample-rate and batch-size history. A shallow copy therefore keeps
+            # the expensive ONNX Runtime session shared while owning its history.
+            model = copy(template)
+            model.reset_states()
+        return self.VADIteratorClass(
+            model,
+            threshold=self.speech_probability_threshold,
+            sampling_rate=self.sample_rate,
+        )
 
     def _detect_speech_silero(self, audio_bytes: bytes, session: RecordingSession) -> bool:
         try:
@@ -256,8 +279,9 @@ class SileroSpeechDetector(SpeechDetector):
             # Convert to torch tensor
             audio_tensor = torch.from_numpy(audio_np)
 
-            # Get model and lock
-            model, model_lock = self._get_model_and_lock(session.session_id)
+            # Both inference modes use the same session-owned state wrapper.
+            _, model_lock = self._get_model_and_lock(session.session_id)
+            model = session.vad_iterator.model
 
             with model_lock:
                 if self.use_vad_iterator:
@@ -483,13 +507,7 @@ class SileroSpeechDetector(SpeechDetector):
     def get_session(self, session_id: str):
         session = self.recording_sessions.get(session_id)
         if session is None:
-            # Create VAD iterator for this session using assigned model
-            model, _ = self._get_model_and_lock(session_id)
-            vad_iterator = self.VADIteratorClass(
-                model,
-                threshold=self.speech_probability_threshold,
-                sampling_rate=self.sample_rate
-            )
+            vad_iterator = self._create_vad_iterator(session_id)
             session = RecordingSession(session_id, self.preroll_buffer_count, vad_iterator)
             self.recording_sessions[session_id] = session
         if session.amplitude_threshold is None:
@@ -564,13 +582,10 @@ class SileroSpeechDetector(SpeechDetector):
     def set_speech_probability_threshold(self, threshold: float):
         """Set Silero VAD speech probability threshold"""
         self.speech_probability_threshold = threshold
-        # Re-initialize VAD iterator for all existing sessions using their assigned model
+        # Preserve the session-owned model binding when rebuilding iterators.
         for session in self.recording_sessions.values():
-            model, _ = self._get_model_and_lock(session.session_id)
-            session.vad_iterator = self.VADIteratorClass(
-                model,
-                threshold=self.speech_probability_threshold,
-                sampling_rate=self.sample_rate
+            session.vad_iterator = self._create_vad_iterator(
+                session.session_id, model=session.vad_iterator.model
             )
         logger.debug(f"Updated Silero VAD speech probability threshold to {threshold}")
 
