@@ -10,6 +10,7 @@ synthesis overlaps generation.
 | Azure | `AzureSpeechSynthesizer` | `aiavatar.sts.tts.azure` |
 | Google | `GoogleSpeechSynthesizer` | `aiavatar.sts.tts.google` |
 | OpenAI | `OpenAISpeechSynthesizer` | `aiavatar.sts.tts.openai` |
+| Qwen3-TTS on Apple Silicon | `Qwen3MLXSpeechSynthesizer` | `aiavatar.sts.tts.qwen3_mlx` |
 | VOISONA | `VoisonaSpeechSynthesizer` | `aiavatar.sts.tts.voisona` |
 | SpeechGateway | `SpeechGatewaySpeechSynthesizer` | `aiavatar.sts.tts.speech_gateway` |
 | Any HTTP endpoint | `create_instant_synthesizer()` | `aiavatar.sts.tts` |
@@ -96,6 +97,50 @@ tts = OpenAISpeechSynthesizer(
 `sample_rate` selects the final sample rate for synthesized audio. The built-in postprocessor resamples PCM WAV output in-process without ffmpeg. For other formats, add a compatible `TTSPostprocessor`.
 
 Irodori-TTS can also be used through `OpenAISpeechSynthesizer` with [Irodori-TTS-Server](https://github.com/Aratako/Irodori-TTS-Server/), an OpenAI Text-to-Speech API-compatible server.
+
+## Qwen3-TTS with MLX
+
+`Qwen3MLXSpeechSynthesizer` runs a Qwen3-TTS CustomVoice checkpoint locally
+through MLX Audio. It keeps one model loaded, serializes inference on a dedicated
+worker so generation does not block the asyncio event loop, and returns 16-bit
+mono PCM WAV audio to the normal pipeline.
+
+Install the optional dependencies on Apple Silicon:
+
+```sh
+pip install "aiavatar[mlx-tts]"
+```
+
+```python
+from aiavatar.sts.tts.qwen3_mlx import Qwen3MLXSpeechSynthesizer
+
+tts = Qwen3MLXSpeechSynthesizer(
+    model="mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit",
+    voice="Vivian",
+    instruct="Speak in a flat, emotionless tone.",
+    language="Auto",
+    cache_dir="./tts_cache/qwen3-mlx",
+)
+```
+
+Set `HF_HOME` before startup to put downloaded weights on a specific volume.
+The first synthesis lazily loads the model; later requests reuse it. Request
+language codes such as `ja-JP` and `en-US` map to the language names Qwen3-TTS
+expects, while unknown codes fall back to automatic detection.
+
+The built-in application also accepts `qwen3-mlx` for either TTS route:
+
+```sh
+AIAVATAR_JA_TTS=qwen3-mlx \
+AIAVATAR_MULTI_TTS=qwen3-mlx \
+AIAVATAR_JA_TTS_CONFIG='{"voice":"Vivian","instruct":"Speak evenly.","language":"Auto"}' \
+AIAVATAR_MULTI_TTS_CONFIG='{"voice":"Vivian","instruct":"Speak evenly.","language":"Auto"}' \
+aiavatar
+```
+
+Identical Japanese and multilingual configurations share one synthesizer and
+therefore one loaded model. Qwen3-TTS handles Japanese text directly, so
+`alphabet_to_kana` defaults to `false` for this provider.
 
 ## SpeechGateway
 

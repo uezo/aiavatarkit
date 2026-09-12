@@ -29,6 +29,7 @@ Provider SDKs are not installed by default. Add them only for the components you
 | Smart Turn gate | `pip install "aiavatar[smart-turn]"` |
 | Namo Turn gate | `pip install "aiavatar[namo-turn]"` (the `aiavatar` command offers to do this for you — see [Your first application](#your-first-application)) |
 | Local microphone and speaker | `pip install "aiavatar[local-audio]"` |
+| Qwen3-TTS with MLX on Apple Silicon | `pip install "aiavatar[mlx-tts]"` |
 | HTTP (SSE) adapter | `pip install sse-starlette python-multipart` |
 | HTTP STT/TTS client examples | `pip install requests` |
 | OpenAI-compatible endpoint adapter | `pip install sse-starlette` |
@@ -197,9 +198,11 @@ aiavatar --llm-api chat-completions
 
 ## Built-in TTS Routing
 
-Japanese and non-Japanese TTS are independent routes. `AIAVATAR_JA_TTS` defaults to `voicevox`, while `AIAVATAR_MULTI_TTS` defaults to `openai`; either route can select `voicevox`, `openai`, or `instant`. The corresponding `AIAVATAR_JA_TTS_CONFIG` and `AIAVATAR_MULTI_TTS_CONFIG` JSON objects override that route's provider options. `--ja-tts` and `--multi-tts` override only the provider selection.
+Japanese and non-Japanese TTS are independent routes. `AIAVATAR_JA_TTS` defaults to `voicevox`, while `AIAVATAR_MULTI_TTS` defaults to `openai`; either route can select `voicevox`, `openai`, `qwen3-mlx`, or `instant`. The corresponding `AIAVATAR_JA_TTS_CONFIG` and `AIAVATAR_MULTI_TTS_CONFIG` JSON objects override that route's provider options. `--ja-tts` and `--multi-tts` override only the provider selection.
 
-Shared VOICEVOX and OpenAI defaults remain available through `AIAVATAR_VOICEVOX_*` and `AIAVATAR_OPENAI_TTS_*`. Route config values take precedence. Japanese TTS enables `AlphabetToKanaPreprocessor` by default and the multi route disables it; set `"alphabet_to_kana": false` or `true` in the applicable route config to override that behavior.
+Shared VOICEVOX and OpenAI defaults remain available through `AIAVATAR_VOICEVOX_*` and `AIAVATAR_OPENAI_TTS_*`. Route config values take precedence. Japanese enables `alphabet_to_kana` by default except with `qwen3-mlx`, which handles Japanese text directly. Set `"alphabet_to_kana": false` or `true` explicitly to override the applicable default.
+
+`qwen3-mlx` runs a Qwen3-TTS CustomVoice checkpoint in-process through MLX Audio and returns WAV audio to the browser. Its route config accepts `model`, `voice`, `instruct`, `language`, `max_tokens`, `seed`, `style_mapper`, `sample_rate`, and cache settings. Model loading is lazy; identical Japanese and multilingual route configurations share one loaded model. Set `HF_HOME` before startup to choose the Hugging Face model cache location.
 
 `instant` maps the route config to `create_instant_synthesizer()`. It is intentionally limited to a single HTTP request whose raw response body is uncompressed PCM WAV audio. Authentication headers, request parameters, and JSON bodies are supplied directly in the config. More complex response parsing, encoded audio extraction, conversion, or authentication logic belongs in a Python application script.
 

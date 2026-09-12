@@ -35,6 +35,7 @@ dependencies = [
 [project.optional-dependencies]
 local-audio = ["PyAudio>=0.2.14"]
 local = ["PyAudio>=0.2.14"]
+mlx-tts = ["mlx-audio>=0.3.0"]
 smart-turn = [
     "onnxruntime>=1.23.0",
     "transformers>=4.48.0",

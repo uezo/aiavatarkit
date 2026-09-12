@@ -1,12 +1,16 @@
 from aiavatar.sts.tts import SpeechSynthesizerRouter, create_instant_synthesizer
 from aiavatar.sts.tts.openai import OpenAISpeechSynthesizer
+from aiavatar.sts.tts.qwen3_mlx import (
+    DEFAULT_MODEL as DEFAULT_QWEN3_MLX_MODEL,
+    Qwen3MLXSpeechSynthesizer,
+)
 from aiavatar.sts.tts.preprocessor.alphabet2kana import AlphabetToKanaPreprocessor
 from aiavatar.sts.tts.voicevox import VoicevoxSpeechSynthesizer
 
 from .config import AppConfig, TTSRouteConfig, load_json_object
 
 
-TTS_PROVIDERS = {"voicevox", "openai", "instant"}
+TTS_PROVIDERS = {"voicevox", "openai", "instant", "qwen3-mlx"}
 
 
 def prepare_tts_route(
@@ -17,13 +21,17 @@ def prepare_tts_route(
     config_name = f"{name}_CONFIG"
     if route.provider not in TTS_PROVIDERS:
         raise RuntimeError(
-            f"{name} must be 'voicevox', 'openai', or 'instant'"
+            f"{name} must be 'voicevox', 'openai', 'instant', or 'qwen3-mlx'"
         )
 
     config = dict(load_json_object(config_name, route.config_json) or {})
+    alphabet_to_kana_default = (
+        False if route.provider == "qwen3-mlx"
+        else route.alphabet_to_kana_default
+    )
     alphabet_to_kana = config.pop(
         "alphabet_to_kana",
-        route.alphabet_to_kana_default,
+        alphabet_to_kana_default,
     )
     if not isinstance(alphabet_to_kana, bool):
         raise RuntimeError(
@@ -70,6 +78,27 @@ def prepare_tts_route(
             "instructions": app_config.openai_tts_instructions,
             "audio_format": "wav",
             "cache_dir": app_config.openai_tts_cache_dir,
+        }
+    elif route.provider == "qwen3-mlx":
+        allowed_keys = {
+            "model",
+            "voice",
+            "instruct",
+            "language",
+            "max_tokens",
+            "seed",
+            "style_mapper",
+            "sample_rate",
+            "cache_dir",
+            "cache_ext",
+        }
+        defaults = {
+            "model": DEFAULT_QWEN3_MLX_MODEL,
+            "voice": "Vivian",
+            "language": "Auto",
+            "max_tokens": 1200,
+            "seed": 7,
+            "cache_dir": "ttscache/qwen3-mlx",
         }
     else:
         allowed_keys = {
@@ -137,6 +166,8 @@ def create_tts(
             openai_api_key=openai_api_key,
             **kwargs,
         )
+    if provider == "qwen3-mlx":
+        return Qwen3MLXSpeechSynthesizer(**kwargs)
     return create_instant_synthesizer(**kwargs)
 
 
@@ -175,7 +206,14 @@ def build_default_tts(
         preprocessors=[alphabet_to_kana] if ja_alphabet_to_kana else [],
         debug=config.debug,
     )
-    tts_multi = create_tts(
+    share_qwen3_mlx = (
+        config.ja_tts.provider == "qwen3-mlx"
+        and config.multi_tts.provider == "qwen3-mlx"
+        and ja_config == multi_config
+        and not ja_alphabet_to_kana
+        and not multi_alphabet_to_kana
+    )
+    tts_multi = tts_ja if share_qwen3_mlx else create_tts(
         config.multi_tts.provider,
         multi_config,
         openai_api_key=config.tts_openai.api_key,

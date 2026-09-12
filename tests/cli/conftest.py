@@ -130,6 +130,7 @@ def component_fakes(monkeypatch):
     monkeypatch.setattr(cli_tts, "AlphabetToKanaPreprocessor", FakePreprocessor)
     monkeypatch.setattr(cli_tts, "VoicevoxSpeechSynthesizer", FakeComponent)
     monkeypatch.setattr(cli_tts, "OpenAISpeechSynthesizer", FakeComponent)
+    monkeypatch.setattr(cli_tts, "Qwen3MLXSpeechSynthesizer", FakeComponent)
     monkeypatch.setattr(cli_tts, "SpeechSynthesizerRouter", FakeRouter)
     return SimpleNamespace(component=FakeComponent)
 
