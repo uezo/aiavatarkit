@@ -9,6 +9,7 @@ from aiavatar.sts.llm.openai_responses_websocket import (
 )
 from aiavatar.sts.stt import SpeechRecognizer
 from aiavatar.sts.stt.openai import OpenAISpeechRecognizer
+from aiavatar.sts.stt.mlx import MLXSpeechRecognizer
 from aiavatar.sts.tts import SpeechSynthesizer
 from aiavatar.sts.vad import SpeechDetector
 from aiavatar.sts.vad.filters import NearFieldAudioGate
@@ -148,18 +149,27 @@ def build_components(
     managed_resources = []
 
     if stt is None:
-        if not config.stt_openai.api_key:
-            raise RuntimeError(
-                "OpenAI API key is required for STT; set OPENAI_API_KEY or "
-                "AIAVATAR_STT_OPENAI_API_KEY"
+        if config.stt_provider == "openai":
+            if not config.stt_openai.api_key:
+                raise RuntimeError(
+                    "OpenAI API key is required for STT; set OPENAI_API_KEY or "
+                    "AIAVATAR_STT_OPENAI_API_KEY"
+                )
+            stt = OpenAISpeechRecognizer(
+                openai_api_key=config.stt_openai.api_key,
+                base_url=config.stt_openai.base_url,
+                model=config.stt_model,
+                language=config.stt_language,
+                debug=config.debug,
             )
-        stt = OpenAISpeechRecognizer(
-            openai_api_key=config.stt_openai.api_key,
-            base_url=config.stt_openai.base_url,
-            model=config.stt_model,
-            language=config.stt_language,
-            debug=config.debug,
-        )
+        elif config.stt_provider == "mlx":
+            stt = MLXSpeechRecognizer(
+                model=config.stt_model,
+                language=config.stt_language,
+                debug=config.debug,
+            )
+        else:
+            raise RuntimeError("AIAVATAR_STT must be 'openai' or 'mlx'")
 
     if vad is None:
         near_field_gate = NearFieldAudioGate(

@@ -196,6 +196,7 @@ class AppConfig:
     tts_openai: OpenAIConfig
     debug: bool
 
+    stt_provider: str
     stt_model: str
     stt_language: str | None
 
@@ -236,12 +237,19 @@ class AppConfig:
     @classmethod
     def from_env(cls):
         llm_extra_body = load_json_object("AIAVATAR_LLM_EXTRA_BODY")
+        stt_provider = os.getenv("AIAVATAR_STT", "openai").strip().lower()
+        default_stt_model = (
+            "mlx-community/whisper-turbo"
+            if stt_provider == "mlx"
+            else "gpt-transcribe"
+        )
         return cls(
             stt_openai=OpenAIConfig.from_env("stt"),
             llm_openai=OpenAIConfig.from_env("llm"),
             tts_openai=OpenAIConfig.from_env("tts"),
             debug=env_bool("AIAVATAR_DEBUG", True),
-            stt_model=os.getenv("AIAVATAR_STT_MODEL") or "gpt-transcribe",
+            stt_provider=stt_provider,
+            stt_model=os.getenv("AIAVATAR_STT_MODEL") or default_stt_model,
             stt_language=env_nullable_string(
                 "AIAVATAR_STT_LANGUAGE",
                 None,

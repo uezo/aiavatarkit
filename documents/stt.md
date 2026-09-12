@@ -1,17 +1,18 @@
 # Speech-to-Text
 
-A `SpeechRecognizer` turns recorded or streaming audio into text. AIAvatarKit ships four
-providers, all of which call their vendor's REST API directly — no vendor SDK is required.
+A `SpeechRecognizer` turns recorded or streaming audio into text. Four providers
+call vendor REST APIs, while MLX Whisper runs locally on Apple Silicon.
 
 | Provider | Class |
 | --- | --- |
 | [Azure Speech](#azure-speech) | `AzureSpeechRecognizer` |
 | [Google Cloud Speech-to-Text](#google-cloud-speech-to-text) | `GoogleSpeechRecognizer` |
 | [OpenAI](#openai) | `OpenAISpeechRecognizer` |
+| [MLX Whisper](#mlx-whisper) | `MLXSpeechRecognizer` |
 | [AmiVoice](#amivoice) | `AmiVoiceSpeechRecognizer` |
 
-All four share `sample_rate` (default `16000`), the HTTP pool arguments
-(`max_connections`, `max_keepalive_connections`, `timeout`), and `debug`.
+All recognizers consume mono 16-bit PCM audio from the pipeline. Provider-specific
+interfaces add their own model, credentials, HTTP, and language options.
 
 ## Azure Speech
 
@@ -86,6 +87,42 @@ transcription API works through this class.
 
 `min_data_length` guards against sending near-empty clips. Raise it if you see the
 recognizer returning noise from very short bursts.
+
+## MLX Whisper
+
+`MLXSpeechRecognizer` runs Whisper locally through Apple's MLX runtime. It
+accepts the pipeline's 16 kHz mono PCM audio directly, so recognition does not
+need an OpenAI transcription endpoint or `ffmpeg`.
+
+Install the optional dependency on Apple Silicon:
+
+```sh
+pip install "aiavatar[mlx-stt]"
+```
+
+```python
+from aiavatar.sts.stt.mlx import MLXSpeechRecognizer
+
+stt = MLXSpeechRecognizer(
+    model="mlx-community/whisper-turbo",
+    language=None,  # Automatic language detection
+)
+```
+
+The model loads on the first transcription and is reused afterward. Inference
+runs on one dedicated worker so it does not block the asyncio event loop or run
+the same MLX model concurrently. `language` accepts values such as `ja`, `ja-JP`,
+`en`, and `ko-KR`; locale suffixes are removed before calling Whisper. Set
+`HF_HOME` before startup to choose the Hugging Face model cache location.
+
+The built-in application selects it with:
+
+```sh
+AIAVATAR_STT=mlx \
+AIAVATAR_STT_MODEL=mlx-community/whisper-turbo \
+AIAVATAR_STT_LANGUAGE=auto \
+aiavatar
+```
 
 ## AmiVoice
 

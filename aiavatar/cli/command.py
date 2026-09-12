@@ -201,6 +201,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Set OPENAI_BASE_URL for this process before loading the application.",
     )
     parser.add_argument(
+        "--stt",
+        choices=("openai", "mlx"),
+        help=(
+            "Speech recognition for the default app. Overrides AIAVATAR_STT; "
+            "defaults to openai."
+        ),
+    )
+    parser.add_argument(
         "--ja-tts",
         choices=("voicevox", "openai", "instant", "qwen3-mlx"),
         help=(
@@ -253,10 +261,9 @@ def _prepare_openai_api_key(
         return
     if os.getenv("OPENAI_API_KEY") or not using_builtin_app:
         return
-    individual_keys = [
-        "AIAVATAR_STT_OPENAI_API_KEY",
-        "AIAVATAR_LLM_OPENAI_API_KEY",
-    ]
+    individual_keys = ["AIAVATAR_LLM_OPENAI_API_KEY"]
+    if os.getenv("AIAVATAR_STT", "openai").strip().lower() == "openai":
+        individual_keys.append("AIAVATAR_STT_OPENAI_API_KEY")
     if all(os.getenv(name) for name in individual_keys):
         return
     if not sys.stdin.isatty():
@@ -278,6 +285,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
     if args.openai_base_url:
         os.environ["OPENAI_BASE_URL"] = args.openai_base_url
+    if args.stt:
+        os.environ["AIAVATAR_STT"] = args.stt
     if args.ja_tts:
         os.environ["AIAVATAR_JA_TTS"] = args.ja_tts
     if args.multi_tts:

@@ -18,6 +18,7 @@ DEFAULT_APP_ENV_VARS = (
     "AIAVATAR_LLM_OPENAI_BASE_URL",
     "AIAVATAR_TTS_OPENAI_API_KEY",
     "AIAVATAR_TTS_OPENAI_BASE_URL",
+    "AIAVATAR_STT",
     "AIAVATAR_LLM_API",
     "AIAVATAR_JA_TTS",
     "AIAVATAR_JA_TTS_CONFIG",
@@ -114,6 +115,7 @@ class FakeAdapter:
 @pytest.fixture
 def component_fakes(monkeypatch):
     monkeypatch.setattr(cli_components, "OpenAISpeechRecognizer", FakeComponent)
+    monkeypatch.setattr(cli_components, "MLXSpeechRecognizer", FakeComponent)
     monkeypatch.setattr(
         cli_components,
         "OpenAIResponsesWebSocketService",

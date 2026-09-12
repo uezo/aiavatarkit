@@ -297,7 +297,7 @@ def test_cli_loads_dotenv_without_overriding_environment(
     }
 
 
-def test_cli_tts_arguments_override_environment(
+def test_cli_component_arguments_override_environment(
     monkeypatch,
     clean_builtin_environment,
 ):
@@ -305,6 +305,7 @@ def test_cli_tts_arguments_override_environment(
     application = object()
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AIAVATAR_STT", "openai")
     monkeypatch.setenv("AIAVATAR_JA_TTS", "voicevox")
     monkeypatch.setenv("AIAVATAR_MULTI_TTS", "openai")
     monkeypatch.setenv("AIAVATAR_OPENAI_TTS_SPEAKER", "sage")
@@ -314,6 +315,7 @@ def test_cli_tts_arguments_override_environment(
         cli_command,
         "_load_builtin_app",
         lambda **_: observed.update(
+            stt=os.environ.get("AIAVATAR_STT"),
             ja_tts=os.environ.get("AIAVATAR_JA_TTS"),
             multi_tts=os.environ.get("AIAVATAR_MULTI_TTS"),
             openai_tts_speaker=os.environ.get("AIAVATAR_OPENAI_TTS_SPEAKER"),
@@ -324,6 +326,7 @@ def test_cli_tts_arguments_override_environment(
     monkeypatch.setattr(cli_command.uvicorn, "run", lambda *args, **kwargs: None)
 
     cli_command.main([
+        "--stt", "mlx",
         "--ja-tts", "instant",
         "--multi-tts", "voicevox",
         "--openai-tts-speaker", "coral",
@@ -332,6 +335,7 @@ def test_cli_tts_arguments_override_environment(
     ])
 
     assert observed == {
+        "stt": "mlx",
         "ja_tts": "instant",
         "multi_tts": "voicevox",
         "openai_tts_speaker": "coral",
@@ -377,6 +381,28 @@ def test_builtin_app_accepts_individual_openai_keys(
     monkeypatch.setenv("AIAVATAR_STT_OPENAI_API_KEY", "stt-key")
     monkeypatch.setenv("AIAVATAR_LLM_OPENAI_API_KEY", "llm-key")
     monkeypatch.setenv("AIAVATAR_TTS_OPENAI_API_KEY", "tts-key")
+    monkeypatch.setattr(cli_command.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(
+        cli_command,
+        "_load_builtin_app",
+        lambda **_: observed.update(loaded=True) or application,
+    )
+    monkeypatch.setattr(cli_command.uvicorn, "run", lambda *args, **kwargs: None)
+
+    cli_command.main([])
+
+    assert observed == {"loaded": True}
+
+
+def test_builtin_app_with_mlx_stt_only_requires_llm_openai_key(
+    monkeypatch,
+    clean_builtin_environment,
+):
+    observed = {}
+    application = object()
+
+    monkeypatch.setenv("AIAVATAR_STT", "mlx")
+    monkeypatch.setenv("AIAVATAR_LLM_OPENAI_API_KEY", "llm-key")
     monkeypatch.setattr(cli_command.sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr(
         cli_command,

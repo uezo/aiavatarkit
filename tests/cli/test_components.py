@@ -147,6 +147,30 @@ def test_build_components_preserves_defaults(
     assert tts_routes["multi"].kwargs["debug"] is True
 
 
+
+def test_build_components_uses_local_mlx_stt(
+    monkeypatch,
+    clean_builtin_environment,
+    component_fakes,
+):
+    monkeypatch.setenv("AIAVATAR_STT", "mlx")
+    monkeypatch.setenv("AIAVATAR_STT_MODEL", "mlx-community/test-whisper")
+    monkeypatch.setenv("AIAVATAR_STT_LANGUAGE", "ko-KR")
+
+    components = cli_components.build_components(
+        llm=object(),
+        tts=object(),
+        use_namo_turn=False,
+    )
+
+    assert components.stt.kwargs == {
+        "model": "mlx-community/test-whisper",
+        "language": "ko-KR",
+        "debug": True,
+    }
+    assert components.vad.kwargs["speech_recognizer"] is components.stt
+
+
 def test_build_components_allows_non_openai_tts_without_tts_key(
     monkeypatch,
     clean_builtin_environment,

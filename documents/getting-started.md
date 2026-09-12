@@ -30,6 +30,7 @@ Provider SDKs are not installed by default. Add them only for the components you
 | Namo Turn gate | `pip install "aiavatar[namo-turn]"` (the `aiavatar` command offers to do this for you — see [Your first application](#your-first-application)) |
 | Local microphone and speaker | `pip install "aiavatar[local-audio]"` |
 | Qwen3-TTS with MLX on Apple Silicon | `pip install "aiavatar[mlx-tts]"` |
+| MLX Whisper speech recognition on Apple Silicon | `pip install "aiavatar[mlx-stt]"` |
 | HTTP (SSE) adapter | `pip install sse-starlette python-multipart` |
 | HTTP STT/TTS client examples | `pip install requests` |
 | OpenAI-compatible endpoint adapter | `pip install sse-starlette` |
@@ -125,7 +126,7 @@ The `aiavatar` command starts a ready-to-use WebSocket application when no scrip
 
 ## Built-in Application
 
-The built-in application uses `SileroStreamSpeechDetector` with the filler and Namo Turn gates, `OpenAISpeechRecognizer`, `OpenAIResponsesWebSocketService`, and the WebSocket Adapter. Japanese speech routes to `VoicevoxSpeechSynthesizer` with `AlphabetToKanaPreprocessor`; other languages route to `OpenAISpeechSynthesizer`.
+The built-in application uses `SileroStreamSpeechDetector` with the filler and Namo Turn gates, OpenAI or local MLX Whisper speech recognition, `OpenAIResponsesWebSocketService`, and the WebSocket Adapter. Japanese speech routes to `VoicevoxSpeechSynthesizer` with `AlphabetToKanaPreprocessor`; other languages route to `OpenAISpeechSynthesizer`.
 
 ### Semantic VAD dependencies
 
@@ -157,6 +158,24 @@ aiavatar
 ```
 
 The Admin Config view can update safe members of the running Pipeline, components, and Adapter. These changes are intentionally volatile and are discarded when the process exits. Component composition remains owned by Python application code.
+
+## Speech Recognition Configuration
+
+The built-in application uses OpenAI transcription by default. Select local
+Whisper inference on Apple Silicon with `AIAVATAR_STT=mlx` or `--stt mlx`:
+
+```sh
+pip install "aiavatar[mlx-stt]"
+AIAVATAR_STT=mlx \
+AIAVATAR_STT_MODEL=mlx-community/whisper-turbo \
+AIAVATAR_STT_LANGUAGE=auto \
+aiavatar
+```
+
+MLX Whisper consumes the browser pipeline's 16 kHz PCM audio directly and does
+not use `OPENAI_BASE_URL`. Its model loads on the first recognized utterance and
+then remains available for later requests. `HF_HOME` controls the Hugging Face
+model cache location.
 
 ## OpenAI and LLM Configuration
 
