@@ -217,11 +217,15 @@ aiavatar --llm-api chat-completions
 
 ## Built-in TTS Routing
 
-Japanese and non-Japanese TTS are independent routes. `AIAVATAR_JA_TTS` defaults to `voicevox`, while `AIAVATAR_MULTI_TTS` defaults to `openai`; either route can select `voicevox`, `openai`, `qwen3-mlx`, or `instant`. The corresponding `AIAVATAR_JA_TTS_CONFIG` and `AIAVATAR_MULTI_TTS_CONFIG` JSON objects override that route's provider options. `--ja-tts` and `--multi-tts` override only the provider selection.
+Japanese and non-Japanese TTS are independent routes. `AIAVATAR_JA_TTS` defaults to `voicevox`, while `AIAVATAR_MULTI_TTS` defaults to `openai`; either route can select `voicevox`, `openai`, `qwen3-mlx`, `irodori-mlx`, or `instant`. The corresponding `AIAVATAR_JA_TTS_CONFIG` and `AIAVATAR_MULTI_TTS_CONFIG` JSON objects override that route's provider options. `--ja-tts` and `--multi-tts` override only the provider selection.
 
-Shared VOICEVOX and OpenAI defaults remain available through `AIAVATAR_VOICEVOX_*` and `AIAVATAR_OPENAI_TTS_*`. Route config values take precedence. Japanese enables `alphabet_to_kana` by default except with `qwen3-mlx`, which handles Japanese text directly. Set `"alphabet_to_kana": false` or `true` explicitly to override the applicable default.
+Shared VOICEVOX and OpenAI defaults remain available through `AIAVATAR_VOICEVOX_*` and `AIAVATAR_OPENAI_TTS_*`. Route config values take precedence. Japanese enables `alphabet_to_kana` by default except with the MLX providers, which handle Japanese text directly. Set `"alphabet_to_kana": false` or `true` explicitly to override the applicable default.
 
-`qwen3-mlx` runs a Qwen3-TTS CustomVoice checkpoint in-process through MLX Audio and returns WAV audio to the browser. Its route config accepts `model`, `voice`, `instruct`, `language`, `max_tokens`, `seed`, `style_mapper`, `sample_rate`, and cache settings. Model loading is lazy; identical Japanese and multilingual route configurations share one loaded model. Set `HF_HOME` before startup to choose the Hugging Face model cache location.
+`qwen3-mlx` runs a Qwen3-TTS CustomVoice checkpoint in-process through MLX Audio and returns WAV audio to the browser. Its route config accepts `model`, `voice`, `instruct`, `language`, `max_tokens`, `seed`, `style_mapper`, `sample_rate`, and cache settings.
+
+`irodori-mlx` runs an Irodori-TTS checkpoint through MLX Audio. Its route config accepts `model`, `ref_audio`, `instruct`, `seed`, `num_steps`, `t_schedule_mode`, `sway_coeff`, `duration_scale`, `max_seconds`, `max_ref_seconds`, `style_mapper`, `sample_rate`, and cache settings. Use it primarily for the Japanese route. `ref_audio` may be one WAV path or a list of paths for voice cloning; omit it for VoiceDesign from `instruct`.
+
+Both MLX providers load their model lazily, and identical Japanese and multilingual route configurations share one loaded model. Set `HF_HOME` before startup to choose the Hugging Face model cache location.
 
 `instant` maps the route config to `create_instant_synthesizer()`. It is intentionally limited to a single HTTP request whose raw response body is uncompressed PCM WAV audio. Authentication headers, request parameters, and JSON bodies are supplied directly in the config. More complex response parsing, encoded audio extraction, conversion, or authentication logic belongs in a Python application script.
 

@@ -1,5 +1,9 @@
 from aiavatar.sts.tts import SpeechSynthesizerRouter, create_instant_synthesizer
 from aiavatar.sts.tts.openai import OpenAISpeechSynthesizer
+from aiavatar.sts.tts.irodori_mlx import (
+    DEFAULT_MODEL as DEFAULT_IRODORI_MLX_MODEL,
+    IrodoriMLXSpeechSynthesizer,
+)
 from aiavatar.sts.tts.qwen3_mlx import (
     DEFAULT_MODEL as DEFAULT_QWEN3_MLX_MODEL,
     Qwen3MLXSpeechSynthesizer,
@@ -10,7 +14,7 @@ from aiavatar.sts.tts.voicevox import VoicevoxSpeechSynthesizer
 from .config import AppConfig, TTSRouteConfig, load_json_object
 
 
-TTS_PROVIDERS = {"voicevox", "openai", "instant", "qwen3-mlx"}
+TTS_PROVIDERS = {"voicevox", "openai", "instant", "qwen3-mlx", "irodori-mlx"}
 
 
 def prepare_tts_route(
@@ -20,13 +24,12 @@ def prepare_tts_route(
     name = f"AIAVATAR_{route.name.upper()}_TTS"
     config_name = f"{name}_CONFIG"
     if route.provider not in TTS_PROVIDERS:
-        raise RuntimeError(
-            f"{name} must be 'voicevox', 'openai', 'instant', or 'qwen3-mlx'"
-        )
+        supported = "', '".join(sorted(TTS_PROVIDERS))
+        raise RuntimeError(f"{name} must be one of '{supported}'")
 
     config = dict(load_json_object(config_name, route.config_json) or {})
     alphabet_to_kana_default = (
-        False if route.provider == "qwen3-mlx"
+        False if route.provider in {"qwen3-mlx", "irodori-mlx"}
         else route.alphabet_to_kana_default
     )
     alphabet_to_kana = config.pop(
@@ -100,6 +103,33 @@ def prepare_tts_route(
             "seed": 7,
             "cache_dir": "ttscache/qwen3-mlx",
         }
+    elif route.provider == "irodori-mlx":
+        allowed_keys = {
+            "model",
+            "ref_audio",
+            "instruct",
+            "seed",
+            "num_steps",
+            "t_schedule_mode",
+            "sway_coeff",
+            "duration_scale",
+            "max_seconds",
+            "max_ref_seconds",
+            "style_mapper",
+            "sample_rate",
+            "cache_dir",
+            "cache_ext",
+        }
+        defaults = {
+            "model": DEFAULT_IRODORI_MLX_MODEL,
+            "seed": 7,
+            "num_steps": 6,
+            "t_schedule_mode": "sway",
+            "sway_coeff": -1.0,
+            "duration_scale": 1.0,
+            "max_seconds": 30.0,
+            "cache_dir": "ttscache/irodori-mlx",
+        }
     else:
         allowed_keys = {
             "method",
@@ -168,6 +198,8 @@ def create_tts(
         )
     if provider == "qwen3-mlx":
         return Qwen3MLXSpeechSynthesizer(**kwargs)
+    if provider == "irodori-mlx":
+        return IrodoriMLXSpeechSynthesizer(**kwargs)
     return create_instant_synthesizer(**kwargs)
 
 
@@ -206,14 +238,14 @@ def build_default_tts(
         preprocessors=[alphabet_to_kana] if ja_alphabet_to_kana else [],
         debug=config.debug,
     )
-    share_qwen3_mlx = (
-        config.ja_tts.provider == "qwen3-mlx"
-        and config.multi_tts.provider == "qwen3-mlx"
+    share_mlx = (
+        config.ja_tts.provider == config.multi_tts.provider
+        and config.ja_tts.provider in {"qwen3-mlx", "irodori-mlx"}
         and ja_config == multi_config
         and not ja_alphabet_to_kana
         and not multi_alphabet_to_kana
     )
-    tts_multi = tts_ja if share_qwen3_mlx else create_tts(
+    tts_multi = tts_ja if share_mlx else create_tts(
         config.multi_tts.provider,
         multi_config,
         openai_api_key=config.tts_openai.api_key,

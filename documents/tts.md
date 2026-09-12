@@ -11,6 +11,7 @@ synthesis overlaps generation.
 | Google | `GoogleSpeechSynthesizer` | `aiavatar.sts.tts.google` |
 | OpenAI | `OpenAISpeechSynthesizer` | `aiavatar.sts.tts.openai` |
 | Qwen3-TTS on Apple Silicon | `Qwen3MLXSpeechSynthesizer` | `aiavatar.sts.tts.qwen3_mlx` |
+| Irodori-TTS on Apple Silicon | `IrodoriMLXSpeechSynthesizer` | `aiavatar.sts.tts.irodori_mlx` |
 | VOISONA | `VoisonaSpeechSynthesizer` | `aiavatar.sts.tts.voisona` |
 | SpeechGateway | `SpeechGatewaySpeechSynthesizer` | `aiavatar.sts.tts.speech_gateway` |
 | Any HTTP endpoint | `create_instant_synthesizer()` | `aiavatar.sts.tts` |
@@ -141,6 +142,53 @@ aiavatar
 Identical Japanese and multilingual configurations share one synthesizer and
 therefore one loaded model. Qwen3-TTS handles Japanese text directly, so
 `alphabet_to_kana` defaults to `false` for this provider.
+
+## Irodori-TTS with MLX
+
+`IrodoriMLXSpeechSynthesizer` runs Irodori-TTS locally through MLX Audio. It
+supports VoiceDesign through `instruct`, voice cloning through one or more
+`ref_audio` WAV paths, and returns 48 kHz 16-bit mono PCM WAV audio by default.
+Inference runs on a dedicated worker so it does not block the asyncio event
+loop.
+
+Irodori v4 and v4.1 require `mlx-audio>=0.5.0`, included by:
+
+```sh
+pip install "aiavatar[mlx-tts]"
+```
+
+```python
+from aiavatar.sts.tts.irodori_mlx import IrodoriMLXSpeechSynthesizer
+
+tts = IrodoriMLXSpeechSynthesizer(
+    model="/path/to/Irodori-TTS-v4.1-Anime-mlx-fp16",
+    instruct="明るく親しみやすいアニメキャラクターの女性の声",
+    num_steps=6,
+    t_schedule_mode="sway",
+    sway_coeff=-1.0,
+    cache_dir="./tts_cache/irodori-mlx",
+)
+```
+
+For voice cloning, set `ref_audio` to a WAV path or a list of WAV paths from
+the same speaker. A style mapper value overrides `instruct` for that request,
+so avatar expression tags can select delivery instructions without changing
+the speaker reference.
+
+The built-in application accepts `irodori-mlx` for either TTS route. Irodori is
+a Japanese model, so it normally belongs on the Japanese route:
+
+```sh
+AIAVATAR_JA_TTS=irodori-mlx \
+AIAVATAR_JA_TTS_CONFIG='{"model":"/path/to/Irodori-TTS-v4.1-Anime-mlx-fp16","instruct":"明るく自然な女性の声","num_steps":6,"cache_dir":"ttscache/irodori-mlx"}' \
+aiavatar
+```
+
+The synthesizer defaults to the MLX Audio low-step Sway recipe
+(`num_steps=6`, `t_schedule_mode="sway"`, `sway_coeff=-1.0`). Increase
+`num_steps` when quality matters more than latency. Model loading is lazy, and
+identical Japanese and multilingual route configurations share one loaded
+model.
 
 ## SpeechGateway
 

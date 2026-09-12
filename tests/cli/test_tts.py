@@ -87,3 +87,32 @@ def test_qwen3_mlx_routes_share_one_model_instance(
     assert japanese.kwargs["language"] == "Auto"
     assert japanese.kwargs["preprocessors"] == []
     assert preprocessor is None
+
+
+def test_irodori_mlx_routes_share_one_model_instance(
+    monkeypatch,
+    clean_builtin_environment,
+    component_fakes,
+):
+    monkeypatch.setenv("AIAVATAR_JA_TTS", "irodori-mlx")
+    monkeypatch.setenv("AIAVATAR_MULTI_TTS", "irodori-mlx")
+    config = (
+        '{"model":"/models/irodori","instruct":"明るい女性の声",'
+        '"num_steps":6,"max_seconds":12}'
+    )
+    monkeypatch.setenv("AIAVATAR_JA_TTS_CONFIG", config)
+    monkeypatch.setenv("AIAVATAR_MULTI_TTS_CONFIG", config)
+
+    router, preprocessor = cli_tts.build_default_tts(
+        cli_config.AppConfig.from_env()
+    )
+
+    japanese = router.kwargs["synthesizers"]["ja"]
+    multilingual = router.kwargs["synthesizers"]["multi"]
+    assert japanese is multilingual
+    assert japanese.kwargs["model"] == "/models/irodori"
+    assert japanese.kwargs["instruct"] == "明るい女性の声"
+    assert japanese.kwargs["num_steps"] == 6
+    assert japanese.kwargs["t_schedule_mode"] == "sway"
+    assert japanese.kwargs["preprocessors"] == []
+    assert preprocessor is None

@@ -210,7 +210,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--ja-tts",
-        choices=("voicevox", "openai", "instant", "qwen3-mlx"),
+        choices=("voicevox", "openai", "instant", "qwen3-mlx", "irodori-mlx"),
         help=(
             "Japanese TTS for the default app. Overrides AIAVATAR_JA_TTS; "
             "defaults to voicevox."
@@ -218,7 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--multi-tts",
-        choices=("voicevox", "openai", "instant", "qwen3-mlx"),
+        choices=("voicevox", "openai", "instant", "qwen3-mlx", "irodori-mlx"),
         help=(
             "Non-Japanese TTS for the default app. Overrides "
             "AIAVATAR_MULTI_TTS; defaults to openai."
