@@ -137,6 +137,20 @@ async def on_speech_detecting(text, session):
     # await ws_app.handle_response(resp)
 ```
 
+For `SileroStreamSpeechDetector`, `session.recording_id` identifies one recording
+from start until finalization or discard. Partial recognition uses snapshots of
+the cumulative recording buffer, so the ID stays the same across partial results
+and short pauses. `reset()` clears it; the next recording gets a new UUID.
+Maximum-duration splitting also starts a new ID. Resetting only VAD iterator or
+turn-end timing state does not change the recording ID.
+
+The final callback receives the snapshotted ID in `metadata["recording_id"]`;
+`STSPipeline` forwards this metadata to `STSRequest`, including `on_accepted`.
+Do not read the live session's ID to identify a finalized request: it may already
+be cleared or refer to the next recording. The session and transaction IDs retain
+their existing meanings. This recording ID is currently specific to the Silero
+stream detector, not the other streaming provider implementations.
+
 ### Text Validation
 
 Use `validate_recognized_text` to filter out invalid recognition results:

@@ -1,0 +1,52 @@
+[
+  {
+    "id": "continuing-plan",
+    "note": "AI生成の架空ケース。話の途中を軽い相槌で促す。",
+    "text": "週末は家でパンを焼こうと思って、",
+    "expected": ["neutral"]
+  },
+  {
+    "id": "completed-question",
+    "note": "完成した質問には、相槌を挟まず本応答を待つ。",
+    "text": "パンの生地は何分くらいこねればいい？",
+    "expected": ["none"]
+  },
+  {
+    "id": "success-with-history",
+    "note": "過去の相槌を含む会話履歴。今回の新しい成功を喜ぶ。",
+    "history": [
+      {
+        "role": "user",
+        "content": "昨日はパンを焼いたんだけど、少し焦がしちゃった。",
+        "nods": [
+          {"phrase": "うん", "acknowledged_text": "昨日はパンを焼いたんだけど、"}
+        ]
+      },
+      {"role": "assistant", "content": "次は焼く時間を少し短くしてみよう。"}
+    ],
+    "text": "今朝はきれいに焼けて、家族にもおいしいって言ってもらえたよ。",
+    "expected": ["joy", "neutral"]
+  },
+  {
+    "id": "already-acknowledged",
+    "note": "今回の発言に送信済みの相槌があり、つなぎ言葉しか増えていない。",
+    "text": "週末は家でパンを焼こうと思って、えっとね。",
+    "nods": [
+      {"phrase": "うん", "acknowledged_text": "週末は家でパンを焼こうと思って、"}
+    ],
+    "expected": ["none"]
+  },
+  {
+    "id": "recorded-input",
+    "note": "整形済み入力を再送する形式の例。この入力もAI生成であり実会話ログではない。",
+    "text": "週末は家でパンを焼こうと思って、",
+    "input": "【これまでの会話】\nAI：週末は何をする予定？\n\n【今回のユーザー発言】\nユーザー：週末は家でパンを焼こうと思って、\n\nこの流れで、今回の発言に相槌を入れる？\n候補の文言をnod_assistant要素1つで返す。入れない場合は空要素。",
+    "expected": ["neutral"]
+  },
+  {
+    "id": "empty-input",
+    "note": "空の文字起こしはAPIを呼ばず、相槌なしとして扱う。",
+    "text": "",
+    "expected": ["none"]
+  }
+]

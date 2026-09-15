@@ -4,6 +4,31 @@ AIAvatarKit supports low-latency, real-time conversations not only from standalo
 
 In addition to dialogue, you can drive facial expressions and motion by following the control data included in WebSocket responses.
 
+To add Nod to your STT → LLM → TTS pipeline, follow the
+[Nod setup guide](../nod/README.md#add-nod-to-a-speech-pipeline).
+It uses the stream VAD, automatically registered event hooks, in-memory nod
+history, cached audio, and the existing 3D viewer. The browser preserves nods
+when receiving a normal `stop` message; no adapter setting is required.
+
+## Nod playback
+
+Enable BARGE-IN in `3d.html` (VRM/MMD) to continue microphone input during nods.
+Use complete WAV delivery (`response_audio_chunk_size=0`) for the shared browser.
+The page uses `AIAvatarClient` in `aiavatar.js`; no additional client script is
+needed.
+
+The client preserves queued, decoding, and audible nods across speech resumption.
+Main response acceptance/start/audio discards pending nods while audible ones
+finish. Main-response generation proceeds immediately; its playback waits behind
+an audible nod in the serial browser queue.
+
+On a `stop` message, the browser stops main-response audio and removes queued main
+audio while retaining nods identified by `metadata.nod=true` on audio messages.
+Stop messages need no additional metadata. Without nod metadata, ordinary response
+playback and barge-in behavior remain unchanged.
+The Stop button and WebSocket disconnection stop all playback. Disconnection also
+releases microphone capture and the audio context, including a microphone acquired
+after disconnection while permission was pending.
 
 ## Quickstart (Web Browser)
 
