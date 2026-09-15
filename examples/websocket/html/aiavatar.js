@@ -18,6 +18,7 @@ class AIAvatarClient {
         this.queueGeneration = 0;
         this.currentAudioSource = null;
         this.currentAudioFinalize = null;
+        this.currentAudioMessage = null;
         this.playbackGeneration = 0;
         this.latestFaceUpdate = null;
         this.faceTimeout = null;
@@ -63,6 +64,15 @@ class AIAvatarClient {
             try {
                 const msg = JSON.parse(event.data);
                 this.onResponseReceived(msg);
+                const isNod = message => message?.metadata?.nod === true;
+                if (msg.type === "accepted"
+                    || ((msg.type === "start" || msg.type === "chunk") && !isNod(msg))) {
+                    this.messageQueue = this.messageQueue.filter(message => !isNod(message));
+                    // Cancel pending nods; audio that has started may finish.
+                    if (isNod(this.currentAudioMessage) && !this.currentAudioSource) {
+                        this.stopAudio();
+                    }
+                }
                 if (msg.type === "start" || msg.type === "chunk") {
                     if (msg.type === "start" && msg.context_id) {
                         this.chatContextId = msg.context_id;
@@ -73,7 +83,9 @@ class AIAvatarClient {
                     userId = msg.user_id;   // Update userId (Created on server if not exists)
                     console.log(`Session: sessionId=${msg.session_id}, userId=${msg.user_id}, contextId=${msg.context_id}`);
                 } else if (msg.type === "stop") {
-                    this.messageQueue.length = 0;
+                    // Response stops keep nods; Stop/disconnect ends all playback.
+                    this.messageQueue = this.messageQueue.filter(isNod);
+                    if (isNod(this.currentAudioMessage)) return;
                     this.stopAudio();
                     this.resetFace();
                 } else if (msg.type === "final") {
@@ -87,6 +99,12 @@ class AIAvatarClient {
         this.ws.onerror = (error) => {
             console.error("WebSocket error:", error);
         };
+        this.ws.onclose = () => {
+            if (queueGeneration !== this.queueGeneration) return;
+            this.stopListening(sessionId).catch(error => {
+                console.error("Error closing client:", error);
+            });
+        };
 
         // Create new AudioContext if needed
         if (!this.audioContext || this.audioContext.state === "closed") {
@@ -95,12 +113,18 @@ class AIAvatarClient {
             });
         }
         await this.audioContext.resume();
+        if (queueGeneration !== this.queueGeneration) return;
         console.log("AudioContext state:", this.audioContext.state);
 
         try {
-            this.micStream = await navigator.mediaDevices.getUserMedia({
+            const micStream = await navigator.mediaDevices.getUserMedia({
                 audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
             });
+            if (queueGeneration !== this.queueGeneration) {
+                micStream.getTracks().forEach(track => track.stop());
+                return;
+            }
+            this.micStream = micStream;
             console.log("Microphone accepted.");
             const source = this.audioContext.createMediaStreamSource(this.micStream);
             this.scriptNode = this.audioContext.createScriptProcessor(256, 1, 1);
@@ -167,7 +191,7 @@ class AIAvatarClient {
             if (msg.audio_data) {
                 try {
                     this.isAudioPlaying = true;
-                    await this.playAudioSync(msg.audio_data);
+                    await this.playAudioSync(msg.audio_data, msg);
                 } catch (e) {
                     console.error("Error during audio playback:", e);
                 } finally {
@@ -180,10 +204,34 @@ class AIAvatarClient {
         if (queueGeneration === this.queueGeneration) this.processingQueue = false;
     }
 
-    playAudioSync(audioDataBase64) {
+    playAudioSync(audioDataBase64, message = null) {
         this.stopAudio();
         const playbackGeneration = this.playbackGeneration;
+        this.currentAudioMessage = message;
         return new Promise((resolve, reject) => {
+            let source = null;
+            let playbackFinalized = false;
+            const finishPlayback = (error = null) => {
+                if (playbackFinalized) return;
+                playbackFinalized = true;
+                const superseded = this.currentAudioFinalize !== finalizePlayback;
+                if (!superseded) {
+                    this.currentAudioSource = null;
+                    this.currentAudioFinalize = null;
+                    this.currentAudioMessage = null;
+                }
+                try {
+                    if (source && !superseded) this.onPlaybackEnd?.();
+                } catch (callbackError) {
+                    console.error("Error handling playback end:", callbackError);
+                } finally {
+                    if (error) reject(error);
+                    else resolve();
+                }
+            };
+            const finalizePlayback = () => finishPlayback();
+            // A canceled decode must release the queue before its callback returns.
+            this.currentAudioFinalize = finalizePlayback;
             try {
                 const binaryString = atob(audioDataBase64);
                 const len = binaryString.length;
@@ -197,10 +245,10 @@ class AIAvatarClient {
                     (decodedData) => {
                         if (playbackGeneration !== this.playbackGeneration
                             || this.audioContext?.state === "closed") {
-                            resolve();
+                            finalizePlayback();
                             return;
                         }
-                        const source = this.audioContext.createBufferSource();
+                        source = this.audioContext.createBufferSource();
                         source.buffer = decodedData;
 
                         const dest = this.gainNode || this.audioContext.destination;
@@ -229,26 +277,6 @@ class AIAvatarClient {
                                 tSec,
                             };
                         };
-                        let playbackFinalized = false;
-                        const finalizePlayback = () => {
-                            if (playbackFinalized) return;
-                            playbackFinalized = true;
-                            const currentSource = this.currentAudioSource;
-                            const superseded = currentSource != null && currentSource !== source;
-                            if (currentSource === source) {
-                                this.currentAudioSource = null;
-                                this.currentAudioFinalize = null;
-                            }
-                            try {
-                                if (!superseded) this.onPlaybackEnd?.();
-                            } catch (error) {
-                                console.error("Error handling playback end:", error);
-                            } finally {
-                                resolve();
-                            }
-                        };
-                        this.currentAudioFinalize = finalizePlayback;
-
                         if (playbackAudioCallback) {
                             // Preserve the deadline phase across rounded rAF timestamps.
                             const callbackIntervalMs = 1000 / (this.playbackAudioHz || 30);
@@ -281,12 +309,11 @@ class AIAvatarClient {
                         source.onended = finalizePlayback;
                     },
                     (error) => {
-                        if (playbackGeneration !== this.playbackGeneration) resolve();
-                        else reject(error);
+                        finishPlayback(playbackGeneration !== this.playbackGeneration ? null : error);
                     }
                 );
             } catch (e) {
-                reject(e);
+                finishPlayback(e);
             }
         });
     }
@@ -347,9 +374,9 @@ class AIAvatarClient {
 
     stopAudio() {
         this.playbackGeneration++;
-        if (this.currentAudioSource) {
-            const source = this.currentAudioSource;
-            this.currentAudioFinalize?.();
+        const source = this.currentAudioSource;
+        this.currentAudioFinalize?.();
+        if (source) {
             try {
                 source.stop();
             } catch (error) {
@@ -427,6 +454,7 @@ class AIAvatarClient {
             ws.onopen = null;
             ws.onmessage = null;
             ws.onerror = null;
+            ws.onclose = null;
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: "stop", session_id: sessionId }));
             }
@@ -438,14 +466,16 @@ class AIAvatarClient {
         this.stopAudio();
         if (this.scriptNode) {
             this.scriptNode.disconnect();
-        }
-        if (this.audioContext) {
-            await this.audioContext.close();
-            this.gainNode = null;
-            this.isAudioPlaying = false;
+            this.scriptNode = null;
         }
         if (this.micStream) {
             this.micStream.getTracks().forEach(track => track.stop());
+            this.micStream = null;
         }
+        const audioContext = this.audioContext;
+        this.audioContext = null;
+        this.gainNode = null;
+        this.isAudioPlaying = false;
+        if (audioContext && audioContext.state !== "closed") await audioContext.close();
     }
 }

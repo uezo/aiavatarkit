@@ -3,6 +3,7 @@ import logging
 import struct
 import time
 from typing import Callable, Optional, Dict, List, Awaitable
+from uuid import uuid4
 from .silero import SileroSpeechDetector, RecordingSession as SileroRecordingSession
 from .filters.base import AudioFilter
 from .turn_end_gates.base import TurnEndGate
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 class RecordingSession(SileroRecordingSession):
     def __init__(self, session_id: str, preroll_buffer_count: int = 5, vad_iterator=None):
         super().__init__(session_id, preroll_buffer_count, vad_iterator)
+        self.recording_id: Optional[str] = None
         self._speech_recognizer_override: Optional[SpeechRecognizer] = None
         # Segment tracking for on_speech_detecting hook
         # TODO: Remove segment_buffer after compatibility review. Partial STT
@@ -29,6 +31,7 @@ class RecordingSession(SileroRecordingSession):
 
     def reset(self):
         super().reset()
+        self.recording_id = None
         # Reset segment tracking
         self.segment_buffer.clear()
         self.segment_duration = 0
@@ -281,6 +284,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
             if speech_detected:
                 # Start recording
                 session.reset()
+                session.recording_id = str(uuid4())
                 session.is_recording = True
 
                 for f in session.preroll_buffer:
@@ -358,7 +362,10 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                             return session.is_recording
 
                     recorded_data = bytes(session.buffer)
-                    metadata = self._build_vad_performance_metadata(session)
+                    metadata = {
+                        **(self._build_vad_performance_metadata(session) or {}),
+                        "recording_id": session.recording_id,
+                    }
                     asyncio.create_task(self.execute_on_speech_detected(
                         recorded_data,
                         final_text,
@@ -413,7 +420,10 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                                 return session.is_recording
 
                         recorded_data = bytes(session.buffer)
-                        metadata = self._build_vad_performance_metadata(session)
+                        metadata = {
+                            **(self._build_vad_performance_metadata(session) or {}),
+                            "recording_id": session.recording_id,
+                        }
                         asyncio.create_task(self.execute_on_speech_detected(
                             recorded_data,
                             final_text,
