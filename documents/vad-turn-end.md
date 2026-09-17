@@ -7,7 +7,7 @@ utterance is really finished.
 
 AIAvatarKit supports semantic VAD by combining acoustic VAD with optional turn-end gates. The acoustic VAD first detects a turn-end candidate from silence, then turn-end gates inspect audio, recognized text, or model-specific signals to decide whether the user's utterance is semantically complete.
 
-`SileroSpeechDetector` and `SileroStreamSpeechDetector` can use built-in gates such as Smart Turn, Filler-only, Namo Turn, and LLM-based gates. You can also implement your own `TurnEndGate` when you need domain-specific turn-end logic. Gates are called only after `silence_duration_threshold` has already been reached. All gates must pass to end the turn. If any gate returns "wait", the detector keeps the current recording open until the user resumes speaking or the waiting gate's timeout forces the turn to end.
+`SileroSpeechDetector` and `SileroStreamSpeechDetector` can use built-in gates such as Smart Turn, Filler-only, Namo Turn, Jev, and LLM-based gates. You can also implement your own `TurnEndGate` when you need domain-specific turn-end logic. Gates are called only after `silence_duration_threshold` has already been reached. All gates must pass to end the turn. If any gate returns "wait", the detector keeps the current recording open until the user resumes speaking or the waiting gate's timeout forces the turn to end.
 
 This is useful for utterances that contain a short pause but are likely to continue, such as trailing conjunctions, filler phrases, or incomplete requests.
 
@@ -139,6 +139,77 @@ turn_end_gate = NamoTurnEndGate(
     tokenizer_path="/models/namo/tokenizer",
 )
 ```
+
+## Jev Turn Gate
+
+`JevTurnEndGate` sends recognized text to TypeSafe's Jev API and asks whether the speaker's turn should be held open. It uses [Noul](https://docs.typesafe.ai/primitives/noul), which returns the probability of a yes answer. Here, that value is `p_hold`: a higher value means the speaker is more likely to continue. Use `SileroStreamSpeechDetector` to supply accumulated partial recognition text.
+
+The default policy has three hold durations:
+
+| Hold probability | Decision | Additional silence timeout |
+| --- | --- | --- |
+| `p_hold < 0.6` | Allow the turn to end | None |
+| `0.6 <= p_hold < 0.8` | Hold briefly | 0.4 seconds |
+| `0.8 <= p_hold < 0.9` | Hold | 1.0 second |
+| `p_hold >= 0.9` | Hold longer | 2.0 seconds |
+
+Pass a long-lived `httpx.AsyncClient` and your API key. The gate reuses the client; the application owns it and must close it after stopping audio processing and pending gate tasks. In this example, the application supplies `speech_recognizer` and an async `serve_audio(vad)` function that runs and shuts down the detector before returning.
+
+```python
+import os
+
+import httpx
+
+from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
+from aiavatar.sts.vad.turn_end_gates.jev import JevTurnEndGate
+
+
+async def run(speech_recognizer, serve_audio):
+    async with httpx.AsyncClient() as http_client:
+        jev_gate = JevTurnEndGate(
+            http_client=http_client,
+            api_key=os.environ["TYPESAFE_API_KEY"],
+            model="jev-latest",
+            # Omit hold_ranges to use the three default ranges above.
+            request_timeout=1.0,
+            run_in_background=True,
+        )
+        vad = SileroStreamSpeechDetector(
+            speech_recognizer=speech_recognizer,
+            silence_duration_threshold=0.5,
+            turn_end_gates=[jev_gate],
+        )
+        await serve_audio(vad)
+```
+
+Set `hold_ranges` to one or more `(minimum_probability, additional_silence_seconds)` pairs to use any number of ranges. The highest matching threshold wins, including an exact boundary match; below the first threshold, the gate allows the turn to end. For example, this configuration uses four hold durations:
+
+```python
+jev_gate = JevTurnEndGate(
+    http_client=http_client,
+    api_key=os.environ["TYPESAFE_API_KEY"],
+    hold_ranges=[
+        (0.55, 0.3),
+        (0.70, 0.6),
+        (0.85, 1.2),
+        (0.95, 3.0),
+    ],
+)
+```
+
+Thresholds must be finite numbers in `[0, 1]`, in strictly increasing order. Durations must be finite positive seconds in nondecreasing order. An empty range list, duplicate thresholds, malformed pairs, or invalid numbers raise `ValueError` during construction. The gate copies the supplied ranges, so changing the input list later does not change its policy. To allow immediate completion below a score, put that score in the first range; do not add a zero-second range.
+
+For a two-range policy, you can also use `hold_threshold`, `long_hold_threshold`, `hold_timeout`, and `long_hold_timeout`. Supplying any of these fills omitted values with `0.5`, `0.8`, `0.8`, and `2.0`, respectively. These arguments cannot be combined with `hold_ranges`; omit all policy arguments to use the three default ranges.
+
+The gate's default name is `"jev"`. Set `instructions` to customize the Noul question while preserving the meaning that yes means hold. Returned `TurnEndDecision.confidence` is `1 - p_hold`, the estimated end-of-turn probability, matching Namo's convention. It is not a separate confidence value from Jev.
+
+Set `debug=True` on `JevTurnEndGate` to log one INFO line per successful evaluation, including the transcript, decision, hold probability, elapsed seconds, and hold timeout. Newlines in the transcript are escaped so the record stays on one line. Keep the detector's `debug=False` if you do not need its additional VAD and gate-manager logs; the Jev logger must be enabled at INFO level to display these records.
+
+Jev runs in the background by default. Inference starts **after** the normal silence threshold, so API latency is not hidden inside that initial silence wait. Hold timeouts count additional silence in incoming PCM audio from the threshold, not from the API response. `request_timeout` limits the API request in wall-clock seconds; while the request is pending, the provisional gate timeout is the larger of `request_timeout` and the longest configured hold duration. The selected range replaces that provisional timeout when the response arrives; if its silence budget is already exhausted, the next manager check allows the turn to end. Measure STT and API wall-clock latency together when tuning responsiveness.
+
+During a latched silence hold, the manager does not call the API again. Speech resuming cancels a pending decision and allows a fresh decision at the next turn-end candidate. Empty text makes no request and allows the turn to end; request failures, malformed responses, and request timeouts also allow it to end. Task cancellation propagates normally.
+
+Set `turn_end_gates=[jev_gate]` to use Jev alone. If combined with other gates, any waiting gate still holds the turn, and the longest active timeout applies.
 
 ## LLM Turn Gate
 
