@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/uezo-aiavatarkit-badge.png)](https://mseep.ai/app/uezo-aiavatarkit)
+
 # AIAvatarKit
 
 🥰 Building AI-based conversational avatars lightning fast ⚡️💬
