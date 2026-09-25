@@ -74,6 +74,84 @@ def test_audio_is_conserved_through_lookahead():
     assert emitted == len(quiet) * 20
 
 
+@pytest.mark.parametrize("calibration_duration", [0.0, 0.25])
+def test_near_zero_chunks_preserve_initial_and_learned_ambient(calibration_duration):
+    gate = make_gate(initial_ambient_db=-30.0, calibration_duration=calibration_duration)
+    silence = make_chunk(0, samples=256)
+    transition = np.zeros(256, dtype="<i2")
+    transition[-4:] = 1  # Nonzero microphone-startup residue, still below one RMS LSB.
+    near_zero = [silence, transition.tobytes()] * 4
+
+    feed_chunks(gate, near_zero)
+    assert gate.get_diagnostics("session1")["ambient_db"] == -30.0
+
+    quiet = make_chunk(30)
+    gate.process(quiet, "session1")
+    learned = gate.get_diagnostics("session1")["ambient_db"]
+    assert learned == pytest.approx(rms_db(quiet))
+
+    feed_chunks(gate, near_zero)
+    assert gate.get_diagnostics("session1")["ambient_db"] == learned
+    # Even excluded chunks advance time: the 250 ms calibration has ended.
+    assert gate.get_diagnostics("session1")["gate_reason"] == "below_min_rms"
+
+
+def test_digital_silence_still_closes_gate_and_preserves_audio_duration():
+    gate = make_gate()
+    prefix = [make_chunk(30)] * 4 + [make_chunk(8000)] * 4
+    output = feed_chunks(gate, prefix)
+    assert gate.get_diagnostics("session1")["is_open"] is True
+    ambient = gate.get_diagnostics("session1")["ambient_db"]
+
+    silence = make_chunk(0)
+    output += feed_chunks(gate, [silence] * 12)  # 384 ms: just below close_min_duration.
+    assert gate.get_diagnostics("session1")["is_open"] is True
+    output += gate.process(silence, "session1")  # 416 ms: the gate must now close.
+    assert gate.get_diagnostics("session1")["is_open"] is False
+    assert gate.get_diagnostics("session1")["ambient_db"] == ambient
+
+    output += gate.flush("session1")
+    assert len(output) == sum(map(len, prefix)) + 13 * len(silence)
+    assert output[-len(silence) * 13:] == silence * 13
+    assert gate.get_diagnostics("session1")["pending_duration"] == pytest.approx(0.0)
+
+
+def test_ambient_min_rms_config_excludes_boundary_and_accepts_just_above():
+    assert make_gate().get_config()["ambient_min_rms_db"] == -90.0
+    threshold = 20.0 * math.log10(2.0 / 32768.0)
+    boundary = np.full(CHUNK_SAMPLES, 2, dtype="<i2").tobytes()
+    gate = make_gate(initial_ambient_db=-30.0, ambient_min_rms_db=threshold)
+    assert gate.get_config()["ambient_min_rms_db"] == threshold
+    gate.process(boundary, "session1")
+    assert gate.get_diagnostics("session1")["ambient_db"] == -30.0
+
+    # Move the threshold down by one float step: the same PCM is now just above it.
+    lower_threshold = math.nextafter(threshold, -math.inf)
+    assert gate.set_config({"ambient_min_rms_db": lower_threshold}) == {
+        "ambient_min_rms_db": lower_threshold,
+    }
+    assert gate.get_config()["ambient_min_rms_db"] == lower_threshold
+    gate.process(boundary, "session1")
+    assert gate.get_diagnostics("session1")["ambient_db"] == pytest.approx(threshold)
+
+
+def test_empty_input_never_updates_ambient_even_with_lowered_threshold():
+    gate = make_gate(
+        initial_ambient_db=-30.0, ambient_min_rms_db=-130.0, calibration_duration=1.0,
+    )
+    for _ in range(5):
+        assert gate.process(b"", "session1") == b""
+    assert gate.get_diagnostics("session1")["ambient_db"] == -30.0
+    assert gate.get_diagnostics("session1")["pending_duration"] == 0.0
+
+    quiet = make_chunk(30)
+    gate.process(quiet, "session1")
+    learned = gate.get_diagnostics("session1")["ambient_db"]
+    assert learned == pytest.approx(rms_db(quiet))
+    gate.process(b"", "session1")
+    assert gate.get_diagnostics("session1")["ambient_db"] == learned
+
+
 def test_far_speech_is_attenuated():
     gate = make_gate()
     build_ambient(gate)

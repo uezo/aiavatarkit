@@ -46,6 +46,10 @@ class NearFieldAudioGate(AudioFilter):
     `open_snr_db_threshold` for `open_min_duration`, and closes when the
     open condition keeps failing for `close_min_duration`.
 
+    Chunks at or below `ambient_min_rms_db` (-90 dBFS by default) do not
+    update the ambient estimate. This excludes digital silence and near-zero
+    input while gate timing, lookahead buffering, and audio output continue.
+
     Opening the gate takes `open_min_duration`, so the filter delays its
     output by `lookahead_duration`: when the gate opens, chunks still in
     the delay line — including the speech onset — are released at full
@@ -71,6 +75,7 @@ class NearFieldAudioGate(AudioFilter):
         close_min_duration: float = 0.4,
         ambient_window_duration: float = 2.5,
         ambient_percentile: float = 25.0,
+        ambient_min_rms_db: float = -90.0,
         initial_ambient_db: float = -65.0,
         calibration_duration: float = 0.0,
         update_ambient_with_rejected_speech: bool = True,
@@ -89,6 +94,7 @@ class NearFieldAudioGate(AudioFilter):
         self.close_min_duration = max(0.0, float(close_min_duration))
         self.ambient_window_duration = max(0.1, float(ambient_window_duration))
         self.ambient_percentile = float(ambient_percentile)
+        self.ambient_min_rms_db = float(ambient_min_rms_db)
         self.initial_ambient_db = float(initial_ambient_db)
         self.calibration_duration = max(0.0, float(calibration_duration))
         self.update_ambient_with_rejected_speech = update_ambient_with_rejected_speech
@@ -110,6 +116,7 @@ class NearFieldAudioGate(AudioFilter):
             "close_min_duration": self.close_min_duration,
             "ambient_window_duration": self.ambient_window_duration,
             "ambient_percentile": self.ambient_percentile,
+            "ambient_min_rms_db": self.ambient_min_rms_db,
             "initial_ambient_db": self.initial_ambient_db,
             "calibration_duration": self.calibration_duration,
             "update_ambient_with_rejected_speech": self.update_ambient_with_rejected_speech,
@@ -157,6 +164,10 @@ class NearFieldAudioGate(AudioFilter):
         return float(np.percentile(values, percentile))
 
     def _update_ambient(self, state: NearFieldGateState, rms_db: float, duration: float):
+        # Check the measured level before applying the ambient rise limit.
+        if duration <= 0.0 or rms_db <= self.ambient_min_rms_db:
+            return
+
         ambient_db = self._ambient_db(state)
         if self.ambient_max_rise_db_per_update is not None:
             max_rms_db = ambient_db + float(self.ambient_max_rise_db_per_update)
