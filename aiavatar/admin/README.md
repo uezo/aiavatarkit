@@ -29,6 +29,26 @@ admin = setup_admin_panel(
 
 The Admin Panel is available at `/admin/`. Requests to `/admin` are redirected to `/admin/`.
 
+For a Metrics/Logs-only panel with an attached Performance Recorder, disable
+the optional features:
+
+```python
+setup_admin_panel(
+    app,
+    adapter=adapter,
+    authenticator=BasicAdminAuthenticator(
+        os.environ["ADMIN_USERNAME"],
+        os.environ["ADMIN_PASSWORD"],
+    ),
+    enable_evaluation=False,
+    enable_config=False,
+)
+```
+
+Both options default to `True`. Disabling a feature removes its tab and API
+routes. Initialize the Pipeline's Performance Recorder before calling
+`setup_admin_panel()`; Metrics and Logs query that recorder.
+
 Use the returned `AdminPanel` handle to add another Adapter to the Config view.
 
 ```python
@@ -128,7 +148,7 @@ Leave a nullable field blank to set it to `None`. Blank secret fields are the ex
 
 The Evaluation view accepts a JSON array of scenarios and runs Dialog Evaluation in the background. Results are saved to `evaluation_results/<evaluation_id>.json`, relative to the process working directory.
 
-The Evaluation tab is shown only when an Evaluator is available. An Evaluator is created automatically when the Adapter uses `ChatGPTService` as its LLM. For other LLMs, pass a `DialogEvaluator` through `setup_admin_panel(..., evaluator=...)`.
+The Evaluation tab is shown only when `enable_evaluation=True` and an Evaluator is available. An Evaluator is created automatically when the Adapter uses `ChatGPTService` as its LLM. Pipelines without an LLM component do not create an Evaluator. For other LLMs, pass a `DialogEvaluator` through `setup_admin_panel(..., evaluator=...)`.
 
 The automatic Evaluator reuses the source `ChatGPTService` client, preserving Azure,
 custom transport, and tracing configuration. It does not take ownership of that client.
@@ -145,7 +165,7 @@ event_at = speech_end_at ?? created_at
 
 `speech_end_at` is the time at which the user's speech ended. `created_at`, which represents record persistence time, is used as the event timestamp for text requests and as a fallback for older records without `speech_end_at`.
 
-For compatibility, the Logs API still returns this value in a field named `created_at`, but its value is the `event_at` defined above. Records without `speech_end_at` can appear in the channel-specific Pipeline metrics and the log list, but not in the Speech breakdown. The existing aggregate Metrics endpoints and the per-turn Logs breakdown remain speech-based for compatibility.
+For compatibility, the Logs API still returns this value in a field named `created_at`, but its value is the `event_at` defined above. The per-turn Logs breakdown uses speech end when available; otherwise it uses the existing Pipeline-relative timings with zero-valued pre-Pipeline phases. Records without `speech_end_at` also appear in channel-specific Pipeline metrics. The existing aggregate Metrics endpoints remain speech-based for compatibility.
 
 ## Authentication
 
@@ -211,6 +231,10 @@ All endpoints are under `/admin/api`.
 | GET | `/evaluate/{evaluation_id}` | Retrieve Evaluation results |
 
 Config POST requests use the common body shape `{"config": {...}}`.
+
+`/capabilities` returns `config` and `evaluation` booleans. Config routes are
+registered only when `enable_config=True`; Evaluation routes are registered
+only when evaluation is enabled and an Evaluator is available.
 
 Metrics and Logs queries currently support `SQLitePerformanceRecorder` and `PostgreSQLPerformanceRecorder`.
 

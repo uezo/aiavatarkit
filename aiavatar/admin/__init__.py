@@ -33,9 +33,9 @@ class AdminPanel:
 
 
 def _default_evaluator(adapter: Adapter) -> Optional[DialogEvaluator]:
-    if not isinstance(adapter.sts.llm, ChatGPTService):
+    source = getattr(adapter.sts, "llm", None)
+    if not isinstance(source, ChatGPTService):
         return None
-    source = adapter.sts.llm
     evaluation_llm = ChatGPTService(
         openai_client=source.openai_client,
         model=source.model,
@@ -52,14 +52,17 @@ def setup_admin_panel(
     title: str = "AIAvatarKit Admin Panel",
     authenticator: AdminAuthenticator = None,
     evaluator: DialogEvaluator = None,
+    enable_evaluation: bool = True,
+    enable_config: bool = True,
 ) -> AdminPanel:
     """Install the new Admin UI and API under ``/admin``.
 
     The same authenticator protects HTML, assets, and API calls. Pass
     ``BasicAdminAuthenticator`` for Basic auth or any async/sync callable taking
     a FastAPI ``Request`` for an SSO integration.
+    Disable evaluation and config to expose only Metrics and Logs.
     """
-    evaluator = evaluator or _default_evaluator(adapter)
+    evaluator = (evaluator or _default_evaluator(adapter)) if enable_evaluation else None
     auth = create_auth_dependency(authenticator)
     router = APIRouter(prefix="/admin", dependencies=[Depends(auth)])
 
@@ -83,21 +86,23 @@ def setup_admin_panel(
 
     @router.get("/api/capabilities", tags=["Admin"])
     async def capabilities():
-        return {"evaluation": evaluator is not None}
+        return {"evaluation": evaluator is not None, "config": enable_config}
 
     router.include_router(MetricsAPI(adapter.sts.performance_recorder).get_router(), prefix="/api")
     router.include_router(
         LogsAPI(
             adapter.sts.performance_recorder,
-            adapter.sts.voice_recorder if adapter.sts.voice_recorder_enabled else None,
+            getattr(adapter.sts, "voice_recorder", None)
+            if getattr(adapter.sts, "voice_recorder_enabled", False) else None,
         ).get_router(),
         prefix="/api",
     )
     adapters = {_adapter_key(adapter): adapter}
-    router.include_router(
-        create_runtime_config_router(adapters),
-        prefix="/api",
-    )
+    if enable_config:
+        router.include_router(
+            create_runtime_config_router(adapters),
+            prefix="/api",
+        )
     if evaluator is not None:
         router.include_router(EvaluationAPI(evaluator).get_router(), prefix="/api")
 
