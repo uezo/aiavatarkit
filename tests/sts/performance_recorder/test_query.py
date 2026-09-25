@@ -498,6 +498,46 @@ async def test_query_timeline_all_intervals(recorder, db_path, query):
 # ========== detailed metrics and log filters ==========
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("timings, expected_phases", [
+    pytest.param(
+        dict(stt_time=0.1, stop_response_time=0.15, before_llm_time=0.2,
+             llm_first_chunk_time=0.3, llm_first_voice_chunk_time=0.4,
+             tts_first_chunk_time=0.6),
+        [0, 0, 0, 0.1, 0.05, 0.05, 0.1, 0.1, 0.2], id="audio",
+    ),
+    pytest.param(
+        dict(before_llm_time=0.1, llm_first_chunk_time=0.25),
+        [0, 0, 0, 0, 0, 0.1, 0.15, 0, 0], id="text",
+    ),
+    pytest.param(
+        dict(before_llm_time=0.2, quick_response_text="please wait", tts_first_chunk_time=0.6),
+        [0, 0, 0, 0, 0, 0.2, 0, 0, 0], id="quick-response",
+    ),
+    pytest.param(dict(tts_first_chunk_time=0.6, error_info="failed"), None, id="error"),
+    pytest.param({}, None, id="unmeasured"),
+])
+async def test_query_logs_timing_without_speech_end(recorder, query, timings, expected_phases):
+    recorder.record(PerformanceRecord(transaction_id="direct-invoke", **timings))
+    recorder.record_queue.join()
+
+    result = await query.query_logs(10)
+    timing = result[0].logs[0].timing_breakdown
+    if expected_phases is None:
+        assert timing is None
+    else:
+        assert timing is not None
+        assert [
+            timing.silence_detection, timing.streaming_stt_finalization, timing.turn_end_gate,
+            timing.stt, timing.stop_response, timing.before_llm,
+            timing.llm, timing.processing, timing.tts,
+        ] == pytest.approx(expected_phases)
+        assert timing.total_first_response == pytest.approx(sum(expected_phases))
+
+    # Logs fallback must not include these rows in speech-based aggregate metrics.
+    assert (await query.query_detailed_summary("1h")).measured_count == 0
+
+
+@pytest.mark.asyncio
 async def test_detailed_summary_stacks_from_speech_end(recorder, query):
     recorder.record(PerformanceRecord(
         transaction_id=f"test_txn_{uuid4()}",
