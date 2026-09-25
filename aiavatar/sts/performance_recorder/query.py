@@ -347,7 +347,7 @@ def _normalized_phase_vector(row, time_origin: str):
 
 
 def _raw_phase_vector(row, time_origin: str):
-    """Return speech-end phases for the existing aggregate and Logs APIs."""
+    """Return speech-end phases for the existing aggregate Metrics APIs."""
     if row[1] is None:
         return None
     return _normalized_phase_vector(row, time_origin)
@@ -600,7 +600,7 @@ def _group_logs(rows, time_origin: str) -> List[ConversationGroup]:
             row[0], row[14], row[15], row[16], row[17], row[18], row[19],
             row[6], row[20], row[21], row[5], row[7], row[12],
         )
-        phases = _raw_phase_vector(detailed_row, time_origin)
+        phases = _normalized_phase_vector(detailed_row, time_origin)
         timing = TurnTimingBreakdown(
             total_first_response=sum(phases),
             silence_detection=phases[0],
