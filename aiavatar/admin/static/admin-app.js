@@ -20,8 +20,8 @@ async function start() {
     const sections = [
       ["metrics", "Metrics", renderMetrics],
       ["logs", "Logs", renderLogs],
-      ["config", "Config", renderConfig],
     ];
+    if (capabilities.config !== false) sections.push(["config", "Config", renderConfig]);
     if (capabilities.evaluation) sections.push(["evaluation", "Evaluation", renderEvaluation]);
 
     function activate(name) {

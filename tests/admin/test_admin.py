@@ -115,6 +115,7 @@ def test_admin_routes_take_priority_over_root_static_files(tmp_path):
         ).status_code == 200
         assert client.get("/admin/api/capabilities", auth=auth).json() == {
             "evaluation": False,
+            "config": True,
         }
     finally:
         recorder.close()
@@ -175,6 +176,7 @@ def test_new_admin_uses_one_replaceable_authenticator_and_new_routes(tmp_path):
         assert client.get("/admin/assets/admin-app.js", auth=auth).status_code == 200
         assert client.get("/admin/api/capabilities", auth=auth).json() == {
             "evaluation": False,
+            "config": True,
         }
         assert client.get("/admin/api/metrics/summary", auth=auth).status_code == 200
         channel_metrics = client.get(
@@ -224,6 +226,28 @@ def test_new_admin_uses_one_replaceable_authenticator_and_new_routes(tmp_path):
 
         paths = {route.path for route in app.routes}
         assert not any("character" in path or "control" in path or path == "/conversation" for path in paths)
+    finally:
+        recorder.close()
+
+
+def test_disabled_admin_features_do_not_initialize_their_components(tmp_path, monkeypatch):
+    import aiavatar.admin as admin_module
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Disabled Admin feature was initialized")
+
+    monkeypatch.setattr(admin_module, "_default_evaluator", forbidden)
+    monkeypatch.setattr(admin_module, "create_runtime_config_router", forbidden)
+    recorder = SQLitePerformanceRecorder(str(tmp_path / "disabled-features.db"))
+    try:
+        app = FastAPI()
+        setup_admin_panel(
+            app, adapter=AIAvatarTestServer(recorder), evaluator=object(),
+            enable_evaluation=False, enable_config=False,
+        )
+        paths = {route.path for route in app.routes}
+        assert "/admin/api/metrics/by-channel" in paths and "/admin/api/logs" in paths
+        assert not any(path.startswith(("/admin/api/config", "/admin/api/evaluate")) for path in paths)
     finally:
         recorder.close()
 

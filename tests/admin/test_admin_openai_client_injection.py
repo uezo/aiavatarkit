@@ -3,6 +3,11 @@ from types import SimpleNamespace
 import aiavatar.admin as admin_module
 
 
+def test_default_evaluator_is_unavailable_without_separate_llm():
+    adapter = SimpleNamespace(sts=SimpleNamespace())
+    assert admin_module._default_evaluator(adapter) is None
+
+
 def test_default_evaluator_reuses_preconfigured_openai_client(monkeypatch):
     created = []
 
