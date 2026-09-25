@@ -24,6 +24,7 @@ vad = SileroStreamSpeechDetector(
         audio_recorder.tap("raw"),
         NearFieldAudioGate(
             min_rms_db=-42.0,
+            ambient_min_rms_db=-90.0,
             open_snr_db_threshold=12.0,
             close_snr_db_threshold=6.0,
         ),
@@ -42,6 +43,22 @@ Built-in filters:
 - `SessionAudioRecorder`: debug tap that writes audio at selected points in the filter chain to WAV files.
 
 Filter order matters. Put `NearFieldAudioGate` before `AGCFilter`; otherwise AGC may amplify far-field audio and make the gate less useful. `SessionAudioRecorder.tap()` can be placed before and after filters to compare raw and processed audio.
+
+`NearFieldAudioGate.ambient_min_rms_db` sets the minimum input RMS level used to
+update the ambient noise estimate (default: `-90.0` dBFS). Chunks at or below this
+level, and empty input, do not update the estimate. This prevents digital silence
+and near-zero microphone startup samples from lowering the gate's ambient baseline.
+The last estimate is retained, or `initial_ambient_db` is used before any valid
+observations. Gate timing, closing during silence, lookahead buffering, and audio
+output continue normally. Calibration time still advances during nonempty silence.
+
+This setting controls ambient learning; `min_rms_db` controls the level required
+to open the gate. Configure it in the constructor or update it at runtime:
+
+```python
+gate = NearFieldAudioGate(ambient_min_rms_db=-90.0)
+gate.set_config({"ambient_min_rms_db": -80.0})
+```
 
 You can implement a custom filter by subclassing `AudioFilter`:
 
