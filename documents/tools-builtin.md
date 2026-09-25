@@ -13,6 +13,7 @@ You can use the following tools out of the box 📦.
 - 🖼️ Image Generation
     - 🍌 Nano Banana
     - 🐓 Selfie
+- 📝 [Character and shared memory](#character-and-shared-memory)
 
 ```python
 # Web Search
@@ -43,6 +44,216 @@ from aiavatar.sts.llm.tools.nanobanana import NanoBananaSelfieTool
 selfie_tool = NanoBananaSelfieTool(gemini_api_key=GEMINI_API_KEY, reference_image=image_bytes_or_image_url_of_file_api)
 llm.add_tool(selfie_tool)
 ```
+
+## Character and shared memory
+
+`MemoryTool` keeps two scopes of memory for each user:
+
+- `character`: memories intended for this character, including its relationship with
+  the user, how it addresses the user, expression preferences, and shared experiences.
+- `shared`: memories intended to carry across characters, such as user facts and
+  preferences, common response rules, and task procedures. This does not share memories
+  between users.
+
+Classification follows the intended scope, not just the topic. A requested way of
+being addressed defaults to `character`, including plain names, hiragana, and requests
+without an honorific. Explicit requests to apply across characters use `shared`.
+Facts such as birthdays, likes, or home locations, and any rule or procedure, can also
+be character-specific when the user scopes them that way.
+
+| Request | Scope |
+| --- | --- |
+| “Call me はる, without an honorific.” | `character` |
+| “Every character should call me はる.” | `shared` |
+| “My birthday is May 5; remember it across characters.” | `shared` |
+| “Only you should confirm the outline before preparing reports for me.” | `character` |
+
+Both scopes are loaded in full as Markdown; there is no retrieval tool or per-skill
+selection step. The tool is opt-in: registering it and adding its text to your prompt
+are explicit application changes. Existing memory tools and stored data are not
+migrated or reclassified automatically.
+
+```python
+import os
+from openai import AsyncOpenAI
+from aiavatar.sts.llm.tools.memory import MemoryTool
+
+# Use an OpenAI-compatible Chat Completions endpoint with JSON-object responses.
+memory_update_client = AsyncOpenAI(
+    api_key=os.environ["MEMORY_API_KEY"],
+    base_url=os.environ["MEMORY_BASE_URL"],
+)
+memory = MemoryTool(
+    character_memory_dir="memories/alice",
+    update_client=memory_update_client,
+    # shared_memory_dir="memories/shared",  # Optional explicit override.
+    # update_model="gpt-6-sol",  # Default; override for another model/deployment.
+    # reasoning_effort="low",   # Optional; None omits the API parameter.
+    # debug=True,               # Optional INFO logs; defaults to False.
+)
+llm.add_tool(memory)
+
+# Use this example when the application uses the default system prompt.
+@llm.get_system_prompt
+async def get_system_prompt(context_id, user_id, system_prompt_params):
+    base_prompt = await llm.get_system_prompt_default(
+        context_id, user_id, system_prompt_params
+    )
+    memory_prompt = await memory.get_prompt(user_id)
+    return "\n\n".join(part for part in (base_prompt, memory_prompt) if part)
+```
+
+`update_client` accepts an `openai.AsyncOpenAI` client. The update endpoint and model
+must support `response_format={"type": "json_object"}`.
+`update_model` defaults to `"gpt-6-sol"`. `reasoning_effort` defaults to `None`, which
+omits the parameter and leaves the effective effort to the endpoint's default.
+Set it to `"low"` for faster updates or `"high"` for more reasoning. The supplied value
+is forwarded unchanged; there is no fallback for models that do not support it.
+If you already have a `get_system_prompt` hook, append `await memory.get_prompt(user_id)`
+inside that hook, preserving its existing character or application prompt construction.
+Registering another hook replaces the previous one. Close `memory_update_client` with
+`await memory_update_client.close()` during application shutdown; the tool does not own
+the supplied client.
+
+Set `debug=True` to trace memory updates with the application's logger at `INFO`.
+JSON logs prefixed `MemoryTool: ` record `input`, `request`, `raw_response`, `decision`,
+`result`, `retry`, and `error` events, correlated by `operation_id` and selected request
+IDs. The request includes the actual update messages, model, and any configured
+reasoning effort; the raw response is logged before parsing, followed by the decision's
+scope, reason, and operations and the resulting status and available revision.
+Failure logs identify the stage and, for exceptions, their class without the exception
+message. Client/API-key settings and full metadata are not serialized.
+
+The updater receives the tool's `content`, current memories, and classification
+prompt; it does not receive the original conversation. The conversation model must
+therefore preserve relevant dialogue intent, subject, actor, and conditions in
+`content`: an answer to “What should I call you?” must retain the requested form of
+address, rather than being reduced to a profile-name fact. Missing context that makes
+scope ambiguous should produce `needs_clarification`, without inventing a scope. The updater's `reason` is
+a short model-provided explanation, not hidden reasoning. Logs contain memory content
+and potentially personal information, so enable this option only when needed for debugging.
+
+Background execution uses the existing `Tool.on_completed` mechanism. To use it,
+configure the memory tool with the desired effort (for example, `reasoning_effort="high"`)
+and replace `llm.add_tool(memory)` above with this block. Register the callback and set
+the acceptance message **before** adding the tool, since registration may copy it.
+Here `aiavatar_app` is your existing `AIAvatarWebSocketServer` using the same `llm`:
+
+```python
+from aiavatar.sts.models import STSRequest
+
+memory.immediate_message = "Memory update accepted; it has not finished yet."
+
+@memory.on_completed
+async def on_memory_completed(result, metadata):
+    status = result.get("status") if result is not None else "error"
+    if status == "needs_clarification":
+        reason = result.get("reason") or "Please specify which memory to update."
+        message = f"The memory update is on hold and needs clarification: {reason}"
+    elif status == "error":
+        message = "The memory update failed. Please try again."
+    else:
+        return  # No completion notification for saved or unchanged.
+
+    async for response in aiavatar_app.sts.invoke(
+        STSRequest(
+            session_id=metadata["session_id"],
+            user_id=metadata["user_id"],
+            context_id=metadata["context_id"],
+            channel=metadata.get("channel"),
+            text=(
+                "$Internal memory-update notification. Briefly relay the following "
+                "to the user, asking for clarification if needed. Do not retry "
+                f"the memory update in response to this notification.\n\n{message}"
+            ),
+            allow_merge=False,
+            wait_in_queue=True,
+            skip_quick_response=True,
+        )
+    ):
+        await aiavatar_app.handle_response(response)
+
+llm.add_tool(memory)
+```
+
+This callback generates the notification through the usual LLM/TTS pipeline and
+delivers each response to the originating WebSocket session. It sends completion
+notifications only for `error` (including a `None` result from an exception) and
+`needs_clarification`. The latter preserves the current memory and supplies the update
+model's explanation in `reason`. The initial acceptance response is separate from
+these completion notifications. `wait_in_queue=True` queues the notification when
+the pipeline's invocation queue is enabled; `allow_merge=False` keeps it separate
+from the preceding user request.
+
+With the default `background_timeout=None`, the tool returns an acceptance response
+without waiting for the update. The completion callback receives the final result;
+it does not automatically send a user notification. New memories appear in prompts
+after the save finishes. Without an `on_completed` callback, tool execution waits for
+the save and returns its result normally. Directly awaiting `save_memory()` also waits
+for the save regardless of callback registration.
+
+`shared_memory_dir` is optional. When omitted or `None`, it defaults to
+`Path(character_memory_dir).parent / "shared"`. The example above therefore uses these
+separate files for `user_id="uezo"`:
+
+```text
+memories/alice/uezo.json
+memories/shared/uezo.json
+```
+
+Changing `character_memory_dir` to `"memories/bob"` switches character memories while
+keeping the same user's shared memories. Set `shared_memory_dir` explicitly when
+characters in different parent directories should use the same shared store.
+
+Lowercase ASCII letters, digits, `_`, and `-` remain readable in filenames. Other UTF-8
+bytes, including uppercase letters and dots, are percent-escaped. Lowercase Windows
+device names and 64-character lowercase hexadecimal IDs escape their first byte; very long
+encoded IDs use a bounded prefix plus `~` and the full SHA-256 hash. Existing files
+named solely by the SHA-256 hash continue to be read and updated in place, without
+renaming. If both the readable and legacy filenames exist for the same user and
+category, access fails rather than selecting or merging them.
+
+Saves require `metadata["user_id"]`; the model does not choose the user or a filesystem
+path. JSON contains a revision and entries with `id` and `content`. To edit it manually,
+stop saves while editing, preserve the document schema and entry IDs, and retain or
+increment `revision`. Conflict checks compare the whole document. IDs are used by the
+update planner; `get_prompt()` emits only readable content under separate character
+and shared headings.
+
+The conversation model calls `save_memory(content, forget=False)` with one fact or rule
+at a time. An update LLM classifies it as `character` or `shared` and proposes only
+the necessary additions, replacements, or deletions. Explicit forgetting uses
+`forget=True`. Only existing entries referenced by a validated patch can be changed; unrelated
+entries are preserved without rewriting or summarizing them. Semantic conflict detection
+still depends on the update model. Duplicates require the same subject, meaning,
+scope, and conditions. Conflicts concern the same subject, actor, and scope where
+conditions overlap; corrections preserve unaffected conditions. A character-specific
+exception can coexist with a shared default. The result status is `saved`, `unchanged`,
+`needs_clarification`, or `error`, so an uncertain or failed save is not reported as
+successful.
+
+Updates use atomic file replacement and file locking, and retry when the stored
+document has changed. Only the most recent previous revision is retained in a
+`.previous.json` file, and a `.lock` sidecar is also kept. Forgetting removes content from active memory
+and future prompts; it does not erase that backup. Missing files are treated as empty
+independently: a new character with no memory file still loads the user's shared
+memories. If both scopes are empty, `get_prompt()` returns an empty string. Reading
+does not create files or directories.
+
+To pass the user's shared facts, preferences, and procedures to a harness, read them
+when preparing its request:
+
+```python
+shared_prompt = await memory.get_prompt(user_id, kind="shared")
+query_with_memories = "\n\n".join(
+    part for part in (query, shared_prompt) if part
+)
+# Pass query_with_memories to your existing harness call.
+```
+
+The same memories can guide AIAvatarKit's own tool selection through the system prompt
+above. The default tool name is `save_memory`; use `name="save_character_shared_memory"`
+if another registered tool already has that name.
 
 ## OpenClaw / Hermes
 

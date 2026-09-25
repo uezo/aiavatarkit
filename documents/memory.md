@@ -4,6 +4,15 @@ Conversation context covers the current conversation. Long-term memory covers ev
 before it — past conversations, facts about the user, knowledge you have loaded — and shared
 context covers messages that should be visible to every session of a character at once.
 
+For explicit memories, the built-in
+[MemoryTool](tools-builtin.md#character-and-shared-memory) separates memories valid
+only for one character from memories intended to carry across characters for the same
+user. Classification follows the intended scope, not the topic: a requested form of
+address defaults to character-specific unless explicitly requested across characters.
+These files remain separate for each user. It applies targeted updates when asked to remember
+something and exposes both scopes as plain text for your system prompt, without a
+conversation-history search service or changes to the integrations below.
+
 ## Recalling past conversations
 
 To recall information from past conversations across different contexts, a long-term memory service is used.
