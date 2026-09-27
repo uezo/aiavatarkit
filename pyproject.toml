@@ -33,6 +33,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+hush-python = ["onnx>=1.16.0"]
 local-audio = ["PyAudio>=0.2.14"]
 local = ["PyAudio>=0.2.14"]
 smart-turn = [
