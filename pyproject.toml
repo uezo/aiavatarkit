@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aiavatar"
-version = "0.9.0"
+version = "0.9.1"
 description = "🥰 Building AI-based conversational avatars lightning fast ⚡️💬"
 readme = "README.md"
 requires-python = ">=3.11"
