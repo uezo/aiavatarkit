@@ -31,9 +31,9 @@ when you run multiple processes, or want the records somewhere your other toolin
 history the LLM sees. `context_timeout` is how long a `context_id` stays usable before a new
 conversation is started; raise it for assistants that should remember across a working day.
 
-The OpenAI Responses API can keep context on the server instead, through
-`previous_response_id`. In that mode the response ids are what needs persisting — see
-`aiavatar.sts.llm.response_id_store`.
+The OpenAI Responses API keeps its context on the server through `previous_response_id`.
+AIAvatarKit's Responses services persist those ids in a `ResponseIdStore` and also save
+conversation history through a `ContextManager` for local reference.
 
 ### Session state
 
@@ -59,40 +59,93 @@ latest `context_id` for that person. That is what lets someone hang up the phone
 and continue the same conversation. `timeout` bounds how long the continuation is offered.
 See [Adapters](adapters.md) for the wiring.
 
-You can use PostgreSQL instead of the default SQLite. We strongly recommend using PostgreSQL in production environments for its scalability and performance benefits from asynchronous processing.
+## Changing the SQLite database path
 
-To use PostgreSQL, install asyncpg and create a `PostgreSQLPoolProvider` to manage the shared connection pool. Then pass it to the constructors of the components that need database access.
+When you create the LLM separately, pass the same `db_connection_str` to the LLM service and `STSPipeline`:
+the LLM creates its conversation context manager, and the pipeline creates its session
+state manager and performance recorder. You do not need to instantiate these database
+components individually.
 
+With your existing `vad`, `stt`, and `tts` components:
+
+```python
+from aiavatar.sts import STSPipeline
+from aiavatar.sts.llm.chatgpt import ChatGPTService
+
+DB_CONNECTION_STR = "myapp.db"
+
+llm = ChatGPTService(
+    openai_api_key=OPENAI_API_KEY,
+    db_connection_str=DB_CONNECTION_STR,
+    # With OpenAIResponsesService or OpenAIResponsesWebSocketService, this also
+    # configures the automatically created ResponseIdStore to use the same database.
+)
+
+sts = STSPipeline(
+    vad=vad,
+    stt=stt,
+    llm=llm,
+    tts=tts,
+    db_connection_str=DB_CONNECTION_STR,
+)
+```
+
+If the pipeline creates the default LLM for you, setting `db_connection_str` on the
+pipeline alone is enough. An adapter that creates its pipeline internally also accepts
+this argument and forwards it to the pipeline. When you supply an existing `llm`, `sts`,
+or database component, its database settings are preserved; configure it when you create it.
+
+If you also use a channel context bridge, set its path separately:
+
+```python
+from aiavatar.adapter.channel_context_bridge import SQLiteChannelContextBridge
+
+bridge = SQLiteChannelContextBridge(db_path=DB_CONNECTION_STR)
+```
+
+Pass or bind the bridge to your adapters as shown in [Adapters](adapters.md#sharing-context-across-channels).
+It can use the same database file or a separate one. Relative paths are resolved from the
+process's working directory; create any parent directory before constructing the components.
+Changing the path selects a different file and does not move existing data.
+
+## Using PostgreSQL
+
+Install `asyncpg` to use PostgreSQL instead of SQLite:
 
 ```sh
 pip install asyncpg
 ```
 
+You can pass a `postgresql://...` connection string as `db_connection_str` to the LLM and
+pipeline in the same way as the SQLite example above. They automatically create the
+PostgreSQL components and connection pools. However, independently created components do
+not share pools just because their connection strings match. For Responses services, the
+automatically created context manager and response ID store also have separate pools.
+
+To share a pool and control its connection limits, create a `PostgreSQLPoolProvider` and
+pass its `get_pool` to the LLM's context manager, and the provider itself to the pipeline
+or an adapter that creates the pipeline:
+
 ```python
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer
+from aiavatar.database.postgres import PostgreSQLPoolProvider
+from aiavatar.sts.llm.chatgpt import ChatGPTService
+from aiavatar.sts.llm.context_manager.postgres import PostgreSQLContextManager
 
 # DB_CONNECTION_STR = "postgresql://{user}:{password}@{host}:{port}/{databasename}"
 DB_CONNECTION_STR = "postgresql://postgres:postgres@127.0.0.1:5432/aiavatar"
 
 # PoolProvider
-from aiavatar.database.postgres import PostgreSQLPoolProvider
 pool_provider = PostgreSQLPoolProvider(
     connection_str=DB_CONNECTION_STR,
     # max_size=20,  # Max connection count (default: 20)
     # min_size=5    # Min connection count (default: 5)
 )
 
-# Character
-from aiavatar.character import CharacterService
-character_service = CharacterService(
-    openai_api_key=OPENAI_API_KEY,
-    db_pool_provider=pool_provider,     # Creates PostgreSQLCharacterRepository and PostgreSQLActivityRepository internally
-)
-
 # LLM
-from aiavatar.sts.llm.context_manager.postgres import PostgreSQLContextManager
 llm = ChatGPTService(
     openai_api_key=OPENAI_API_KEY,
     system_prompt=SYSTEM_PROMPT,
@@ -121,7 +174,12 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(ws_app.get_websocket_router())
 ```
 
-**NOTE**: You can also pass PostgreSQL connection settings directly to each component's constructor to manage and use individual connections separately from the shared connection pool. However, this makes it difficult to manage the total number of connections, especially when using multiple workers. We recommend using the shared pool unless you have a specific reason not to.
+For a Responses service, also pass
+`response_id_store=PostgreSQLResponseIdStore(get_pool=pool_provider.get_pool)` to the LLM;
+import it from `aiavatar.sts.llm.response_id_store.postgres`. Supplying only the context
+manager does not configure the response ID store. An optional
+`PostgreSQLChannelContextBridge` from `aiavatar.adapter.channel_context_bridge.postgres`
+can use the same `get_pool=pool_provider.get_pool`.
 
 **NOTE**: `PerformanceRecorder` runs in a separate thread from the main thread, so it does not use the shared connection pool. Instead, it retrieves only the connection information from the PoolProvider and creates its own dedicated connection pool. It writes performance information serially as it receives it through a queue, so it basically uses only a single connection. We recommend not changing this unless you have a specific reason.
 
