@@ -124,6 +124,7 @@ Every component is a swappable module, and these are the implementations that sh
 | --- | --- |
 | **Voice Activity Detection** | [Silero VAD](documents/vad.md#silero-speech-detector) · [Silero VAD (streaming)](documents/vad.md#silero-stream-speech-detector) · [Azure Speech](documents/vad.md#azure-stream-speech-detector) · [Amazon Transcribe](documents/vad.md#aws-stream-speech-detector) · [Parapper](documents/vad.md#parapper-stream-speech-detector) · [volume threshold](documents/vad.md#standard-speech-detector-legacy) |
 | **Turn-end gates** (semantic VAD) | [Smart Turn](documents/vad-turn-end.md#smart-turn-gate) · [Namo Turn](documents/vad-turn-end.md#namo-turn-gate) · [filler-only](documents/vad-turn-end.md#filler-only-gate) · [LLM-based](documents/vad-turn-end.md#llm-turn-gate) · [session hold](documents/vad-turn-end.md#session-hold-gate) · [custom](documents/vad-turn-end.md#custom-gate) |
+| **Turn-taking gates** | [Jev](documents/vad-turn-taking.md#quick-start-with-jev) · [session allowance](documents/vad-turn-taking.md#sessionallowturntakinggate) · [multiple gates](documents/vad-turn-taking.md#combining-multiple-gates) · [custom](documents/vad-turn-taking.md#custom-gates) |
 | **Speech-to-Text** | [Azure Speech](documents/stt.md#azure-speech) · [Google Cloud Speech-to-Text](documents/stt.md#google-cloud-speech-to-text) · [OpenAI](documents/stt.md#openai) · [AmiVoice](documents/stt.md#amivoice), and any OpenAI-compatible endpoint |
 | **LLM** | [OpenAI Chat Completions](documents/llm-chat-completions.md) · [Azure OpenAI](documents/llm-chat-completions.md#azure-openai) · [OpenAI Responses API](documents/llm-responses.md) · [Anthropic Claude](documents/llm-claude.md) · [Google Gemini](documents/llm-gemini.md) · [xAI Grok](documents/llm-openai-compatible.md#xai-grok) · [OpenRouter](documents/llm-openai-compatible.md#openrouter) · [LM Studio](documents/llm-openai-compatible.md#lm-studio) · [Dify](documents/llm-dify.md) · [LiteLLM](documents/llm-litellm.md) |
 | **Text-to-Speech** | [VOICEVOX](documents/tts.md#voicevox) · [AivisSpeech](documents/tts.md#voicevox) · [Azure](documents/tts.md#azure) · [Google](documents/tts.md#google) · [OpenAI](documents/tts.md#openai) · [VOISONA](documents/tts.md#voisona) · [SpeechGateway](documents/tts.md#speechgateway) · [Style-Bert-VITS2](documents/tts-instant.md#style-bert-vits2) · [Aivis Cloud API](documents/tts-instant.md#aivis-cloud-api) · [ElevenLabs](documents/tts-instant.md#elevenlabs) · [Kotodama](documents/tts-instant.md#kotodama) · [CoeFont](documents/tts-instant.md#coefont) · [Amazon Polly](documents/tts-instant.md#amazon-polly) · [COEIROINK](documents/tts-instant.md#coeiroink) |
@@ -393,6 +394,9 @@ person* resume their conversation when they switch channels, add a channel conte
 - [Semantic turn end](documents/vad-turn-end.md)
     - Gates — Smart Turn, Namo Turn, filler-only, LLM turn gate, session hold, custom gates
     - Coordination — turn-end gate manager, wait timeouts, background gates
+- [Semantic turn taking](documents/vad-turn-taking.md)
+    - Jev quick start, session allowances, and multiple gates
+    - Playback context, barge-in policies, custom gates, and diagnostics
 - [Audio filters](documents/vad-filters.md) — AGC, high-shelf EQ, near-field gate, session audio recorder
 
 ### 👂 Speech-to-Text

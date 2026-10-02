@@ -163,6 +163,18 @@ def validate(text):
     return None  # Return None to accept
 ```
 
+### Turn-Taking Gates
+
+A short acknowledgment during assistant playback should not always start a new
+request. Attach a `turn_taking_gate` to decide whether the user's completed
+utterance should interrupt the assistant or let it continue. Accepted utterances
+reach `on_speech_detected` and the pipeline; rejected utterances do not.
+
+See [Semantic turn taking](vad-turn-taking.md) for a Jev quick start, built-in
+gates, combining multiple gates, and playback integration. Turn-taking gates
+complement [turn-end gates](vad-turn-end.md), which decide whether the user has
+finished speaking.
+
 ## Azure Stream Speech Detector
 
 `AzureStreamSpeechDetector` uses Azure's streaming speech recognition service for both speech detection and transcription. Audio is continuously streamed to Azure, and speech boundaries are determined by Azure's recognition events.
@@ -273,7 +285,7 @@ async def on_recording_started(session_id):
     await stop_ai_speech()
 ```
 
-For stream-based detectors (`SileroStreamSpeechDetector`, `AzureStreamSpeechDetector`), the callback can also be triggered by recognized text length:
+For stream-based detectors (`SileroStreamSpeechDetector`, `AzureStreamSpeechDetector`), the callback can also be triggered by recognized text length when no turn-taking gate is configured:
 
 ```python
 vad = SileroStreamSpeechDetector(
@@ -283,9 +295,14 @@ vad = SileroStreamSpeechDetector(
 )
 ```
 
+When `turn_taking_gate` is configured, the default uses only
+`on_recording_started_min_duration`; the text-length setting is retained but
+does not trigger the callback. See [turn-taking barge-in policies](vad-turn-taking.md#interrupting-longer-utterances)
+for how this threshold also controls classification bypass.
+
 ### Custom Trigger Condition
 
-You can customize when `on_recording_started` fires using the `should_trigger_recording_started` decorator:
+You can customize when `on_recording_started` fires using the `should_trigger_recording_started` decorator. This explicit condition takes precedence even when a turn-taking gate is configured:
 
 ```python
 @vad.should_trigger_recording_started
@@ -398,6 +415,7 @@ uses the same backend; JIT-versus-ONNX numerical equality is not required.
 ## See also
 
 - [Semantic turn end](vad-turn-end.md) — gates that hold a turn through a pause
+- [Semantic turn taking](vad-turn-taking.md) — Jev and other gates for handling speech during assistant playback
 - [Audio filters](vad-filters.md) — AGC, EQ, and near-field gating before detection
 - [Speech-to-Text](stt.md) — the recognizers batch and streaming detectors call
 - [Pipeline](pipeline.md) — what happens once a turn ends

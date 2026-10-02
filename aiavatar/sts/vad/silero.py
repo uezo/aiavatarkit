@@ -13,6 +13,7 @@ from . import SpeechDetector
 from .base import RecordingSessionBase
 from .filters.base import AudioFilter
 from .turn_end_gates.base import TurnEndGate
+from .turn_taking_gates import TurnTakingGate
 from .turn_end_gates.manager import TurnEndGateManager
 
 logger = logging.getLogger(__name__)
@@ -88,10 +89,12 @@ class SileroSpeechDetector(SpeechDetector):
         use_vad_iterator: bool = False,
         audio_filters: Optional[List[AudioFilter]] = None,
         turn_end_gates: Optional[List[TurnEndGate]] = None,
+        turn_taking_gate: Optional[TurnTakingGate] = None,
     ):
         super().__init__(
             sample_rate=sample_rate,
-            on_recording_started_min_duration=on_recording_started_min_duration
+            on_recording_started_min_duration=on_recording_started_min_duration,
+            turn_taking_gate=turn_taking_gate,
         )
         self.audio_filters = audio_filters or []
         self._volume_db_threshold = volume_db_threshold
@@ -491,18 +494,22 @@ class SileroSpeechDetector(SpeechDetector):
     async def process_stream(self, input_stream: AsyncGenerator[bytes, None], session_id: str):
         logger.info("SileroSpeechDetector start processing stream.")
 
-        async for data in input_stream:
-            if not data:
-                break
-            await self.process_samples(data, session_id)
-            await asyncio.sleep(0.0001)
-
-        self.delete_session(session_id)
+        try:
+            async for data in input_stream:
+                if not data:
+                    break
+                await self.process_samples(data, session_id)
+                await asyncio.sleep(0.0001)
+        finally:
+            await self.finalize_session(session_id)
 
         logger.info("SileroSpeechDetector finish processing stream.")
 
     async def finalize_session(self, session_id):
+        turn_taking_session = self._close_turn_taking_session(session_id)
         self.delete_session(session_id)
+        if turn_taking_session is not None:
+            await turn_taking_session.aclose()
 
     def get_session(self, session_id: str):
         session = self.recording_sessions.get(session_id)
@@ -510,6 +517,7 @@ class SileroSpeechDetector(SpeechDetector):
             vad_iterator = self._create_vad_iterator(session_id)
             session = RecordingSession(session_id, self.preroll_buffer_count, vad_iterator)
             self.recording_sessions[session_id] = session
+        self._init_turn_taking_session(session_id)
         if session.amplitude_threshold is None:
             session.amplitude_threshold = self.amplitude_threshold
         return session
@@ -553,6 +561,7 @@ class SileroSpeechDetector(SpeechDetector):
                 )
 
     def delete_session(self, session_id: str):
+        self._close_turn_taking_session(session_id)
         if session_id in self.recording_sessions:
             self.turn_end_gate_manager.reset_session(session_id, session=self.recording_sessions[session_id])
             self.recording_sessions[session_id].reset()

@@ -59,6 +59,20 @@ You can now perform voice interactions just like when running locally.
 **NOTE:** When using the WebSocket API, voice activity detection (VAD) is performed on the server side, so clients can simply stream microphone input directly to the server.
 
 
+## Response transaction IDs
+
+WebSocket responses expose the pipeline's `transaction_id` as an optional
+top-level field. Events for one response, including `start`, audio `chunk`, and
+`final`, carry the same ID. Both complete-WAV and split-PCM audio preserve it.
+When a new transaction interrupts the previous one, the synthetic interrupted
+`final` carries the old transaction's ID and `accepted` carries the new one.
+
+Session controls such as `connected`, `voiced`, and the session-wide `stop`
+notification may have no transaction ID. Clients also accept older responses
+without this field. This ID identifies an AI response; it is distinct from the
+browser's per-chunk `playback_id`. The shared browser returns it in playback
+start notifications for [turn-taking context](../examples/websocket/README.md#playback-context-for-turn-taking).
+
 ## Connection and disconnection handling
 
 You can register callbacks to handle WebSocket connection and disconnection events. This is useful for logging, session management, or custom initialization/cleanup logic.

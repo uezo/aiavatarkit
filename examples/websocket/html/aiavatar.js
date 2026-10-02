@@ -26,6 +26,7 @@ class AIAvatarClient {
         this.onResetFace = null;
         this.onMicrophoneDataSend = () => { };
         this.onResponseReceived = () => { };
+        this.onPlaybackStart = null;
         this.onPlaybackAudio = null;
         this.isMicrophoneMuted = () => this.isAudioPlaying;
         this.getStartMetadata = () => null;
@@ -209,9 +210,15 @@ class AIAvatarClient {
         const playbackGeneration = this.playbackGeneration;
         this.currentAudioMessage = message;
         return new Promise((resolve, reject) => {
+            const playbackState = {
+                message,
+                playbackId: globalThis.crypto?.randomUUID?.()
+                    || `${Date.now()}-${playbackGeneration}-${Math.random().toString(36).slice(2)}`,
+                durationSeconds: 0,
+            };
             let source = null;
             let playbackFinalized = false;
-            const finishPlayback = (error = null) => {
+            const finishPlayback = (error = null, completed = false) => {
                 if (playbackFinalized) return;
                 playbackFinalized = true;
                 const superseded = this.currentAudioFinalize !== finalizePlayback;
@@ -221,7 +228,10 @@ class AIAvatarClient {
                     this.currentAudioMessage = null;
                 }
                 try {
-                    if (source && !superseded) this.onPlaybackEnd?.();
+                    if (source && !superseded) this.onPlaybackEnd?.({
+                        ...playbackState,
+                        completed,
+                    });
                 } catch (callbackError) {
                     console.error("Error handling playback end:", callbackError);
                 } finally {
@@ -259,9 +269,25 @@ class AIAvatarClient {
                         const playbackSampleRate = decodedData.sampleRate;
                         source.connect(dest);
 
-                        const startedAt = this.audioContext.currentTime;
                         this.currentAudioSource = source;
-                        source.start(0);
+                        playbackState.durationSeconds = playbackPcm.length / playbackSampleRate;
+                        source.onended = () => finishPlayback(null, true);
+                        try {
+                            this.onPlaybackStart?.({ ...playbackState });
+                        } catch (callbackError) {
+                            console.error("Error handling playback start:", callbackError);
+                        }
+                        if (playbackFinalized || playbackGeneration !== this.playbackGeneration) {
+                            finalizePlayback();
+                            return;
+                        }
+                        const startedAt = this.audioContext.currentTime;
+                        try {
+                            source.start(0);
+                        } catch (error) {
+                            finishPlayback(error);
+                            return;
+                        }
 
                         const playbackFrame = () => {
                             const tSec = this.audioContext.currentTime;
@@ -305,8 +331,6 @@ class AIAvatarClient {
                             };
                             requestAnimationFrame(tick);
                         }
-
-                        source.onended = finalizePlayback;
                     },
                     (error) => {
                         finishPlayback(playbackGeneration !== this.playbackGeneration ? null : error);
@@ -449,6 +473,7 @@ class AIAvatarClient {
         this.processingQueue = false;
         this.messageQueue.length = 0;
         const ws = this.ws;
+        this.stopAudio();
         this.ws = null;
         if (ws) {
             ws.onopen = null;
@@ -463,7 +488,6 @@ class AIAvatarClient {
                 ws.close();
             }
         }
-        this.stopAudio();
         if (this.scriptNode) {
             this.scriptNode.disconnect();
             this.scriptNode = null;

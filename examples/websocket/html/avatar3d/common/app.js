@@ -8,6 +8,7 @@ import { installRequestInput } from "./request-input-controller.js";
 import { installToolToasts } from "./tool-toast.js";
 import { VisionController } from "./vision-controller.js";
 import { ArtifactController } from "../../artifact/artifact-controller.js";
+import { installPlaybackContext } from "../../playback-context.js";
 
 function requireObject(value, name) {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -80,6 +81,7 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
     ui.interruptEnabled = config.audio.bargeInEnabled;
 
     const settingsHost = await modelAdapter.initialize({ aiavatar, ui });
+    const playbackContext = installPlaybackContext(aiavatar);
     const display = new DisplayController({
         aiavatar,
         ui,
@@ -165,6 +167,7 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
     document.addEventListener("drop", onDrop);
 
     aiavatar.onResponseReceived = (response) => {
+        playbackContext.handleResponse(response);
         backlog.handleResponse(response);
         artifacts.handleResponse(response);
         modelAdapter.handleResponse(response);
@@ -179,6 +182,8 @@ export async function startAvatarApp({ config, modelAdapter, blobStore, artifact
     if (config.vision.defaultMode !== "off") await vision.setMode(config.vision.defaultMode);
 
     const dispose = () => {
+        playbackContext.dispose();
+        ui.dispose();
         document.removeEventListener("dragover", onDragOver);
         document.removeEventListener("dragleave", onDragLeave);
         document.removeEventListener("drop", onDrop);

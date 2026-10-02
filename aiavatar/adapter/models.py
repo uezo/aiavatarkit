@@ -33,6 +33,7 @@ class AIAvatarResponse(BaseModel):
     session_id: Optional[str] = None
     user_id: Optional[str] = None
     context_id: Optional[str] = None
+    transaction_id: Optional[str] = None
     text: Optional[str] = None
     voice_text: Optional[str] = None
     language: Optional[str] = None

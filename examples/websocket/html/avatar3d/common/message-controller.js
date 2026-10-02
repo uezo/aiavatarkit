@@ -85,6 +85,17 @@ export function installMessageController({ aiavatar, ui, state, autoHideDelayMs 
         originalShowMessage(speaker, text);
     };
 
+    const originalShowPartialTranscript = ui.showPartialTranscript?.bind(ui);
+    if (originalShowPartialTranscript) {
+        ui.showPartialTranscript = (text) => {
+            if (!state.showUserText) {
+                ui.clearPartialTranscript();
+                return;
+            }
+            originalShowPartialTranscript(text);
+        };
+    }
+
     const interval = setInterval(() => {
         if (!state.autoHide || state.showRequestInput) {
             if (autoHidden) {
@@ -112,6 +123,7 @@ export function installMessageController({ aiavatar, ui, state, autoHideDelayMs 
             stopTypewriter();
             ui.updateMessage = originalUpdateMessage;
             ui.showMessage = originalShowMessage;
+            if (originalShowPartialTranscript) ui.showPartialTranscript = originalShowPartialTranscript;
         },
     };
 }

@@ -350,6 +350,7 @@ class AIAvatarWebSocketServer(Adapter):
                     session_id=response.session_id,
                     user_id=response.user_id,
                     context_id=response.context_id,
+                    transaction_id=session_data.active_transaction_id,
                     text="",
                     voice_text="",
                     metadata={"interrupted": True}
@@ -371,6 +372,7 @@ class AIAvatarWebSocketServer(Adapter):
             session_id=response.session_id,
             user_id=response.user_id,
             context_id=response.context_id,
+            transaction_id=response.transaction_id,
             text=response.text,
             voice_text=response.voice_text,
             control_tags=(self.parse_control_tags(response.text) or None) if response.type == "chunk" else None,
@@ -433,6 +435,7 @@ class AIAvatarWebSocketServer(Adapter):
                             session_id=response.session_id,
                             user_id=response.user_id,
                             context_id=response.context_id,
+                            transaction_id=response.transaction_id,
                             audio_data=b64_chunk,
                             metadata={"pcm_format": pcm_format}
                         )
