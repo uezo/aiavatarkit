@@ -65,6 +65,7 @@ body {
 }
 
 .message-box .message-inner {
+    margin-bottom: 30px;
     opacity: 1;
     transform: translateY(0);
     transition: opacity 0.4s ease, transform 0.4s ease;
@@ -83,6 +84,42 @@ body {
 
 .message-box.auto-hidden .message-inner {
     display: none;
+}
+
+/* This sibling of message-inner remains visible when the main box hides. */
+.partial-transcript {
+    position: absolute;
+    right: 0;
+    bottom: 4px;
+    left: 0;
+    width: 100%;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 25px;
+    color: rgba(255, 255, 255, 0.75);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+    font-family: var(--vn-text-font-family, inherit);
+    text-align: left;
+}
+
+.partial-transcript[hidden] {
+    display: none;
+}
+
+.partial-transcript-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.partial-transcript-text {
+    overflow: hidden;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: nowrap;
 }
 
 .message-inner {
@@ -870,6 +907,10 @@ body {
 }
 
 @media (max-width: 480px) {
+    .partial-transcript {
+        padding: 0 15px;
+    }
+
     .message-speaker {
         left: 6px;
         padding: 4px 10px;

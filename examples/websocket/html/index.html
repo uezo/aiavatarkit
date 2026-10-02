@@ -92,6 +92,11 @@
         <div id="messageText" class="message-text"></div>
     </div>
 
+    <div id="partialTranscript" class="partial-transcript" hidden>
+        <div id="partialTranscriptLabel" class="partial-transcript-label">User · Transcribing</div>
+        <div id="partialTranscriptText" class="partial-transcript-text"></div>
+    </div>
+
     <div id="toolStatus" class="tool-status"></div>
 
     <video id="visionPreview" style="display: none; position: fixed; top: 12px; left: 12px; width: 120px; border-radius: 8px; z-index: 200; object-fit: cover;" playsinline muted></video>
@@ -112,6 +117,7 @@
     <script src="mpt-avatar.js"></script>
     <script src="ui.js"></script>
     <script type="module">
+        import { installPlaybackContext } from "./playback-context.js";
         import { ArtifactController } from "./artifact/artifact-controller.js";
         import { ImageArtifactPlugin } from "./artifact/image-artifact-plugin.js";
         import { GoogleMapArtifactPlugin } from "./artifact/google-map-artifact-plugin.js";
@@ -178,6 +184,7 @@
             ...avatar.aiAvatarOptions,
         });
         await avatar.bind(aiavatar);
+        const playbackContext = installPlaybackContext(aiavatar);
 
         // Shared UI
         const ui = new AvatarUI({
@@ -313,6 +320,7 @@
 
         // Custom response handling
         aiavatar.onResponseReceived = (response) => {
+            playbackContext.handleResponse(response);
             // Custom handling logic here
             artifacts.handleResponse(response);
 
@@ -322,7 +330,11 @@
 
         // Console helper: chat("Hello.") or chat("What's this?", imageDataUrl)
         window.chat = (text, imageDataUrl) => aiavatar.chat(ui.sessionId, ui.userId, text, imageDataUrl);
-        window.addEventListener("pagehide", () => artifacts.dispose(), { once: true });
+        window.addEventListener("pagehide", () => {
+            playbackContext.dispose();
+            ui.dispose();
+            artifacts.dispose();
+        }, { once: true });
     </script>
 </body>
 

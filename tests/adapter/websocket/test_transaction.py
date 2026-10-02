@@ -54,6 +54,7 @@ async def test_accepted_sets_active_transaction_id():
     ))
 
     assert session_data.active_transaction_id == "txn_1"
+    assert AIAvatarResponse.model_validate_json(ws.sent_messages[0]).transaction_id == "txn_1"
 
 
 @pytest.mark.asyncio
@@ -85,6 +86,7 @@ async def test_new_accepted_sends_synthetic_final_for_old_transaction():
     assert final_msg["session_id"] == session_id
     assert final_msg["user_id"] == "user_1"
     assert final_msg["context_id"] == "ctx_1"
+    assert final_msg["transaction_id"] == "txn_old"
     assert final_msg["text"] == ""
     assert final_msg["voice_text"] == ""
     assert final_msg["metadata"]["interrupted"] is True
@@ -92,6 +94,7 @@ async def test_new_accepted_sends_synthetic_final_for_old_transaction():
     # Second message: accepted itself
     accepted_msg = json.loads(ws.sent_messages[1])
     assert accepted_msg["type"] == "accepted"
+    assert accepted_msg["transaction_id"] == "txn_new"
 
     # active_transaction_id should be updated
     assert session_data.active_transaction_id == "txn_new"
@@ -162,16 +165,17 @@ async def test_stale_final_skipped():
 
 
 @pytest.mark.asyncio
-async def test_response_without_transaction_id_passes_through():
+@pytest.mark.parametrize("response_type", ["connected", "voiced"])
+async def test_response_without_transaction_id_passes_through(response_type):
     """Test that responses without transaction_id (e.g. connected) are not skipped"""
     session_id = "test_session"
     server, session_data, ws = create_server_with_session(session_id)
 
     session_data.active_transaction_id = "txn_1"
 
-    # connected response has no transaction_id
+    # Session controls have no transaction_id even during an active response.
     await server.handle_response(STSResponse(
-        type="connected",
+        type=response_type,
         session_id=session_id,
         user_id="user_1",
         context_id="ctx_1"
@@ -181,11 +185,13 @@ async def test_response_without_transaction_id_passes_through():
     assert len(ws.sent_messages) == 1
     import json
     msg = json.loads(ws.sent_messages[0])
-    assert msg["type"] == "connected"
+    assert msg["type"] == response_type
+    assert msg["transaction_id"] is None
 
 
 @pytest.mark.asyncio
-async def test_active_response_passes_through():
+@pytest.mark.parametrize("response_type", ["start", "chunk", "final"])
+async def test_active_response_passes_through(response_type):
     """Test that responses with matching transaction_id are sent normally"""
     session_id = "test_session"
     server, session_data, ws = create_server_with_session(session_id)
@@ -193,7 +199,7 @@ async def test_active_response_passes_through():
     session_data.active_transaction_id = "txn_1"
 
     await server.handle_response(STSResponse(
-        type="chunk",
+        type=response_type,
         session_id=session_id,
         transaction_id="txn_1",
         text="hello",
@@ -204,8 +210,77 @@ async def test_active_response_passes_through():
     assert len(ws.sent_messages) == 1
     import json
     msg = json.loads(ws.sent_messages[0])
-    assert msg["type"] == "chunk"
+    assert msg["type"] == response_type
+    assert msg["transaction_id"] == "txn_1"
     assert msg["text"] == "hello"
+
+
+def test_response_transaction_id_is_optional_for_legacy_payloads():
+    response = AIAvatarResponse.model_validate_json('{"type":"chunk","text":"hello"}')
+    assert response.transaction_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_audio_chunk_size", [0, 100])
+async def test_audio_responses_preserve_transaction_id(response_audio_chunk_size):
+    import base64
+    import io
+    import json
+    import wave
+
+    session_id = "test_session"
+    server, session_data, ws = create_server_with_session(
+        session_id, response_audio_chunk_size=response_audio_chunk_size
+    )
+    session_data.active_transaction_id = "txn_1"
+    pcm_data = b"\x00\x01" * 256
+    wav_buffer = io.BytesIO()
+    with wave.open(wav_buffer, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(pcm_data)
+    wav_data = wav_buffer.getvalue()
+
+    async def check_response_hook(aiavatar_response, response):
+        assert aiavatar_response.transaction_id == response.transaction_id == "txn_1"
+
+    server._on_response_handlers.append(check_response_hook)
+    await server.handle_response(STSResponse(
+        type="chunk",
+        session_id=session_id,
+        transaction_id="txn_1",
+        text="hello",
+        voice_text="hello",
+        audio_data=wav_data,
+        metadata={},
+    ))
+
+    messages = [json.loads(message) for message in ws.sent_messages]
+    assert all(message["transaction_id"] == "txn_1" for message in messages)
+    if response_audio_chunk_size:
+        assert len(messages) == 7  # One format/text message and six PCM chunks.
+        assert messages[0]["audio_data"] is None
+        assert messages[0]["text"] == "hello"
+        assert all(message["metadata"]["pcm_format"] == {
+            "sample_rate": 16000, "channels": 1, "sample_width": 2
+        } for message in messages)
+        assert b"".join(base64.b64decode(message["audio_data"]) for message in messages[1:]) == pcm_data
+    else:
+        assert len(messages) == 1
+        assert base64.b64decode(messages[0]["audio_data"]) == wav_data
+
+
+@pytest.mark.asyncio
+async def test_session_stop_does_not_claim_active_transaction_id():
+    server, session_data, ws = create_server_with_session("test_session")
+    session_data.active_transaction_id = "txn_new"
+
+    await server.stop_response("test_session", "ctx_1")
+
+    response = AIAvatarResponse.model_validate_json(ws.sent_messages[0])
+    assert response.type == "stop"
+    assert response.transaction_id is None
 
 
 @pytest.mark.asyncio
@@ -296,3 +371,7 @@ async def test_audio_chunk_loop_breaks_on_transaction_change():
     # (would be 1 + 6 without break since 512/100 = 6 chunks)
     assert send_count < 7, f"Expected early break but sent {send_count} messages"
     assert send_count == 3, f"Expected 3 sends (1 initial + 2 chunks before break), got {send_count}"
+    assert all(
+        AIAvatarResponse.model_validate_json(message).transaction_id == "txn_1"
+        for message in ws.sent_messages
+    )

@@ -33,6 +33,7 @@ export class DisplayController {
             characterName: config.characterName,
             userName: config.userName,
             showUserText: config.showUserText,
+            separatePartialTranscript: config.separatePartialTranscript ?? false,
             showAIText: config.showAIText,
             showMicGlow: config.showMicGlow,
             showMenu: config.showMenu,
@@ -60,6 +61,7 @@ export class DisplayController {
                 charName: "characterName",
                 userName: "userName",
                 showUserText: "showUserText",
+                separatePartialTranscript: "separatePartialTranscript",
                 showAIText: "showAIText",
                 showMicGlow: "showMicGlow",
                 showVnMenu: "showMenu",
@@ -82,6 +84,7 @@ export class DisplayController {
             charName: this.state.characterName,
             userName: this.state.userName,
             showUserText: this.state.showUserText,
+            separatePartialTranscript: this.state.separatePartialTranscript,
             showAIText: this.state.showAIText,
             showMicGlow: this.state.showMicGlow,
             showVnMenu: this.state.showMenu,
@@ -103,6 +106,10 @@ export class DisplayController {
         if (this.state.showRequestInput) messageBox.classList.remove("auto-hidden");
         this.ui.speakerLabelAI = this.state.characterName || "AI";
         this.ui.speakerLabelUser = this.state.userName || "User";
+        this.ui.separatePartialTranscript = this.state.separatePartialTranscript;
+        if (!this.state.separatePartialTranscript || !this.state.showUserText) {
+            this.ui.clearPartialTranscript?.();
+        }
         if (!this.state.showMicGlow) document.getElementById("micGlow").classList.remove("active");
     }
 
@@ -188,6 +195,7 @@ export class DisplayController {
         toggles.style.cssText = "margin-top:8px;display:flex;flex-direction:column;gap:10px";
         const toggleDefinitions = [
             ["Show user speech", "showUserText"],
+            ["Live transcript below", "separatePartialTranscript"],
             ["Show AI speech", "showAIText"],
             ["Auto-hide", "autoHide"],
             ["Show menu buttons", "showMenu"],

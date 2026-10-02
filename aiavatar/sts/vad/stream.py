@@ -7,6 +7,7 @@ from uuid import uuid4
 from .silero import SileroSpeechDetector, RecordingSession as SileroRecordingSession
 from .filters.base import AudioFilter
 from .turn_end_gates.base import TurnEndGate
+from .turn_taking_gates import TurnTakingGate
 from ..stt.base import SpeechRecognizer
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
         use_vad_iterator: bool = False,
         audio_filters: Optional[List[AudioFilter]] = None,
         turn_end_gates: Optional[List[TurnEndGate]] = None,
+        turn_taking_gate: Optional[TurnTakingGate] = None,
     ):
         super().__init__(
             volume_db_threshold=volume_db_threshold,
@@ -102,6 +104,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
             use_vad_iterator=use_vad_iterator,
             audio_filters=audio_filters,
             turn_end_gates=turn_end_gates,
+            turn_taking_gate=turn_taking_gate,
         )
         self.speech_recognizer = speech_recognizer
         self.segment_silence_threshold = segment_silence_threshold
@@ -444,6 +447,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
             vad_iterator = self._create_vad_iterator(session_id)
             session = RecordingSession(session_id, self.preroll_buffer_count, vad_iterator)
             self.recording_sessions[session_id] = session
+        self._init_turn_taking_session(session_id)
         if session.amplitude_threshold is None:
             session.amplitude_threshold = self.amplitude_threshold
         return session

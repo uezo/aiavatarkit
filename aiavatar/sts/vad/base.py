@@ -3,6 +3,7 @@ import asyncio
 from collections import deque
 import logging
 from typing import AsyncGenerator, Dict, List, Callable, Awaitable, Optional, Any
+from .turn_taking_gates import TurnTakingGate, TurnTakingSession
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +37,12 @@ class SpeechDetector(ABC):
         *,
         sample_rate: int = 16000,
         on_recording_started_min_duration: float = 1.5,
-        on_recording_started_min_text_length: int = 2
+        on_recording_started_min_text_length: int = 2,
+        turn_taking_gate: Optional[TurnTakingGate] = None,
     ):
         self.sample_rate = sample_rate
         self._on_speech_detected: List[Callable[[bytes, str, dict, float, str], Awaitable[None]]] = []
+        self.turn_taking_gate = turn_taking_gate
         self.should_mute = lambda: False
         self._on_recording_started: List[Callable[[str], Awaitable[None]]] = []
         self._on_voiced: List[Callable[[str], Awaitable[None]]] = []
@@ -53,12 +56,37 @@ class SpeechDetector(ABC):
         """Register callback for speech detection.
 
         The callback is called with (data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str).
+        Only inputs accepted by the optional turn-taking gate are notified.
+        All callbacks run in registration order; return values are ignored.
         """
         self._on_speech_detected.append(func)
         return func
 
+    def _init_turn_taking_session(self, session_id: str) -> None:
+        """Ensure gate state exists without replacing an existing live session."""
+        if self.turn_taking_gate is not None:
+            self.turn_taking_gate.get_session(
+                session_id, create=True,
+                default_skip_condition=self._default_skip_turn_taking,
+            )
+
+    def _default_skip_turn_taking(self, text: Optional[str], recorded_duration: float) -> bool:
+        return recorded_duration >= self.on_recording_started_min_duration
+
+    def _close_turn_taking_session(self, session_id: str) -> Optional[TurnTakingSession]:
+        if self.turn_taking_gate is not None:
+            return self.turn_taking_gate.close_session(session_id)
+
     async def _execute_on_speech_detected(self, data: bytes, text: str, metadata: dict, recorded_duration: float, session_id: str):
-        """Execute on_speech_detected callbacks."""
+        """Evaluate the gate before notifying any speech-detected callback."""
+        if self.turn_taking_gate is not None:
+            decision = await self.turn_taking_gate.evaluate(
+                session_id, text, recorded_duration=recorded_duration,
+                recording_id=(metadata or {}).get("recording_id"),
+                speech_end_at=((metadata or {}).get("vad_performance") or {}).get("speech_end_at"),
+            )
+            if not decision.should_take_turn:
+                return
         if not self._on_speech_detected:
             logger.info(f"Speech detected: len={recorded_duration} sec")
             return
@@ -100,12 +128,12 @@ class SpeechDetector(ABC):
         return func
 
     def _default_should_trigger_recording_started(self, text: Optional[str], session: RecordingSessionBase) -> bool:
-        """Default trigger condition for on_recording_started callback."""
+        """Use duration only with a turn-taking gate; otherwise also use text length."""
         # Duration-based condition
         if session.record_duration - session.silence_duration >= self.on_recording_started_min_duration:
             return True
-        # Text length-based condition
-        if text and len(text) >= self.on_recording_started_min_text_length:
+        # Short acknowledgments must reach the gate before they can stop playback.
+        if self.turn_taking_gate is None and text and len(text) >= self.on_recording_started_min_text_length:
             return True
         return False
 
@@ -194,4 +222,6 @@ class SpeechDetectorDummy(SpeechDetector):
         pass
 
     async def finalize_session(self, session_id):
+        if session := self._close_turn_taking_session(session_id):
+            await session.aclose()
         self._session_data.pop(session_id, None)

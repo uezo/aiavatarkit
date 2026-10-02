@@ -30,6 +30,258 @@ The Stop button and WebSocket disconnection stop all playback. Disconnection als
 releases microphone capture and the audio context, including a microphone acquired
 after disconnection while permission was pending.
 
+## Playback context for turn-taking
+
+### Recognition preview
+
+`AvatarUI` defaults to `separatePartialTranscript: false`: partial speech
+recognition appears directly in the main message box, preserving the original
+behavior. Set it to `true` to show recognition below the message box while keeping
+the main AI message and 3D typewriter running. Custom pages can specify it in the
+constructor:
+
+```javascript
+const ui = new AvatarUI({ aiavatar, camera, separatePartialTranscript: true });
+```
+
+In `3d.html`, the **UI → Message box → Live transcript below** switch controls
+this option. The 3D settings save and restore it; resetting restores the configured
+default (off by default).
+The separate preview used by `index.html` and `3d.html` is a small, left-aligned
+line without a separate panel or visible label. Long text follows the latest
+words on that single line. A visually hidden label identifies it as
+`User · Transcribing` (using the configured user name) for assistive technology.
+In either mode, the existing `start.metadata.recognized_text` event clears any
+separate preview and shows the accepted user utterance in the main message box.
+
+When enabled, the separate preview disappears three seconds after its last
+update, so discarded backchannels do not linger. This is a display timeout, not a turn-taking
+decision. Stopping, disconnecting, starting a new session, or receiving a
+`canceled`/`error` event also clears it. AI `chunk`/`final` events keep the preview
+visible until that timeout or the accepted input's `start`. The 3D viewer's
+"Show user speech" setting also applies to new recognition previews. No server
+notification or protocol change is required.
+
+### Playback notifications
+
+`index.html` and `3d.html` install the shared `playback-context.js` helper. After
+decoding a main-response audio chunk, immediately before starting its audio
+source, the browser sends a separate WebSocket message:
+
+```json
+{
+  "type": "playback",
+  "session_id": "session-1",
+  "metadata": {
+    "event": "start",
+    "playback_id": "browser-generated-unique-id",
+    "transaction_id": "response-transaction-id",
+    "text": "This is the text being read aloud.",
+    "duration_seconds": 3.0
+  }
+}
+```
+
+`text` uses the chunk's `voice_text`. Duration comes from the decoded audio buffer
+in seconds. The browser generates the playback ID for each chunk and copies the
+response's top-level `transaction_id` into this notification. The transaction ID
+groups chunks of one AI response; a missing or null ID is omitted for older
+servers. Nod, backlog audio, and messages without a
+nonempty `voice_text` or session ID do not send start events. Queued or
+still-decoding audio has not started yet and does not send a start event.
+
+Natural completion sends an end event for that same ID:
+
+```json
+{
+  "type": "playback",
+  "session_id": "session-1",
+  "metadata": {
+    "event": "end",
+    "playback_id": "browser-generated-unique-id",
+    "completed": true
+  }
+}
+```
+
+Interruption, including stopping playback, uses `completed: false`. These events
+are independent of microphone `data` messages. Use the shared browser's complete
+WAV delivery mode (`response_audio_chunk_size=0`).
+
+When the normal response `final` arrives, the helper identifies its last audio
+chunk using the matching session/transaction and playback queue. Once that chunk
+has started, it sends one additional notification:
+
+```json
+{
+  "type": "playback",
+  "session_id": "session-1",
+  "metadata": {
+    "event": "final",
+    "playback_id": "last-audio-chunk-id",
+    "transaction_id": "response-transaction-id"
+  }
+}
+```
+
+This identifies the final audio chunk; it does not mean playback has ended.
+If the response `final` arrives after that chunk starts or naturally finishes,
+the notification is sent then. Interrupted/error responses, missing transaction
+IDs, nods, and backlog audio do not establish a final chunk. An empty queue alone
+does not establish one either.
+
+For Jev integration, import `JevTurnTakingGate` from
+`aiavatar.sts.vad.turn_taking_gates.jev` and pass it to the VAD constructor as
+`turn_taking_gate=...`. Other classifiers can implement the
+[`TurnTakingGate` base class](../../documents/vad-turn-taking.md#custom-gates)
+and reuse the same playback and session handling. The gate keeps one
+`TurnTakingSession` per connection's unique session ID. A gate can be shared
+across connections and VADs with different session IDs. With the standard
+WebSocket adapter and Silero or SileroStream VAD, the `start` request initializes
+the helper through the VAD's session setup, and disconnect finalizes it through
+the pipeline. No dedicated start/disconnect hooks or helper reference in
+connection data are needed. For standalone gate use,
+first register the helper with `gate.get_session(session_id, create=True)`.
+In the existing server `on_request` hook, verify that the connection is current,
+then forward the playback metadata:
+
+```python
+if request.type == "playback" and vad.turn_taking_gate is not None:
+    vad.turn_taking_gate.handle_playback_event(
+        request.session_id, **(request.metadata or {}),
+    )
+```
+
+`handle_playback_event()` is available on both a single gate and
+`TurnTakingGateManager`. It routes `start`, `end`, and `final` to the existing
+session's corresponding methods and returns their boolean result. It ignores
+extra metadata fields and treats `completed` as true only when it is the literal
+boolean `True`. Missing or closed sessions and unknown events return `False`;
+the method never creates a helper. `session_id` can also be passed by keyword.
+
+The VAD calls `gate.evaluate()` before notifying `on_speech_detected`. The gate
+handles session lookup, classification, error fallback, cancellation, logging,
+and the check that the helper is still current after classification. Evaluation
+does not recreate a missing session. Only allowed speech reaches the callbacks
+and the pipeline that creates an `STSRequest`.
+There is no application speech-filter callback or registration-order requirement;
+callback return values do not suppress later callbacks. The VAD passes the
+optional recording ID for diagnostics and its `vad_performance.speech_end_at`
+timestamp to correct for processing delay. Neither a missing recording ID nor
+missing recognized text rejects an input; text-free VAD output passes through
+without classification.
+
+The server accumulates started chunks only for the current transaction ID,
+retaining each chunk's text, duration, and server playback timestamps. A new ID
+replaces that response's state. A missing, empty, or invalid ID uses independent
+single-chunk tracking, so unrelated responses are never grouped by a missing ID.
+
+With a valid timezone-aware `speech_end_at`, the server maps the user's speech
+end onto its monotonic playback timeline. It concatenates the text already
+spoken by that time, estimating a partial chunk from its own elapsed time and
+audio duration. Later chunks contribute no future words. If playback has moved
+to the next chunk of the same response, the estimate can still use the preceding
+chunk; a gap between known chunks uses the preceding spoken text. A sentence
+boundary alone does not mean the assistant has yielded the turn.
+
+For Jev evaluation only, if a completed chunk has a known following chunk of
+the same response with zero estimated characters, the server appends that next
+chunk's first two characters plus `…` (or the whole text if shorter plus `…`).
+This applies to known gaps too, but not to a target inside the preceding chunk
+or a chunk that was cut short. Playback progress stays unchanged. Session debug
+logs separate `assistant_spoken_text`, supplemented `evaluation_text`, and
+`continuation_hint` so this preview can be checked against the decision.
+
+Missing, invalid, or timezone-naive timestamps use decision time; future
+timestamps contribute zero delay. Before the retained response starts or after
+its last known playback ends, input passes without calling Jev. Playback that
+ended after `speech_end_at` can still be judged at that earlier time. The server
+does not predict unreceived chunks or retain previous transactions. Without a
+transaction ID, the original single-chunk behavior remains: ended playback or
+an empty estimated prefix allows input. Network delay and text-to-audio
+alignment still affect this approximation.
+
+To allow a quick reply at the end of the whole response, configure
+`JevTurnTakingGate(response_end_grace_seconds=0.3, ...)`. When the corrected user
+speech end falls within the last 300 ms of the confirmed final audio chunk, the
+session allows the input without calling Jev, with reason
+`playback_response_end_grace`. This intentionally allows acknowledgments there
+as well. Earlier chunks, gaps, interrupted audio, and unconfirmed final chunks
+keep their existing behavior. The default is `0.0` (disabled); this is a duration
+in seconds, not a percentage of each chunk. The grace also applies when the
+audio has already naturally finished by decision time but the corrected speech
+end falls in that final window.
+
+The estimate is frozen before awaiting Jev, so later controls or recordings
+cannot change it. Matching end events stop only the identified current playback.
+Response state is cleared on replacement or connection cleanup.
+
+Each session keeps only its latest finalized-input decision eligible. A new
+`should_take_turn()` call cancels the preceding pending call without waiting for its cleanup,
+even when the new input bypasses Jev. Superseded results and exceptions propagate
+as `asyncio.CancelledError` instead of reaching the pipeline; decisions already
+returned are unaffected. Deleting the VAD session removes and closes its helper
+through the gate, cancelling pending calls; `await vad.finalize_session(session_id)` also awaits their cleanup,
+including superseded calls still unwinding. A connection hook can additionally
+await its captured helper's `aclose()`; cleanup is idempotent. The default `request_timeout=1.0`
+allows the current input on timeout (`jev_timeout`); other request
+failures allow it with `jev_error`.
+
+For classification-only barge-in, use `mute_on_barge_in=False` so playback
+continues until the decision. To stop after a configurable long utterance instead,
+use `mute_on_barge_in=True`, set `vad.on_recording_started_min_duration` (for
+example, `3.0` seconds). With a `turn_taking_gate` configured, the VAD's default
+recording-start condition uses duration only and ignores the text-length
+alternative, so a short recognized acknowledgment does not stop audio. No custom
+callback is needed. Without a gate, the existing duration-or-text behavior remains.
+An explicit `vad.should_trigger_recording_started` callback overrides the default.
+With the gate's default `skip_condition=None`, the VAD supplies the matching
+final-input condition: `recorded_duration >= vad.on_recording_started_min_duration`.
+Matching inputs pass without Jev with reason `turn_take_skipped`, while still
+cancelling an older pending decision. Each input uses its own duration, so no
+persistent skip flag or reset is needed. An explicit synchronous
+`skip_condition(text, recorded_duration)` takes precedence; use
+`lambda text, recorded_duration: False` to disable the duration bypass. The
+default is supplied per session, so sharing a gate across VADs does not mix their
+duration policies. Maximum-duration flushes use the VAD's reported total duration,
+which includes trailing silence.
+Changing the gate's skip condition does not change the recording-start condition.
+The turn-end gate and existing playback stop behavior are unchanged; no new
+suppression of later generated audio is added. See the
+[duration threshold example](../../documents/vad-turn-taking.md#interrupting-longer-utterances).
+
+Keep `debug=True` to trace helper creation (`event=session_started`), initial
+closure (`event=session_closed`), final-input entry, playback estimates, Jev
+decisions, and bypasses. Repeated cleanup does not duplicate the closure log.
+`event=superseded` records when newer finalized input replaces a pending decision.
+The lifecycle logs describe the helper. `handle_playback_event()` also logs
+ignored controls for missing/closed sessions and unknown events; controls
+rejected before reaching the gate remain transport-level diagnostics.
+Stop/Finish controls must end current playback, and disconnect/replacement must
+finalize the old VAD session. Use a new session ID when reconnecting. The gate
+obtains the helper when evaluation starts and checks its ownership after
+classification. Accepted inputs follow the normal VAD callback dispatch without
+further turn-taking session checks between handlers.
+The playback bridge must ignore controls from disconnected/replaced connections
+before calling `handle_playback_event`. Playback controls never recreate state.
+A response transaction ID mismatch is not a reason to drop the user's speech.
+See [Jev turn-taking](../../documents/vad-turn-taking.md#quick-start-with-jev)
+for setup, classification policy, and cleanup details. The injected HTTP client
+remains application-owned and must be closed separately at shutdown.
+
+For custom pages, call `installPlaybackContext(aiavatar)` after binding the avatar
+or initializing the 3D model adapter. It composes existing `onPlaybackStart` and
+`onPlaybackEnd` callbacks while preserving audio/lip-sync and response callbacks.
+Call the returned helper's `handleResponse(response)` at the start of the page's
+`onResponseReceived` callback, as the maintained 2D and 3D pages do, to identify
+final chunks and clear response tracking on connection/stop events.
+Its returned `dispose()` sends an interrupted end for the current context and
+restores the callbacks it owns; it does not stop the audio itself.
+`onPlaybackStart` receives `{message, playbackId, durationSeconds}` immediately
+before `source.start()`. `onPlaybackEnd` receives the same information plus `completed`,
+which is `true` for natural completion and `false` for interruption. Controls
+from an old or disconnected socket are not sent into a replacement connection.
+
 ## Quickstart (Web Browser)
 
 💡 Prerequisite: Install [VOICEVOX](https://voicevox.hiroshiba.jp) in advance and keep it running on localhost port 50021.

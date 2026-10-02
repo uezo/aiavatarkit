@@ -369,7 +369,11 @@ test("empty-text nods leave the 3D message window unchanged while audio and norm
     Object.assign(ui, {
         aiavatar: client, currentUserText: "", currentAIText: "",
         speakerLabelUser: "User", speakerLabelAI: "AI",
-        messageSpeaker: {}, messageText: {}, toolStatus: {},
+        messageSpeaker: { textContent: "" }, messageText: { textContent: "" }, toolStatus: {},
+        separatePartialTranscript: true,
+        partialTranscript: { hidden: true },
+        partialTranscriptLabel: { textContent: "" },
+        partialTranscriptText: { textContent: "", scrollWidth: 0 },
         messageBox: { classList: {
             add: name => messageClasses.add(name),
             remove: name => messageClasses.delete(name),
@@ -378,8 +382,8 @@ test("empty-text nods leave the 3D message window unchanged while audio and norm
     const received = [];
     const consumer = name => ({ handleResponse: response => received.push([name, response]) });
     const handler = appSource.match(/    aiavatar\.onResponseReceived = \(response\) => \{[\s\S]*?\n    \};/)[0];
-    new Function("aiavatar", "ui", "backlog", "artifacts", "modelAdapter", "vision", "display", handler)(
-        client, ui, consumer("backlog"), consumer("artifacts"), consumer("model"), consumer("vision"), {},
+    new Function("aiavatar", "ui", "backlog", "artifacts", "modelAdapter", "vision", "display", "playbackContext", handler)(
+        client, ui, consumer("backlog"), consumer("artifacts"), consumer("model"), consumer("vision"), {}, consumer("playback"),
     );
     const nodAudio = id => ({
         ...audio(id), text: "", voice_text: "",
@@ -389,13 +393,17 @@ test("empty-text nods leave the 3D message window unchanged while audio and norm
         socket.receive(nodAudio("nod-1"));
         assert.deepEqual([...messageClasses], ["hidden"]);
         assert.equal(ui.currentAIText, "");
+        assert.equal(received[0][0], "playback");
         assert.ok(received.some(([name, response]) => name === "backlog" && response.metadata?.nod === true));
         assert.equal(sources[0].buffer.marker, "nod-1");
 
         socket.receive({ type: "info", text: null, metadata: { partial_request_text: "話の続き" } });
         socket.receive(nodAudio("nod-2"));
-        assert.equal(ui.messageText.textContent, "話の続き");
-        assert.equal(ui.messageSpeaker.textContent, "User");
+        assert.equal(ui.partialTranscriptText.textContent, "話の続き");
+        assert.equal(ui.partialTranscriptLabel.textContent, "User · Transcribing");
+        assert.equal(ui.partialTranscript.hidden, false);
+        assert.equal(ui.messageText.textContent, "");
+        assert.equal(ui.messageSpeaker.textContent, "");
 
         socket.receive({ ...stopResponse, text: null });
         socket.receive({ type: "accepted", text: null });
@@ -411,5 +419,8 @@ test("empty-text nods leave the 3D message window unchanged while audio and norm
         sources[0].end();
         await flush();
         assert.deepEqual(sources.map(source => source.buffer.marker), ["nod-1", "main"]);
-    } finally { await client.stopListening("session"); }
+    } finally {
+        ui.dispose();
+        await client.stopListening("session");
+    }
 });

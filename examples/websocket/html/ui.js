@@ -6,7 +6,7 @@
  *   // Then wire up page-specific logic (onResponseReceived, lipsync, etc.)
  */
 class AvatarUI {
-    constructor({ aiavatar, userId, camera, onStop, toolLabels, voiceDetectMode, voiceHoldDuration }) {
+    constructor({ aiavatar, userId, camera, onStop, toolLabels, voiceDetectMode, voiceHoldDuration, separatePartialTranscript = false }) {
         this.aiavatar = aiavatar;
         this.sessionId = crypto.randomUUID();
         this.userId = userId || localStorage.getItem("userId") || crypto.randomUUID();
@@ -37,6 +37,9 @@ class AvatarUI {
         this.currentUserText = "";
         this.speakerLabelUser = "User";
         this.speakerLabelAI = "AI";
+        this.separatePartialTranscript = separatePartialTranscript;
+        this._partialTranscriptTimer = null;
+        this._partialTranscriptSocket = null;
 
         // DOM elements
         this.avatarFrame = document.getElementById("avatarFrame");
@@ -54,6 +57,9 @@ class AvatarUI {
         this.messageBox = document.getElementById("messageBox");
         this.messageSpeaker = document.getElementById("messageSpeaker");
         this.messageText = document.getElementById("messageText");
+        this.partialTranscript = document.getElementById("partialTranscript");
+        this.partialTranscriptLabel = document.getElementById("partialTranscriptLabel");
+        this.partialTranscriptText = document.getElementById("partialTranscriptText");
         this.toolStatus = document.getElementById("toolStatus");
 
         this._setupMicrophoneCallback();
@@ -149,6 +155,7 @@ class AvatarUI {
 
     _setupChatButton() {
         this.chatBtn.addEventListener("click", () => {
+            this.clearPartialTranscript();
             if (this.isChatActive) {
                 this.aiavatar.stopListening(this.sessionId);
                 this.onStop();
@@ -222,6 +229,40 @@ class AvatarUI {
 
     // --- Message box ---
 
+    showPartialTranscript(text) {
+        if (typeof text !== "string" || !text.trim() || text.startsWith("$")) {
+            this.clearPartialTranscript();
+            return;
+        }
+        // Use the main message box by default, including pages without a preview.
+        if (!this.separatePartialTranscript || !this.partialTranscript) {
+            this.clearPartialTranscript();
+            this.updateMessage("user", text, true);
+            return;
+        }
+        clearTimeout(this._partialTranscriptTimer);
+        this.partialTranscriptLabel.textContent = `${this.speakerLabelUser} · Transcribing`;
+        this.partialTranscriptText.textContent = text;
+        this.partialTranscript.hidden = false;
+        this.partialTranscriptText.scrollLeft = this.partialTranscriptText.scrollWidth;
+        // Discarded backchannels have no start event. Expire their preview
+        // locally; this timer makes no decision about taking the user's turn.
+        this._partialTranscriptTimer = setTimeout(() => this.clearPartialTranscript(), 3000);
+    }
+
+    clearPartialTranscript() {
+        clearTimeout(this._partialTranscriptTimer);
+        this._partialTranscriptTimer = null;
+        if (this.partialTranscript) this.partialTranscript.hidden = true;
+        if (this.partialTranscriptText) this.partialTranscriptText.textContent = "";
+    }
+
+    dispose() {
+        this.clearPartialTranscript();
+        this._partialTranscriptSocket?.removeEventListener("close", this._onTranscriptDisconnect);
+        this._partialTranscriptSocket = null;
+    }
+
     showMessage(speaker, text) {
         this.messageSpeaker.className = "message-speaker " + speaker;
         this.messageSpeaker.textContent = speaker === "user" ? this.speakerLabelUser : this.speakerLabelAI;
@@ -266,6 +307,11 @@ class AvatarUI {
         if (response.type == "connected") {
             localStorage.setItem("userId", response.user_id);
             this.userId = response.user_id;
+            this.clearPartialTranscript();
+            this._partialTranscriptSocket?.removeEventListener("close", this._onTranscriptDisconnect);
+            this._onTranscriptDisconnect = () => this.clearPartialTranscript();
+            this._partialTranscriptSocket = this.aiavatar.ws;
+            this._partialTranscriptSocket?.addEventListener("close", this._onTranscriptDisconnect);
         }
 
         // Update speaker labels from server
@@ -316,10 +362,11 @@ class AvatarUI {
         }
 
         // Message display
-        if (response.type === "info" && response.metadata && response.metadata.partial_request_text) {
-            if (!response.metadata.partial_request_text.startsWith("$")) {
-                this.updateMessage("user", response.metadata.partial_request_text, true);
-            }
+        if (response.type === "info" && response.metadata && "partial_request_text" in response.metadata) {
+            this.showPartialTranscript(response.metadata.partial_request_text);
+        }
+        if (response.type === "start" || response.type === "canceled" || response.type === "error") {
+            this.clearPartialTranscript();
         }
         if (response.type === "start" && response.metadata && response.metadata.recognized_text) {
             if (!response.metadata.recognized_text.startsWith("$")) {

@@ -122,6 +122,37 @@ button.active {
     transition: opacity 0.3s ease;
 }
 
+/* Recognition preview stays separate from the accepted conversation. */
+.partial-transcript {
+    box-sizing: border-box;
+    width: clamp(200px, 80vw, 500px);
+    max-width: 100%;
+    margin: 6px auto 0;
+    color: #65717C;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    text-align: left;
+}
+
+.partial-transcript[hidden] {
+    display: none;
+}
+
+.partial-transcript-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.partial-transcript-text {
+    overflow: hidden;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: nowrap;
+}
+
 /* Tool Call Status */
 .tool-status {
     color: #666666;
