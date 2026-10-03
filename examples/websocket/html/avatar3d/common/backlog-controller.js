@@ -255,6 +255,9 @@ export class BacklogController {
     }
 
     handleResponse(response) {
+        // Session-long audio (e.g. GPT-Live) has no per-turn final to release it.
+        // Ordinary finite PCM chunks are retained below.
+        if (response.metadata?.continuous_audio === true) return;
         if (response.type === "accepted") this.stopPlayback();
 
         if (response.type === "start") {
