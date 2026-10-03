@@ -327,6 +327,21 @@ class AIAvatarClient {
         }
     }
 
+    resetContinuousAudioPlaybackState(audio) {
+        clearTimeout(audio.startTimer);
+        if (audio.animationFrame !== null) cancelAnimationFrame(audio.animationFrame);
+        audio.animationFrame = null;
+        audio.startedAt = null;
+        this.isAudioPlaying = false;
+        const started = audio.started;
+        audio.started = false;
+        try {
+            if (started) this.onPlaybackEnd?.({ ...audio.state, completed: false });
+        } catch (error) {
+            console.error("Error handling playback end:", error);
+        }
+    }
+
     schedulePcmBuffer(audio, buffer) {
         const now = this.audioContext.currentTime;
         const startedAt = audio.nextStartTime >= now ? audio.nextStartTime : now + 0.05;
@@ -343,9 +358,13 @@ class AIAvatarClient {
         audio.nextStartTime = startedAt + buffer.duration;
         source.onended = () => {
             if (this.currentPcmAudio !== audio) return;
-            this.notifyPcmStart(audio);
+            this.notifyPcmStart(audio); // The start timer may be delayed until after playback ends. Ensure start is notified before any end callback.
             audio.sources.delete(chunk);
             source.disconnect();
+            if (!audio.sources.size && !audio.inputEnded && audio.message.metadata.continuous_audio === true) {
+                this.resetContinuousAudioPlaybackState(audio);
+                return;
+            }
             if (!audio.sources.size
                 && (audio.inputEnded
                     || audio.receivedFrames === audio.message.metadata.audio_frame_count)) {
@@ -355,6 +374,8 @@ class AIAvatarClient {
         source.start(startedAt);
         if (audio.startedAt === null) {
             audio.startedAt = startedAt;
+            // Continuous audio resumes after a gap without re-entering processQueue.
+            if (audio.message.metadata.continuous_audio === true) this.isAudioPlaying = true;
             audio.startTimer = setTimeout(() => this.notifyPcmStart(audio), (startedAt - now) * 1000);
             this.startPcmPlaybackFrames(audio);
         }

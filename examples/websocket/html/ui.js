@@ -364,6 +364,9 @@ class AvatarUI {
         // Message display
         if (response.type === "info" && response.metadata && "partial_request_text" in response.metadata) {
             this.showPartialTranscript(response.metadata.partial_request_text);
+        } else if (response.type === "info" && response.metadata && "partial_response_text" in response.metadata) {
+            // Live captions are complete display snapshots, not turn/TTS chunks.
+            this.showMessage("ai", response.metadata.partial_response_text);
         }
         if (response.type === "start" || response.type === "canceled" || response.type === "error") {
             this.clearPartialTranscript();

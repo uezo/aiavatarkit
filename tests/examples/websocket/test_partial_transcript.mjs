@@ -140,6 +140,70 @@ function harness({ preview = true, with3d = false, separatePartialTranscript } =
     };
 }
 
+test("realtime connections preserve manual barge-in control", () => {
+    const h = harness();
+    try {
+        h.aiavatar.isAudioPlaying = true;
+        assert.equal(h.aiavatar.isMicrophoneMuted(), true);
+        h.receive({ type: "connected", user_id: "user", metadata: { realtime: true } });
+        assert.equal(h.ui.interruptEnabled, false);
+        assert.equal(h.aiavatar.isMicrophoneMuted(), true);
+        assert.ok(!h.elements.interruptToggle.disabled);
+        h.elements.interruptToggle.checked = true;
+        h.elements.interruptToggle.dispatch("change");
+        assert.equal(h.ui.interruptEnabled, true);
+        assert.equal(h.aiavatar.isMicrophoneMuted(), false);
+        h.receive({ type: "connected", user_id: "user", metadata: { realtime: true } });
+        h.receive({ type: "connected", user_id: "user" });
+        assert.equal(h.ui.interruptEnabled, true);
+        assert.equal(h.aiavatar.isMicrophoneMuted(), false);
+        h.elements.interruptToggle.checked = false;
+        h.elements.interruptToggle.dispatch("change");
+        assert.equal(h.ui.interruptEnabled, false);
+        assert.equal(h.aiavatar.isMicrophoneMuted(), true);
+    } finally { h.dispose(); }
+});
+
+test("ordinary response chunks accumulate until final replaces the text", () => {
+    const h = harness();
+    try {
+        h.receive({ type: "accepted" });
+        assert.equal(h.ui.isServerProcessing, true);
+        h.receive({ type: "start", metadata: { recognized_text: "質問です。" } });
+        assert.equal(h.ui.messageText.textContent, "質問です。");
+        assert.equal(h.ui.messageSpeaker.textContent, "User");
+        h.receive({ type: "chunk", voice_text: "回答の" });
+        h.receive({ type: "chunk", voice_text: "続きです。" });
+        assert.equal(h.ui.messageText.textContent, "回答の続きです。");
+        assert.equal(h.ui.messageSpeaker.textContent, "AI");
+        h.receive({ type: "final", voice_text: "最終的な回答です。" });
+        assert.equal(h.ui.messageText.textContent, "最終的な回答です。");
+        assert.equal(h.ui.isServerProcessing, false);
+    } finally { h.dispose(); }
+});
+
+test("Live caption snapshots replace text across speakers in both shared avatar pages", () => {
+    for (const with3d of [false, true]) {
+        const h = harness({ with3d });
+        try {
+            for (const [speaker, text] of [
+                ["AI", "Hello"], ["AI", "Hello there"], ["AI", "Hello there"],
+                ["User", "A question"], ["AI", "<b>New caption</b>"],
+            ]) {
+                const key = speaker === "User" ? "partial_request_text" : "partial_response_text";
+                h.receive({ type: "info", metadata: { [key]: text } });
+                assert.equal(h.ui.messageText.textContent, text);
+                assert.equal(h.ui.messageSpeaker.textContent, speaker);
+            }
+            if (with3d) {
+                h.state.showAIText = false;
+                h.receive({ type: "info", metadata: { partial_response_text: "Hidden" } });
+                assert.equal(h.ui.messageText.textContent, "<b>New caption</b>");
+            }
+        } finally { h.dispose(); }
+    }
+});
+
 test("partial text has its own safe preview without changing the main speaker or message", () => {
     const h = harness({ separatePartialTranscript: true });
     try {

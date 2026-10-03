@@ -209,6 +209,19 @@ function pcmChunk(audioId, bytes) {
     };
 }
 
+test("continuous PCM never accumulates in the finite-turn backlog", async () => {
+    const { controller, store } = createController();
+    await controller.ready;
+    const metadata = { audio_id: "live", pcm_format: pcmFormat, continuous_audio: true };
+    controller.handleResponse({ type: "chunk", metadata });
+    for (let i = 0; i < 100; i++) {
+        controller.handleResponse({ type: "chunk", metadata, audio_data: "AAA=" });
+    }
+    assert.equal(controller.pendingTurn, null);
+    assert.equal(store.appends.length, 0);
+    controller.dispose();
+});
+
 async function assertPcmWav(blob, expectedPcm) {
     assert.equal(blob.type, "audio/wav");
     const bytes = new Uint8Array(await blob.arrayBuffer());
