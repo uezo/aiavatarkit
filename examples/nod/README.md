@@ -97,6 +97,10 @@ On shutdown, `nod.close()` closes decision tasks and conversations, then `async 
 Start the server with your existing WebSocket router and HTML serving setup, then open `3d.html` (VRM/MMD) to start a conversation.
 Turn **BARGE-IN ON** to keep microphone input active while an acknowledgment plays.
 Playback support is included in the shared [`aiavatar.js`](../websocket/html/aiavatar.js); no additional client script is needed.
+Set `response_audio_chunk_size=4096` on `AIAvatarWebSocketServer` to deliver both
+acknowledgments and main responses as PCM chunks. The default, `0`, sends complete
+WAVs. See [PCM audio playback](../websocket/README.md#pcm-audio-playback) for the
+format and chunk-size requirements.
 Try pausing briefly in the middle of a thought before continuing, as in the conversation example above.
 
 ## Customize the phrases and decision policy
@@ -246,8 +250,10 @@ Nod skips sending if recognition corrects the portion being evaluated, a new utt
 - When the main response is accepted or starts: queued acknowledgments are discarded. An acknowledgment already playing finishes, and main response audio follows it.
 - When the user presses Stop or disconnects: all playback stops, including acknowledgments.
 
-Acknowledgment audio carries `metadata.nod=true`. The browser uses this metadata to recognize acknowledgments even when handling a normal `stop` notification.
-Their `text` and `voice_text` fields are empty strings, so acknowledgments do not overwrite the text displayed in the conversation window.
+Acknowledgment audio carries `metadata.nod=true` on its WAV message or PCM
+descriptor. PCM chunks refer to that descriptor through `metadata.audio_id`.
+The browser uses this metadata to recognize acknowledgments even when handling a normal `stop` notification.
+The WAV message or PCM descriptor has empty `text` and `voice_text` fields, so acknowledgments do not overwrite the text displayed in the conversation window.
 
 ## Logging and regression evaluation
 

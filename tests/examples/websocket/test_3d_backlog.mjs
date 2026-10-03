@@ -183,6 +183,112 @@ test("an interrupted response with final retains its accumulated text without a 
     assert.equal(Object.hasOwn(aiEntry, "interrupted"), false);
 });
 
+const pcmFormat = { sample_rate: 24000, channels: 1, sample_width: 2 };
+
+function pcmDescriptor(audioId, text, frameCount, metadata = {}) {
+    return {
+        type: "chunk",
+        context_id: "context-1",
+        voice_text: text,
+        audio_data: null,
+        metadata: {
+            ...metadata,
+            audio_id: audioId,
+            audio_frame_count: frameCount,
+            pcm_format: pcmFormat,
+        },
+    };
+}
+
+function pcmChunk(audioId, bytes) {
+    return {
+        type: "chunk",
+        context_id: "context-1",
+        audio_data: Buffer.from(bytes).toString("base64"),
+        metadata: { audio_id: audioId, pcm_format: pcmFormat },
+    };
+}
+
+async function assertPcmWav(blob, expectedPcm) {
+    assert.equal(blob.type, "audio/wav");
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const view = new DataView(bytes.buffer);
+    assert.equal(Buffer.from(bytes.subarray(0, 4)).toString(), "RIFF");
+    assert.equal(Buffer.from(bytes.subarray(8, 16)).toString(), "WAVEfmt ");
+    assert.equal(view.getUint32(4, true), 36 + expectedPcm.length);
+    assert.equal(view.getUint16(22, true), 1);
+    assert.equal(view.getUint32(24, true), 24000);
+    assert.equal(view.getUint16(34, true), 16);
+    assert.equal(view.getUint32(40, true), expectedPcm.length);
+    assert.deepEqual([...bytes.subarray(44)], expectedPcm);
+}
+
+test("backlog groups PCM by original audio, including Nod, alongside WAV responses", async () => {
+    const { controller, store } = createController();
+    await controller.ready;
+    controller.handleResponse({ type: "start", context_id: "context-1", metadata: {} });
+    controller.handleResponse(pcmDescriptor("answer", "Answer.", 3));
+    controller.handleResponse(pcmChunk("answer", [1, 0]));
+    controller.handleResponse(pcmDescriptor("nod", "Yes.", 1, { nod: true }));
+    controller.handleResponse(pcmChunk("nod", [2, 0]));
+    controller.handleResponse(pcmChunk("answer", [3, 0, 4, 0]));
+    const wav = Buffer.from("RIFF0000WAVEdata");
+    controller.handleResponse({
+        type: "chunk",
+        context_id: "context-1",
+        audio_data: wav.toString("base64"),
+    });
+
+    assert.equal(store.appends.length, 0);
+    await controller.handleResponse({ type: "final", context_id: "context-1" });
+
+    const entry = store.entries.at(-1);
+    assert.equal(entry.text, "Answer.Yes.");
+    assert.equal(entry.audioChunks.length, 3);
+    await assertPcmWav(entry.audioChunks[0], [1, 0, 3, 0, 4, 0]);
+    await assertPcmWav(entry.audioChunks[1], [2, 0]);
+    assert.deepEqual(Buffer.from(await entry.audioChunks[2].arrayBuffer()), wav);
+});
+
+test("backlog retains the received part of PCM on interrupted final without empty audio files", async () => {
+    const { controller, store } = createController();
+    await controller.ready;
+    controller.handleResponse({ type: "start", context_id: "context-1", metadata: {} });
+    controller.handleResponse(pcmDescriptor("partial", "Interrupted.", 100));
+    controller.handleResponse(pcmChunk("partial", [1, 0, 2, 0]));
+    controller.handleResponse(pcmDescriptor("empty", "", 100));
+    await controller.handleResponse({
+        type: "final",
+        context_id: "context-1",
+        metadata: { interrupted: true },
+    });
+
+    const entry = store.entries.at(-1);
+    assert.equal(entry.text, "Interrupted.");
+    assert.equal(entry.audioChunks.length, 1);
+    await assertPcmWav(entry.audioChunks[0], [1, 0, 2, 0]);
+});
+
+test("backlog requires a PCM descriptor and releases unfinished PCM on error", async () => {
+    const { controller, store } = createController();
+    await controller.ready;
+    controller.handleResponse({ type: "start", context_id: "context-1", metadata: {} });
+    controller.handleResponse(pcmDescriptor("failed", "Failed.", 1));
+    controller.handleResponse(pcmChunk("failed", [1, 0]));
+    controller.handleResponse({ type: "error", context_id: "context-1" });
+    assert.equal(controller.pendingTurn, null);
+    controller.handleResponse({ type: "start", context_id: "context-1", metadata: {} });
+    controller.handleResponse(pcmChunk("failed", [2, 0]));
+    controller.handleResponse(pcmDescriptor("next", "Next.", 1));
+    controller.handleResponse(pcmChunk("next", [3, 0]));
+    await controller.handleResponse({ type: "final", context_id: "context-1" });
+
+    const entry = store.entries.at(-1);
+    assert.equal(entry.text, "Next.");
+    assert.equal(entry.audioChunks.length, 1);
+    await assertPcmWav(entry.audioChunks[0], [3, 0]);
+});
+
 test("backlog keeps at most 100 messages in memory and storage", async () => {
     const oldEntries = Array.from({ length: 100 }, (_, index) => ({
         id: `old-${index}`,

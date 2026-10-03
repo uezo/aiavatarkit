@@ -67,7 +67,8 @@ export function installPlaybackContext(client) {
 
         const matches = message => message?.session_id === response.session_id
             && message.transaction_id === response.transaction_id
-            && message.metadata?.nod !== true && Boolean(message.audio_data);
+            && message.metadata?.nod !== true
+            && Boolean(message.audio_data || message.metadata?.audio_frame_count > 0);
         // Include non-text audio: it must not make an earlier spoken chunk look final.
         const queued = client.messageQueue?.slice().reverse().find(matches);
         const current = !client.isBacklogAudioPlaying && matches(client.currentAudioMessage)

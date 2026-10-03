@@ -1,7 +1,6 @@
 """Connect a stream VAD/WebSocket pipeline to Nod."""
 
 import asyncio
-import base64
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from uuid import uuid4
@@ -34,7 +33,8 @@ class NodPipelineBridge:
     later on_disconnect registration replaces Nod's cleanup callback. Use manual
     wiring to combine an existing disconnect callback with close_session.
     The app and engine remain caller-owned. Call prepare_audio at startup for
-    the default WAV sender, or supply an async emit(session_id, decision).
+    the default WebSocket sender, or supply an async emit(session_id, decision).
+    The sender follows the app's response_audio_chunk_size for WAV or PCM.
     Custom emitters must recheck is_current after acquiring their send lock.
     """
 
@@ -78,7 +78,7 @@ class NodPipelineBridge:
             data = await self.app.sts.tts.synthesize(candidate["phrase"])
             if not data:
                 raise ValueError(f"No nod audio for {candidate['id']}")
-            audio[candidate["id"]] = base64.b64encode(data).decode("ascii")
+            audio[candidate["id"]] = data
         self._audio = audio
 
     async def open_session(self, connection):
@@ -196,18 +196,25 @@ class NodPipelineBridge:
             return False
         # Import the optional framework only when using its wire format.
         from aiavatar.adapter.models import AIAvatarResponse
+        from aiavatar.adapter.websocket.server import iter_audio_responses
         socket = self.app.websockets.get(session_id)
+        response = AIAvatarResponse(
+            type="chunk", session_id=session_id, text="", voice_text="",
+            metadata={"nod": True, "nod_id": str(uuid4()),
+                      "recording_id": decision.utterance_id},
+        )
         async with state.connection.send_lock:
             if (not self.is_current(session_id, decision) or socket is None
                     or self.app.websockets.get(session_id) is not socket):
                 return False
-            await socket.send_text(AIAvatarResponse(
-                type="chunk", session_id=session_id, text="",
-                voice_text="", audio_data=audio,
-                metadata={"nod": True, "nod_id": str(uuid4()),
-                          "recording_id": decision.utterance_id},
-            ).model_dump_json())
-            return True
+            # A short Nod is one delivery, even when framed as several PCM writes.
+            for message in iter_audio_responses(
+                    response, audio, self.app.response_audio_chunk_size, debug=self.app.debug):
+                if (self.app.sessions.get(session_id) is not state.connection
+                        or self.app.websockets.get(session_id) is not socket):
+                    return False
+                await socket.send_text(message.model_dump_json())
+        return True
 
     async def close_session(self, connection):
         state = self._sessions.get(connection.id)

@@ -4,7 +4,8 @@ import io
 import logging
 import re
 import wave
-from typing import List, Dict, Callable, Awaitable, Optional
+from typing import List, Dict, Callable, Awaitable, Optional, Iterator
+from uuid import uuid4
 from fastapi import APIRouter, Header, HTTPException, WebSocket, WebSocketException, status
 from ...database import PoolProvider
 from ...sts.models import STSRequest, STSResponse
@@ -22,6 +23,68 @@ from ..models import AvatarControlRequest, AIAvatarRequest, AIAvatarResponse
 from ..base import Adapter
 
 logger = logging.getLogger(__name__)
+
+
+def iter_audio_responses(response: AIAvatarResponse, wav_data: bytes,
+                         chunk_size: int, *, debug: bool = False) -> Iterator[AIAvatarResponse]:
+    """Frame WAV audio for complete-audio or PCM WebSocket delivery.
+
+    A positive chunk_size is a byte count and must be a multiple of the WAV's
+    channels * sample_width. PCM consumers receive one descriptor before the
+    chunks, whose shared audio_id identifies the original audio.
+    """
+    if chunk_size <= 0:
+        if debug:
+            logger.info(
+                "WebSocket audio: format=wav, session=%s, transaction_id=%s, "
+                "audio_id=None, audio_bytes=%s, chunk_size=0, planned_chunks=1, nod=%s",
+                response.session_id, response.transaction_id, len(wav_data),
+                (response.metadata or {}).get("nod", False),
+            )
+        yield response.model_copy(update={
+            "audio_data": base64.b64encode(wav_data).decode("ascii")
+        })
+        return
+
+    with wave.open(io.BytesIO(wav_data), "rb") as wav_file:
+        pcm_format = {
+            "sample_rate": wav_file.getframerate(),
+            "channels": wav_file.getnchannels(),
+            "sample_width": wav_file.getsampwidth(),
+        }
+        pcm_data = wav_file.readframes(wav_file.getnframes())
+
+    audio_id = str(uuid4())
+    if debug:
+        logger.info(
+            "WebSocket audio: format=pcm, session=%s, transaction_id=%s, audio_id=%s, "
+            "sample_rate=%s, channels=%s, sample_width=%s, audio_bytes=%s, "
+            "chunk_size=%s, planned_chunks=%s, nod=%s",
+            response.session_id, response.transaction_id, audio_id,
+            pcm_format["sample_rate"], pcm_format["channels"], pcm_format["sample_width"],
+            len(pcm_data), chunk_size, (len(pcm_data) + chunk_size - 1) // chunk_size,
+            (response.metadata or {}).get("nod", False),
+        )
+    yield response.model_copy(update={
+        "audio_data": None,
+        "metadata": {
+            **(response.metadata or {}),
+            "pcm_format": pcm_format,
+            "audio_id": audio_id,
+            "audio_frame_count": len(pcm_data) // (
+                pcm_format["channels"] * pcm_format["sample_width"]),
+        },
+    })
+    for offset in range(0, len(pcm_data), chunk_size):
+        yield AIAvatarResponse(
+            type=response.type,
+            session_id=response.session_id,
+            user_id=response.user_id,
+            context_id=response.context_id,
+            transaction_id=response.transaction_id,
+            audio_data=base64.b64encode(pcm_data[offset:offset + chunk_size]).decode("ascii"),
+            metadata={"pcm_format": pcm_format, "audio_id": audio_id},
+        )
 
 
 class WebSocketSessionData:
@@ -398,54 +461,16 @@ class AIAvatarWebSocketServer(Adapter):
 
             # Voice
             if response.audio_data:
-                if self.response_audio_chunk_size > 0:
-                    # Extract WAV audio data and parameters
-                    with wave.open(io.BytesIO(response.audio_data), "rb") as wav_file:
-                        frames = wav_file.getnframes()
-                        sample_rate = wav_file.getframerate()
-                        channels = wav_file.getnchannels()
-                        sample_width = wav_file.getsampwidth()
-                        audio_data = wav_file.readframes(frames)
-
-                    pcm_format = {
-                        "sample_rate": sample_rate,
-                        "channels": channels,
-                        "sample_width": sample_width
-                    }
-
-                    # Send response without audio data first
-                    aiavatar_response.metadata["pcm_format"] = pcm_format
-                    aiavatar_response.audio_data = None
-                    await self.send_response(aiavatar_response)
-
-                    # Send audio data in chunks
-                    for i in range(0, len(audio_data), self.response_audio_chunk_size):
-                        # Break if transaction is no longer active
-                        if session_data and response.transaction_id != session_data.active_transaction_id:
-                            if self.debug:
-                                logger.info(
-                                    "Break audio chunk loop: transaction=%s, active=%s",
-                                    response.transaction_id, session_data.active_transaction_id
-                                )
-                            break
-                        # Encode chunk as base64
-                        b64_chunk = base64.b64encode(audio_data[i:i + self.response_audio_chunk_size]).decode("utf-8")
-                        chunk_response = AIAvatarResponse(
-                            type=response.type,
-                            session_id=response.session_id,
-                            user_id=response.user_id,
-                            context_id=response.context_id,
-                            transaction_id=response.transaction_id,
-                            audio_data=b64_chunk,
-                            metadata={"pcm_format": pcm_format}
-                        )
-                        await self.send_response(chunk_response)
-                    # Return here not to send response again at the end of this method
-                    return
-
-                else:
-                    b64_chunk = base64.b64encode(response.audio_data).decode("utf-8")
-                    aiavatar_response.audio_data = b64_chunk
+                for audio_response in iter_audio_responses(
+                        aiavatar_response, response.audio_data, self.response_audio_chunk_size,
+                        debug=self.debug):
+                    if self.sessions.get(response.session_id) is not session_data:
+                        break
+                    if (response.transaction_id
+                            and response.transaction_id != session_data.active_transaction_id):
+                        break
+                    await self.send_response(audio_response)
+                return
 
         elif response.type == "tool_call":
             aiavatar_response.metadata["tool_call"] = response.tool_call.to_dict()

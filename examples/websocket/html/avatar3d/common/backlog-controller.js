@@ -22,14 +22,15 @@ function writeAscii(view, offset, value) {
     for (let index = 0; index < value.length; index++) view.setUint8(offset + index, value.charCodeAt(index));
 }
 
-function pcmToWav(bytes, { sample_rate, channels, sample_width }) {
+function pcmToWav(chunks, { sample_rate, channels, sample_width }) {
     const header = new ArrayBuffer(44);
     const view = new DataView(header);
+    const byteLength = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
     const channelCount = Number(channels) || 1;
     const sampleWidth = Number(sample_width) || 2;
     const sampleRate = Number(sample_rate) || 16000;
     writeAscii(view, 0, "RIFF");
-    view.setUint32(4, 36 + bytes.byteLength, true);
+    view.setUint32(4, 36 + byteLength, true);
     writeAscii(view, 8, "WAVEfmt ");
     view.setUint32(16, 16, true);
     view.setUint16(20, 1, true);
@@ -39,19 +40,13 @@ function pcmToWav(bytes, { sample_rate, channels, sample_width }) {
     view.setUint16(32, channelCount * sampleWidth, true);
     view.setUint16(34, sampleWidth * 8, true);
     writeAscii(view, 36, "data");
-    view.setUint32(40, bytes.byteLength, true);
-    return new Blob([header, bytes], { type: "audio/wav" });
+    view.setUint32(40, byteLength, true);
+    return new Blob([header, ...chunks], { type: "audio/wav" });
 }
 
 function responseAudioToBlob(response) {
     if (!response.audio_data) return null;
-    const bytes = bytesFromBase64(response.audio_data);
-    const isWav = bytes.length >= 12
-        && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF"
-        && String.fromCharCode(...bytes.slice(8, 12)) === "WAVE";
-    if (isWav) return new Blob([bytes], { type: "audio/wav" });
-    const pcmFormat = response.metadata?.pcm_format;
-    return pcmFormat ? pcmToWav(bytes, pcmFormat) : new Blob([bytes], { type: "audio/wav" });
+    return new Blob([bytesFromBase64(response.audio_data)], { type: "audio/wav" });
 }
 
 function entryId() {
@@ -253,6 +248,7 @@ export class BacklogController {
             },
             aiText: "",
             audioChunks: [],
+            pcmAudio: new Map(),
             aiSpeaker: this.ui.speakerLabelAI || "AI",
             startedAt: Date.now(),
         };
@@ -274,6 +270,7 @@ export class BacklogController {
                     },
                     aiText: "",
                     audioChunks: [],
+                    pcmAudio: new Map(),
                     aiSpeaker: this.ui.speakerLabelAI || "AI",
                     startedAt: Date.now(),
                 };
@@ -293,6 +290,7 @@ export class BacklogController {
                     user: { text: "", image: null, speaker: this.ui.speakerLabelUser || "User" },
                     aiText: "",
                     audioChunks: [],
+                    pcmAudio: new Map(),
                     aiSpeaker: this.ui.speakerLabelAI || "AI",
                     startedAt: Date.now(),
                 };
@@ -300,8 +298,19 @@ export class BacklogController {
             if (response.context_id) this.pendingTurn.contextId = response.context_id;
             if (response.voice_text) this.pendingTurn.aiText += response.voice_text;
             try {
-                const audio = responseAudioToBlob(response);
-                if (audio) this.pendingTurn.audioChunks.push(audio);
+                const { audio_id: audioId, pcm_format: pcmFormat } = response.metadata || {};
+                if (pcmFormat) {
+                    if (!response.audio_data) {
+                        const audio = { chunks: [], format: pcmFormat };
+                        this.pendingTurn.pcmAudio.set(audioId, audio);
+                        this.pendingTurn.audioChunks.push(audio);
+                    } else {
+                        this.pendingTurn.pcmAudio.get(audioId)?.chunks.push(bytesFromBase64(response.audio_data));
+                    }
+                } else {
+                    const audio = responseAudioToBlob(response);
+                    if (audio) this.pendingTurn.audioChunks.push(audio);
+                }
             } catch (error) {
                 console.warn("Could not retain response audio:", error);
             }
@@ -319,6 +328,11 @@ export class BacklogController {
 
         const contextId = response.context_id || turn.contextId || this.aiavatar.chatContextId;
         if (!contextId) return;
+        // Keep one replay file per original audio, including received PCM from interrupted speech.
+        const audioChunks = turn.audioChunks.flatMap((audio) => {
+            if (audio instanceof Blob) return [audio];
+            return audio.chunks.length ? [pcmToWav(audio.chunks, audio.format)] : [];
+        });
         const aiText = String(response.voice_text || turn.aiText || "").trim();
         const createdAt = Date.now();
         const newEntries = [];
@@ -334,7 +348,7 @@ export class BacklogController {
                 createdAt: turn.startedAt,
             });
         }
-        if (aiText || turn.audioChunks.length) {
+        if (aiText || audioChunks.length) {
             newEntries.push({
                 id: entryId(),
                 contextId,
@@ -342,7 +356,7 @@ export class BacklogController {
                 speaker: turn.aiSpeaker,
                 text: aiText,
                 image: null,
-                audioChunks: turn.audioChunks,
+                audioChunks,
                 createdAt,
             });
         }
@@ -455,6 +469,7 @@ export class BacklogController {
 
     dispose() {
         this.stopPlayback();
+        this.pendingTurn = null;
         this.view?.dispose();
     }
 }
