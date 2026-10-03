@@ -31,9 +31,6 @@ Save the above code as `server.py` and run it using:
 uvicorn server:app
 ```
 
-**NOTE:** When you specify `response_audio_chunk_size` in the `AIAvatarWebSocketServer` instance, the audio response will be streamed as PCM data chunks of the specified byte size. In this case, no WAVE header will be included in the response - you'll receive raw PCM audio data only.
-
-
 Next is the simplest example of a Python client program. This client uses local microphone and speaker devices, so install the optional local audio dependencies first:
 
 ```sh
@@ -59,6 +56,67 @@ You can now perform voice interactions just like when running locally.
 **NOTE:** When using the WebSocket API, voice activity detection (VAD) is performed on the server side, so clients can simply stream microphone input directly to the server.
 
 
+## Audio delivery
+
+`response_audio_chunk_size=0` (the default) sends each complete WAV as base64
+`audio_data`. A positive value sends raw PCM in chunks of that many **bytes**:
+
+```python
+aiavatar_app = AIAvatarWebSocketServer(
+    openai_api_key=OPENAI_API_KEY,
+    response_audio_chunk_size=4096,
+)
+```
+
+Choose a size divisible by `channels * sample_width`, where `sample_width` is in
+bytes. For 16-bit mono PCM, use a multiple of 2; for 16-bit stereo, a multiple of
+4. This is a configuration requirement, without runtime validation. The last
+chunk may be shorter but still contains whole PCM frames.
+
+For each original WAV, the server first sends a `type: "chunk"` descriptor with
+`audio_data: null`. It preserves the response's text, `voice_text`, controls, and
+metadata, and adds:
+
+```json
+{
+  "audio_id": "unique-id-for-this-audio",
+  "audio_frame_count": 48000,
+  "pcm_format": {
+    "sample_rate": 24000,
+    "channels": 1,
+    "sample_width": 2
+  }
+}
+```
+
+These fields are inside `metadata`. One PCM frame contains one sample per
+channel, so this example represents two seconds. Each following audio
+`chunk` carries base64 raw PCM in `audio_data` and the same `metadata.audio_id`
+and `metadata.pcm_format`. The client associates the PCM with its descriptor by
+ID and determines receipt completion from the total frame count. WebSocket
+preserves delivery order; no sequence numbers, acknowledgments, or retransmission
+messages are needed.
+
+The standard `NodPipelineBridge` uses this same delivery mode. In PCM mode, its
+descriptor carries `metadata.nod=true` and the Nod metadata; its audio messages
+contain PCM, allowing PCM-only clients to play acknowledgments too.
+
+The maintained `index.html` and `3d.html` clients support signed 16-bit
+little-endian PCM with the declared sample rate and channel count. Use the
+updated server and browser together for this descriptor protocol. They schedule
+each arriving PCM chunk for playback without waiting for the complete audio to
+arrive. The server still synthesizes a complete WAV before splitting it, so the
+total length is known before transmission. See the
+[browser playback details](../examples/websocket/README.md#pcm-audio-playback).
+
+With `debug=True`, the server logs one INFO summary per original audio, including
+Nod, prefixed `WebSocket audio:` with its format, IDs, PCM format, byte/chunk sizes, and `nod` flag.
+For PCM, `audio_id` matches the browser's `playback_id`; `planned_chunks` excludes
+the descriptor and counts planned chunks, so interruption can reduce the number actually sent.
+WAV reports `audio_id=None` and `planned_chunks=1`; its browser playback ID is generated later.
+`debug=False` emits no audio summaries.
+
+
 ## Response transaction IDs
 
 WebSocket responses expose the pipeline's `transaction_id` as an optional
@@ -70,7 +128,8 @@ When a new transaction interrupts the previous one, the synthetic interrupted
 Session controls such as `connected`, `voiced`, and the session-wide `stop`
 notification may have no transaction ID. Clients also accept older responses
 without this field. This ID identifies an AI response; it is distinct from the
-browser's per-chunk `playback_id`. The shared browser returns it in playback
+browser's per-audio `playback_id` and PCM `audio_id`. The shared browser returns
+the transaction ID in playback
 start notifications for [turn-taking context](../examples/websocket/README.md#playback-context-for-turn-taking).
 
 ## Connection and disconnection handling

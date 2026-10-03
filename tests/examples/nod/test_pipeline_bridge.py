@@ -2,7 +2,9 @@
 
 import asyncio
 import base64
+import io
 import json
+import wave
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -52,6 +54,7 @@ async def rig():
     async def synthesize(text):
         return b"fake-wav"
     app = SimpleNamespace(sessions={"s": connection}, websockets={"s": socket},
+                          response_audio_chunk_size=0, debug=False,
                           sts=SimpleNamespace(tts=SimpleNamespace(synthesize=synthesize)))
     bridge = NodPipelineBridge(app, engine, min_interval=0, auto_register_hooks=False)
     await bridge.prepare_audio()
@@ -84,6 +87,8 @@ async def settled(bridge):
 def hook_app():
     # Use real registration methods without constructing providers or loading VAD models.
     app = AIAvatarWebSocketServer.__new__(AIAvatarWebSocketServer)
+    app.response_audio_chunk_size = 0
+    app.debug = False
     app.sessions, app.websockets = {}, {}
     app._on_session_start_handlers = []
     app._on_response_handlers = []
@@ -194,6 +199,41 @@ async def test_partial_schedules_and_emits_nod_metadata_with_cached_audio(rig):
     assert message["metadata"]["nod_id"]
     assert base64.b64decode(message["audio_data"]) == b"fake-wav"
     assert message["text"] == message["voice_text"] == ""
+    assert "<nod_assistant>うん</nod_assistant>" in bridge._sessions["s"].nod.build_input("a")
+
+
+@pytest.mark.asyncio
+async def test_nod_uses_app_pcm_chunk_size_and_describes_audio_once(rig):
+    bridge, app, _, socket, _ = rig
+    pcm_data = b"\x01\x02" * 11
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(24000)
+        wav_file.writeframes(pcm_data)
+    app.sts.tts.synthesize = AsyncMock(return_value=buffer.getvalue())
+    app.response_audio_chunk_size = 8
+    await bridge.prepare_audio()
+
+    partial(bridge)
+    await settled(bridge)
+
+    descriptor, *chunks = socket.messages
+    assert descriptor["audio_data"] is None
+    assert descriptor["metadata"]["nod"] is True
+    assert descriptor["metadata"]["nod_id"]
+    assert descriptor["metadata"]["recording_id"] == "a"
+    assert descriptor["metadata"]["audio_frame_count"] == 11
+    assert descriptor["metadata"]["pcm_format"] == {
+        "sample_rate": 24000, "channels": 1, "sample_width": 2,
+    }
+    assert len(chunks) == 3
+    assert all(chunk["metadata"] == {
+        "audio_id": descriptor["metadata"]["audio_id"],
+        "pcm_format": descriptor["metadata"]["pcm_format"],
+    } for chunk in chunks)
+    assert b"".join(base64.b64decode(chunk["audio_data"]) for chunk in chunks) == pcm_data
     assert "<nod_assistant>うん</nod_assistant>" in bridge._sessions["s"].nod.build_input("a")
 
 

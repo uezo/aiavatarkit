@@ -20,6 +20,8 @@ class AIAvatarClient {
         this.currentAudioFinalize = null;
         this.currentAudioMessage = null;
         this.playbackGeneration = 0;
+        this.pcmAudio = new Map();
+        this.currentPcmAudio = null;
         this.latestFaceUpdate = null;
         this.faceTimeout = null;
         this.currentFaceName = null;
@@ -40,6 +42,7 @@ class AIAvatarClient {
     async startListening(sessionId, userId) {
         const queueGeneration = ++this.queueGeneration;
         this.messageQueue.length = 0;
+        this.pcmAudio.clear();
         this.processingQueue = false;
         const protocols = this.apiKey
             ? ["Authorization." + btoa(this.apiKey)]
@@ -64,19 +67,40 @@ class AIAvatarClient {
             if (queueGeneration !== this.queueGeneration) return;
             try {
                 const msg = JSON.parse(event.data);
+                const isPcm = msg.type === "chunk" && msg.metadata?.pcm_format;
+                if (isPcm && msg.audio_data) {
+                    const audio = this.pcmAudio.get(msg.metadata.audio_id);
+                    if (!audio) return; // Its descriptor was canceled or never received.
+                    this.onResponseReceived(msg);
+                    this.appendPcmAudio(audio, msg.audio_data);
+                    return;
+                }
                 this.onResponseReceived(msg);
                 const isNod = message => message?.metadata?.nod === true;
                 if (msg.type === "accepted"
                     || ((msg.type === "start" || msg.type === "chunk") && !isNod(msg))) {
-                    this.messageQueue = this.messageQueue.filter(message => !isNod(message));
+                    this.filterQueue(message => !isNod(message));
                     // Cancel pending nods; audio that has started may finish.
-                    if (isNod(this.currentAudioMessage) && !this.currentAudioSource) {
+                    const hasStarted = this.currentPcmAudio
+                        ? this.currentPcmAudio.startedAt !== null
+                            && this.audioContext.currentTime >= this.currentPcmAudio.startedAt
+                        : !!this.currentAudioSource;
+                    if (isNod(this.currentAudioMessage) && !hasStarted) {
                         this.stopAudio();
+                    } else if (isNod(this.currentAudioMessage)) {
+                        this.endPcmInput(isNod);
                     }
                 }
                 if (msg.type === "start" || msg.type === "chunk") {
                     if (msg.type === "start" && msg.context_id) {
                         this.chatContextId = msg.context_id;
+                    }
+                    if (isPcm) {
+                        this.pcmAudio.set(msg.metadata.audio_id, {
+                            message: msg, pending: [], sources: new Set(), receivedFrames: 0,
+                            nextStartTime: 0, startedAt: null, started: false,
+                            history: new Float32Array(0), animationFrame: null, startTimer: null,
+                        });
                     }
                     this.messageQueue.push(msg);
                     if (!this.processingQueue) this.processQueue(queueGeneration);
@@ -85,11 +109,16 @@ class AIAvatarClient {
                     console.log(`Session: sessionId=${msg.session_id}, userId=${msg.user_id}, contextId=${msg.context_id}`);
                 } else if (msg.type === "stop") {
                     // Response stops keep nods; Stop/disconnect ends all playback.
-                    this.messageQueue = this.messageQueue.filter(isNod);
-                    if (isNod(this.currentAudioMessage)) return;
+                    this.filterQueue(isNod);
+                    const playingNod = isNod(this.currentAudioMessage);
+                    this.endPcmInput(isNod);
+                    if (playingNod) return;
                     this.stopAudio();
                     this.resetFace();
                 } else if (msg.type === "final") {
+                    if (msg.metadata?.interrupted) {
+                        this.endPcmInput(message => message.transaction_id === msg.transaction_id);
+                    }
                     console.log("Final response:", msg);
                 }
             } catch (e) {
@@ -189,10 +218,14 @@ class AIAvatarClient {
             if (msg.avatar_control_request && msg.avatar_control_request.face_name) {
                 this.updateFace(msg.avatar_control_request.face_name, msg.avatar_control_request.face_duration);
             }
-            if (msg.audio_data) {
+            if (msg.audio_data || msg.metadata?.pcm_format) {
                 try {
                     this.isAudioPlaying = true;
-                    await this.playAudioSync(msg.audio_data, msg);
+                    if (msg.metadata?.pcm_format) {
+                        await this.playPcmAudio(this.pcmAudio.get(msg.metadata.audio_id));
+                    } else {
+                        await this.playAudioSync(msg.audio_data, msg);
+                    }
                 } catch (e) {
                     console.error("Error during audio playback:", e);
                 } finally {
@@ -203,6 +236,153 @@ class AIAvatarClient {
             }
         }
         if (queueGeneration === this.queueGeneration) this.processingQueue = false;
+    }
+
+    filterQueue(keep) {
+        this.messageQueue = this.messageQueue.filter(message => {
+            if (keep(message)) return true;
+            this.pcmAudio.delete(message.metadata?.audio_id);
+            return false;
+        });
+    }
+
+    endPcmInput(matches) {
+        // An interrupted sender may leave a partial audio. Drain only what arrived.
+        for (const audio of this.pcmAudio.values()) {
+            if (!matches(audio.message)) continue;
+            audio.inputEnded = true;
+            if (this.currentPcmAudio === audio && !audio.sources.size) {
+                audio.finish(audio.receivedFrames === audio.message.metadata.audio_frame_count);
+            }
+        }
+    }
+
+    appendPcmAudio(audio, base64) {
+        const { channels, sample_rate: rate } = audio.message.metadata.pcm_format;
+        const bytes = Uint8Array.from(atob(base64), char => char.charCodeAt(0));
+        // The protocol supplies signed 16-bit LE PCM, split on whole frames.
+        const buffer = this.audioContext.createBuffer(channels, bytes.length / (channels * 2), rate);
+        const view = new DataView(bytes.buffer);
+        for (let channel = 0; channel < channels; channel++) {
+            const samples = buffer.getChannelData(channel);
+            for (let i = 0; i < samples.length; i++) {
+                samples[i] = view.getInt16((i * channels + channel) * 2, true) / 32768;
+            }
+        }
+        audio.receivedFrames += buffer.length;
+        if (this.currentPcmAudio === audio) this.schedulePcmBuffer(audio, buffer);
+        else audio.pending.push(buffer);
+    }
+
+    playPcmAudio(audio) {
+        this.stopAudio();
+        this.currentPcmAudio = audio;
+        this.currentAudioMessage = audio.message;
+        audio.state = {
+            message: audio.message,
+            playbackId: audio.message.metadata.audio_id,
+            durationSeconds: audio.message.metadata.audio_frame_count
+                / audio.message.metadata.pcm_format.sample_rate,
+        };
+        return new Promise(resolve => {
+            audio.finish = completed => {
+                if (this.currentPcmAudio !== audio) return;
+                clearTimeout(audio.startTimer);
+                if (audio.animationFrame !== null) cancelAnimationFrame(audio.animationFrame);
+                this.currentPcmAudio = null;
+                this.currentAudioMessage = null;
+                this.currentAudioFinalize = null;
+                this.pcmAudio.delete(audio.message.metadata.audio_id);
+                for (const chunk of audio.sources) {
+                    chunk.source.onended = null;
+                    chunk.source.stop();
+                    chunk.source.disconnect();
+                }
+                audio.sources.clear();
+                try {
+                    if (audio.started) this.onPlaybackEnd?.({ ...audio.state, completed });
+                } catch (error) {
+                    console.error("Error handling playback end:", error);
+                }
+                resolve();
+            };
+            this.currentAudioFinalize = () => audio.finish(false);
+            // Already-buffered audio can follow the preceding queue item immediately.
+            audio.nextStartTime = this.audioContext.currentTime + (audio.pending.length ? 0 : 0.05);
+            for (const buffer of audio.pending) this.schedulePcmBuffer(audio, buffer);
+            audio.pending.length = 0;
+            if (!audio.sources.size && (audio.inputEnded || audio.message.metadata.audio_frame_count === 0)) {
+                audio.finish(audio.message.metadata.audio_frame_count === 0);
+            }
+        });
+    }
+
+    notifyPcmStart(audio) {
+        if (audio.started || this.currentPcmAudio !== audio) return;
+        audio.started = true;
+        try {
+            this.onPlaybackStart?.({ ...audio.state });
+        } catch (error) {
+            console.error("Error handling playback start:", error);
+        }
+    }
+
+    schedulePcmBuffer(audio, buffer) {
+        const now = this.audioContext.currentTime;
+        const startedAt = audio.nextStartTime >= now ? audio.nextStartTime : now + 0.05;
+        const history = audio.nextStartTime >= now ? audio.history : new Float32Array(0);
+        const pcm = new Float32Array(history.length + buffer.length);
+        pcm.set(history);
+        pcm.set(buffer.getChannelData(0), history.length);
+        audio.history = pcm.slice(-Math.ceil(buffer.sampleRate * 0.1));
+        const source = this.audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.gainNode || this.audioContext.destination);
+        const chunk = { source, buffer, pcm, sampleOffset: history.length, startedAt };
+        audio.sources.add(chunk);
+        audio.nextStartTime = startedAt + buffer.duration;
+        source.onended = () => {
+            if (this.currentPcmAudio !== audio) return;
+            this.notifyPcmStart(audio);
+            audio.sources.delete(chunk);
+            source.disconnect();
+            if (!audio.sources.size
+                && (audio.inputEnded
+                    || audio.receivedFrames === audio.message.metadata.audio_frame_count)) {
+                audio.finish(audio.receivedFrames === audio.message.metadata.audio_frame_count);
+            }
+        };
+        source.start(startedAt);
+        if (audio.startedAt === null) {
+            audio.startedAt = startedAt;
+            audio.startTimer = setTimeout(() => this.notifyPcmStart(audio), (startedAt - now) * 1000);
+            this.startPcmPlaybackFrames(audio);
+        }
+    }
+
+    startPcmPlaybackFrames(audio) {
+        if (typeof this.onPlaybackAudio !== "function") return;
+        const interval = 1000 / (this.playbackAudioHz || 30);
+        let nextCallbackAt = null;
+        const tick = timestamp => {
+            if (this.currentPcmAudio !== audio) return;
+            const tSec = this.audioContext.currentTime;
+            if (nextCallbackAt === null || timestamp + 1 >= nextCallbackAt) {
+                for (const chunk of audio.sources) {
+                    if (tSec < chunk.startedAt || tSec >= chunk.startedAt + chunk.buffer.duration) continue;
+                    this.onPlaybackAudio?.({
+                        pcm: chunk.pcm, sampleRate: chunk.buffer.sampleRate,
+                        samplePosition: chunk.sampleOffset + Math.floor((tSec - chunk.startedAt) * chunk.buffer.sampleRate),
+                        tSec,
+                    });
+                    nextCallbackAt = nextCallbackAt === null ? timestamp + interval
+                        : nextCallbackAt + Math.max(1, Math.ceil((timestamp + 1 - nextCallbackAt) / interval)) * interval;
+                    break;
+                }
+            }
+            audio.animationFrame = requestAnimationFrame(tick);
+        };
+        audio.animationFrame = requestAnimationFrame(tick);
     }
 
     playAudioSync(audioDataBase64, message = null) {
@@ -474,6 +654,7 @@ class AIAvatarClient {
         this.messageQueue.length = 0;
         const ws = this.ws;
         this.stopAudio();
+        this.pcmAudio.clear();
         this.ws = null;
         if (ws) {
             ws.onopen = null;

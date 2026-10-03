@@ -10,12 +10,41 @@ It uses the stream VAD, automatically registered event hooks, in-memory nod
 history, cached audio, and the existing 3D viewer. The browser preserves nods
 when receiving a normal `stop` message; no adapter setting is required.
 
+## PCM audio playback
+
+`index.html` and `3d.html` share `AIAvatarClient` in `html/aiavatar.js` and support
+both complete WAV responses and PCM chunks. To enable PCM delivery, set
+`response_audio_chunk_size=4096` when constructing `AIAvatarWebSocketServer`.
+The default, `0`, keeps complete WAV delivery.
+
+The size is in bytes and must be a multiple of `channels * sample_width`:
+2 bytes for 16-bit mono, 4 bytes for 16-bit stereo. This is a configuration
+requirement; no size validation or partial-frame reassembly is performed.
+The browser supports signed 16-bit little-endian PCM and uses the sample rate
+and channel count declared by the server.
+
+For each original audio, a descriptor supplies its `audio_id`, total frame count,
+text, controls, and metadata before the PCM chunks arrive. Use the updated server
+and browser together for this protocol. Each arriving chunk is scheduled after
+the preceding chunk, with a fixed 50 ms buffer when starting an empty queue or
+recovering from a buffer underrun. An already-buffered next audio starts as soon
+as the preceding audio ends. Playback does not wait for the complete audio to
+arrive. The server still generates a complete WAV before dividing it into PCM chunks.
+
+Text, controls, and playback notifications belong to the original audio, while
+lip sync follows the playing PCM with 100 ms of audio history. The 3D backlog
+combines PCM for each original audio into a WAV for later replay; this assembly
+does not delay live playback. An interrupted response retains the PCM received
+before interruption. Nod uses the same PCM delivery protocol as normal
+responses. See the [wire format](../../documents/adapters-websocket.md#audio-delivery)
+for the descriptor fields and frame-count convention.
+
 ## Nod playback
 
 Enable BARGE-IN in `3d.html` (VRM/MMD) to continue microphone input during nods.
-Use complete WAV delivery (`response_audio_chunk_size=0`) for the shared browser.
 The page uses `AIAvatarClient` in `aiavatar.js`; no additional client script is
-needed.
+needed. The server's `response_audio_chunk_size` setting applies to both nods and
+normal responses.
 
 The client preserves queued, decoding, and audible nods across speech resumption.
 Main response acceptance/start/audio discards pending nods while audible ones
@@ -23,9 +52,12 @@ finish. Main-response generation proceeds immediately; its playback waits behind
 an audible nod in the serial browser queue.
 
 On a `stop` message, the browser stops main-response audio and removes queued main
-audio while retaining nods identified by `metadata.nod=true` on audio messages.
+audio while retaining nods identified by `metadata.nod=true` on the WAV message
+or PCM descriptor.
 Stop messages need no additional metadata. Without nod metadata, ordinary response
 playback and barge-in behavior remain unchanged.
+If sending PCM is interrupted, a retained Nod drains the frames already received;
+it does not wait for frames from the canceled sender.
 The Stop button and WebSocket disconnection stop all playback. Disconnection also
 releases microphone capture and the audio context, including a microphone acquired
 after disconnection while permission was pending.
@@ -64,9 +96,11 @@ notification or protocol change is required.
 
 ### Playback notifications
 
-`index.html` and `3d.html` install the shared `playback-context.js` helper. After
-decoding a main-response audio chunk, immediately before starting its audio
-source, the browser sends a separate WebSocket message:
+`index.html` and `3d.html` install the shared `playback-context.js` helper. Each
+original audio is one playback unit, even when delivered as many PCM chunks.
+The chunk boundaries discussed in this section refer to those original audio
+units. When a main-response audio unit starts playing, the browser sends a
+separate WebSocket message:
 
 ```json
 {
@@ -74,7 +108,7 @@ source, the browser sends a separate WebSocket message:
   "session_id": "session-1",
   "metadata": {
     "event": "start",
-    "playback_id": "browser-generated-unique-id",
+    "playback_id": "unique-playback-id",
     "transaction_id": "response-transaction-id",
     "text": "This is the text being read aloud.",
     "duration_seconds": 3.0
@@ -82,15 +116,17 @@ source, the browser sends a separate WebSocket message:
 }
 ```
 
-`text` uses the chunk's `voice_text`. Duration comes from the decoded audio buffer
-in seconds. The browser generates the playback ID for each chunk and copies the
-response's top-level `transaction_id` into this notification. The transaction ID
-groups chunks of one AI response; a missing or null ID is omitted for older
+`text` uses the original audio's `voice_text`. WAV duration comes from the decoded
+audio buffer; PCM duration is `audio_frame_count / pcm_format.sample_rate` from
+the descriptor. Each original audio has one playback ID: the server's `audio_id`
+for PCM, or a browser-generated ID for WAV. The browser copies the response's
+top-level `transaction_id` into this notification. The transaction ID groups
+chunks of one AI response; a missing or null ID is omitted for older
 servers. Nod, backlog audio, and messages without a
 nonempty `voice_text` or session ID do not send start events. Queued or
 still-decoding audio has not started yet and does not send a start event.
 
-Natural completion sends an end event for that same ID:
+Natural completion of the original audio sends an end event for that same ID:
 
 ```json
 {
@@ -98,15 +134,16 @@ Natural completion sends an end event for that same ID:
   "session_id": "session-1",
   "metadata": {
     "event": "end",
-    "playback_id": "browser-generated-unique-id",
+    "playback_id": "unique-playback-id",
     "completed": true
   }
 }
 ```
 
 Interruption, including stopping playback, uses `completed: false`. These events
-are independent of microphone `data` messages. Use the shared browser's complete
-WAV delivery mode (`response_audio_chunk_size=0`).
+are independent of microphone `data` messages. In PCM mode, temporarily running
+out of buffered audio does not end the playback unit; completion waits for its
+last frame to play.
 
 When the normal response `final` arrives, the helper identifies its last audio
 chunk using the matching session/transaction and playback queue. Once that chunk
@@ -277,8 +314,9 @@ Call the returned helper's `handleResponse(response)` at the start of the page's
 final chunks and clear response tracking on connection/stop events.
 Its returned `dispose()` sends an interrupted end for the current context and
 restores the callbacks it owns; it does not stop the audio itself.
-`onPlaybackStart` receives `{message, playbackId, durationSeconds}` immediately
-before `source.start()`. `onPlaybackEnd` receives the same information plus `completed`,
+`onPlaybackStart` receives `{message, playbackId, durationSeconds}` when the
+original audio starts playing. For PCM, `message` is its descriptor.
+`onPlaybackEnd` receives the same information plus `completed`,
 which is `true` for natural completion and `false` for interruption. Controls
 from an old or disconnected socket are not sent into a replacement connection.
 
