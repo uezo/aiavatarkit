@@ -294,6 +294,8 @@ vad = SileroStreamSpeechDetector(
     speech_recognizer=stt,
     silence_duration_threshold=0.5,
     segment_silence_threshold=0.2,
+    min_duration=0.2,
+    min_text_length=2,  # Accept a shorter utterance if partial text has at least 2 characters
 )
 
 # LLM
@@ -334,6 +336,13 @@ shells out to `ffmpeg`, which must be installed separately.
 The recognizer is passed twice on purpose. `SileroStreamSpeechDetector` uses it to transcribe
 segments mid-utterance, and the pipeline keeps it for requests that arrive as audio rather
 than as already-recognised text.
+
+At a silence-based turn end, streaming Silero accepts nonempty recognised text when
+the recording duration excluding trailing silence reaches `min_duration` (default
+`0.2` seconds) **or** the partial text length reaches `min_text_length` (default `2`). Text validation
+and turn-taking gates still apply. Keep these thresholds no higher than their
+`on_recording_started_min_duration` and `on_recording_started_min_text_length`
+counterparts; this relationship is not enforced. See [VAD input thresholds](documents/vad.md#minimum-input-thresholds).
 
 Silero VAD runs on CPU using ONNX Runtime. For a local hub directory or a custom
 `.onnx` model, see [Local Silero models](documents/vad.md#local-models).

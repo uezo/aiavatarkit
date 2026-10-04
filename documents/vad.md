@@ -110,6 +110,8 @@ vad = SileroStreamSpeechDetector(
     speech_recognizer=GoogleSpeechRecognizer(...),
     segment_silence_threshold=0.2,       # Silence duration to trigger segment recognition
     silence_duration_threshold=0.5,      # Silence duration to finalize recording
+    min_duration=0.2,                    # Accept when duration >= 0.2 sec
+    min_text_length=2,                   # OR recognized text has >= 2 characters
     # Inherits all SileroSpeechDetector parameters
 )
 ```
@@ -118,6 +120,35 @@ Streaming detection pairs particularly well with turn-end gates: recognition of 
 so far has usually finished while a gate is still deciding, so holding the turn open costs
 almost nothing. See [Semantic turn end](vad-turn-end.md), and
 [Audio filters](vad-filters.md) for what runs before any of this.
+
+### Minimum Input Thresholds
+
+At a silence-based turn end, `SileroStreamSpeechDetector` applies an **OR** condition:
+
+```python
+recorded_duration >= min_duration or len(partial_text or "") >= min_text_length
+```
+
+`recorded_duration` excludes trailing silence. The defaults are `min_duration=0.2`
+seconds and `min_text_length=2`. A shorter utterance can therefore pass when its
+partial text has at least two characters. Nonempty recognized text is still
+required, and text validation and turn-taking gates still apply.
+
+The text threshold uses the latest available partial result. Before rejecting a
+short utterance, the detector waits for pending segment recognition, so a result
+that arrives after the silence threshold can still qualify. It does not start
+additional recognition to obtain text for this threshold.
+
+When using `on_recording_started` to stop AI speech, configure:
+
+- `min_duration <= on_recording_started_min_duration`
+- `min_text_length <= on_recording_started_min_text_length`
+
+These relationships keep the input thresholds no stricter than the corresponding
+default interruption thresholds. They are configuration guidelines, not enforced
+constraints. The text condition uses the latest recognized text; partial results
+can change, and custom trigger conditions or text validation have their own rules.
+`min_text_length` is specific to `SileroStreamSpeechDetector`.
 
 ### Segment Recognition Callback
 
@@ -285,7 +316,7 @@ async def on_recording_started(session_id):
     await stop_ai_speech()
 ```
 
-For stream-based detectors (`SileroStreamSpeechDetector`, `AzureStreamSpeechDetector`), the callback can also be triggered by recognized text length when no turn-taking gate is configured:
+For `SileroStreamSpeechDetector`, the callback can also be triggered by recognized text length when no turn-taking gate is configured:
 
 ```python
 vad = SileroStreamSpeechDetector(
