@@ -64,6 +64,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
         segment_silence_threshold: float = 0.2,
         max_duration: float = 10.0,
         min_duration: float = 0.2,
+        min_text_length: int = 2,
         sample_rate: int = 16000,
         channels: int = 1,
         preroll_buffer_count: int = 5,
@@ -108,11 +109,15 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
         )
         self.speech_recognizer = speech_recognizer
         self.segment_silence_threshold = segment_silence_threshold
+        self.min_text_length = min_text_length
         self.on_recording_started_min_text_length = on_recording_started_min_text_length
         self.recording_sessions: Dict[str, RecordingSession] = {}
         self._on_speech_detecting: List[Callable[[str, RecordingSession], Awaitable[None]]] = []
         self._on_speech_recognition_error: List[Callable[[Exception, str], Awaitable[None]]] = []
         self._validate_recognized_text: Optional[Callable[[str], Optional[str]]] = None
+
+    def get_config(self) -> dict:
+        return {**super().get_config(), "min_text_length": self.min_text_length}
 
     def on_speech_detecting(self, func: Callable[[str, RecordingSession], Awaitable[None]]) -> Callable[[str, RecordingSession], Awaitable[None]]:
         """Register callback for speech detecting (partial results).
@@ -386,6 +391,10 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                 self._mark_silence_threshold_reached(session)
                 recorded_duration = session.record_duration - session.silence_duration
                 if recorded_duration < self.min_duration:
+                    await self._wait_pending_recognition_task(session, "before minimum length check")
+                if (recorded_duration < self.min_duration and
+                    len(session.last_recognized_text or "") < self.min_text_length
+                ):
                     if self.debug:
                         logger.info(f"Recording too short: {recorded_duration} sec")
                 else:
