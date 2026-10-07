@@ -22,12 +22,13 @@ class SessionAllowTurnTakingGate(TurnTakingGate):
     """Allow the next evaluation of this gate for explicitly selected sessions.
 
     ``allow()`` arms one permission, consumed by ``should_take_turn()``. Without
-    an active permission this gate returns False, letting a manager try its
+    an active permission this gate returns None, letting a manager try its
     next child. Put this gate first to accept an expected answer before Jev.
 
     This is the next evaluation of this gate, not necessarily the next user
-    utterance. Common playback/skip bypasses and earlier accepting gates do not
-    call this classifier, so they do not consume its permission. Use an expiry
+    utterance. Standalone automatic bypasses and earlier accepting gates,
+    including TurnTakingBypassGate, do not call this classifier, so they do not
+    consume its permission. Use an expiry
     appropriate for the expected answer and call ``release()`` when the answer
     is handled or the connection closes. Manager session cleanup does not clear
     child permissions. Provider resources and background tasks are not created.
@@ -37,11 +38,12 @@ class SessionAllowTurnTakingGate(TurnTakingGate):
         self, *, default_expires_in: float = 300.0,
         response_end_grace_seconds: float = 0.0,
         skip_condition: Optional[Callable[[Optional[str], float], bool]] = None,
+        bypass_enabled: bool = True,
         debug: bool = False,
     ):
         super().__init__(
             response_end_grace_seconds=response_end_grace_seconds,
-            skip_condition=skip_condition, debug=debug,
+            skip_condition=skip_condition, bypass_enabled=bypass_enabled, debug=debug,
         )
         default_expires_in = float(default_expires_in)
         if not math.isfinite(default_expires_in) or default_expires_in <= 0:
@@ -97,14 +99,15 @@ class SessionAllowTurnTakingGate(TurnTakingGate):
         self, user_text: Optional[str], assistant_spoken_text: Optional[str], *,
         session_id: Optional[str] = None,
         assistant_full_text: Optional[str] = None,
+        **kwargs,
     ) -> TurnTakingDecision:
         now = time.monotonic()
         with self._lock:
             allowance = self._allowances.pop(session_id, None)
         if allowance is None:
-            decision = TurnTakingDecision(False, None, "session_allow_inactive")
+            decision = TurnTakingDecision(None, None, "session_allow_inactive")
         elif allowance.expires_at <= now:
-            decision = TurnTakingDecision(False, None, "session_allow_expired")
+            decision = TurnTakingDecision(None, None, "session_allow_expired")
         else:
             decision = TurnTakingDecision(True, None, allowance.reason)
         if self.debug:

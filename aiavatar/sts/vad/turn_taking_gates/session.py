@@ -68,17 +68,16 @@ class TurnTakingSession:
     independent. Known gaps between same-response chunks use the preceding
     spoken prefix. For classification only, a completed chunk followed by a
     known chunk with zero estimated characters gains that next chunk's first
-    two characters plus an ellipsis as a continuation hint. After the last
-    known chunk ends, the turn is allowed unless
-    ``speech_end_at`` places the input within earlier retained playback.
+    two characters plus an ellipsis as a continuation hint. Gates receive this
+    snapshot along with the recorded duration and VAD-supplied default skip
+    condition. Gates apply their base bypass policy when enabled; managers can
+    instead use an explicit ``TurnTakingBypassGate`` in the chain.
 
     Each finalized input cancels the previous pending decision without waiting
     for it to finish, even when the new input bypasses classification. Superseded decisions
     propagate cancellation instead of returning a result to the caller.
-    A synchronous skip condition receives the text and recorded duration for
-    each input. The gate's explicit condition takes priority over this session's
-    default condition. Returning True allows the input without classification.
-    Missing user text also allows the input, for recognition later in the pipeline.
+    When automatic bypasses are disabled, even missing text and idle playback
+    reach the gate. A None decision allows the input after the whole chain has run.
 
     ``close()`` invalidates the session and cancels pending work synchronously;
     await ``aclose()`` to join that work. Closing cancels pending
@@ -229,8 +228,8 @@ class TurnTakingSession:
                 assistant_full_text="".join(chunk.text for chunk in self._playbacks),
             )
 
-        # Preserve independent-chunk behavior for clients without a transaction
-        # ID: finished chunks bypass even if speech_end_at predates their end.
+        # Preserve independent-chunk estimates for clients without a transaction
+        # ID: finished chunks stay inactive even if speech_end_at predates their end.
         elapsed = max(0.0, (now if playback.ended_at is None else playback.ended_at) - playback.started_at)
         if playback.ended_at is not None:
             reason = "completed" if playback.completed else "stopped"
@@ -359,57 +358,30 @@ class TurnTakingSession:
 
         try:
             self._log_input("final_input", user_text, recording_id, estimate)
-            bypass_reason = None
-            if self._closed:
-                bypass_reason = "turn_take_session_closed"
-            elif not user_text or not user_text.strip():
-                bypass_reason = "turn_taking_no_text"
-            else:
-                condition = (
-                    self._gate.skip_condition if self._gate.skip_condition is not None
-                    else self._default_skip_condition
-                )
-                if condition is not None:
-                    try:
-                        if condition(user_text, recorded_duration) is True:
-                            bypass_reason = "turn_take_skipped"
-                    except Exception as exc:
-                        logger.warning(
-                            "Turn-taking skip condition failed (%s); allowing user's turn",
-                            type(exc).__name__,
-                        )
-                        bypass_reason = "turn_taking_skip_condition_error"
-            if self._current_task is not task or task.cancelling():
+            if task.cancelling():
                 raise asyncio.CancelledError
-            if bypass_reason is None:
-                if not estimate.is_playing:
-                    bypass_reason = "playback_" + estimate.reason
-                elif (
-                    estimate.reason == "playing" and estimate.is_final_chunk
-                    and self._gate.response_end_grace_seconds > 0
-                    and (
-                        estimate.remaining_seconds <= self._gate.response_end_grace_seconds
-                        or math.isclose(
-                            estimate.remaining_seconds, self._gate.response_end_grace_seconds,
-                            rel_tol=0.0, abs_tol=1e-9,
-                        )
-                    )
-                ):
-                    # Allow only the confirmed response ending. The nanosecond
-                    # tolerance absorbs subtraction rounding at the threshold.
-                    bypass_reason = "playback_response_end_grace"
-                elif not estimate.assistant_spoken_text.strip():
-                    bypass_reason = "playback_empty_estimate"
-            if bypass_reason:
-                decision = TurnTakingDecision(True, None, bypass_reason)
+            if self._closed:
+                decision = TurnTakingDecision(True, None, "turn_take_session_closed")
                 self._log_input("bypass", user_text, recording_id, estimate, decision=decision)
                 return decision
 
             try:
-                decision = await self._gate.should_take_turn(
-                    user_text, estimate.evaluation_text, session_id=self.session_id,
-                    assistant_full_text=estimate.assistant_full_text,
-                )
+                decision = None
+                if self._gate.bypass_enabled:
+                    decision = self._gate._get_bypass_decision(
+                        user_text, playback=estimate, recorded_duration=recorded_duration,
+                        default_skip_condition=self._default_skip_condition,
+                    )
+                if self._current_task is not task or task.cancelling():
+                    raise asyncio.CancelledError
+                if decision is None:
+                    decision = await self._gate.should_take_turn(
+                        user_text, estimate.evaluation_text, session_id=self.session_id,
+                        assistant_full_text=estimate.assistant_full_text,
+                        playback=estimate, recorded_duration=recorded_duration,
+                        default_skip_condition=self._default_skip_condition,
+                        is_current=lambda: self._current_task is task and not self._closed,
+                    )
             except Exception:
                 # A gate might suppress cancellation and then fail. Do not let
                 # the application's error fallback pass that stale input.
@@ -418,6 +390,10 @@ class TurnTakingSession:
                 raise
             if self._current_task is not task or task.cancelling():
                 raise asyncio.CancelledError
+            # Only the outer session supplies the default. A nested manager's
+            # None must not prevent later siblings from evaluating input.
+            if decision.should_take_turn is None:
+                decision = TurnTakingDecision(True, decision.probability, decision.reason)
             self._log_input("decision", user_text, recording_id, estimate, decision=decision)
             return decision
         except asyncio.CancelledError:

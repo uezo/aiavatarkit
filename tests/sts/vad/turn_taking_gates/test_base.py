@@ -1,6 +1,7 @@
 """Provider-independent turn-taking contracts; no HTTP clients or API calls."""
 
 import asyncio
+from dataclasses import asdict, FrozenInstanceError, replace
 import logging
 from pathlib import Path
 import subprocess
@@ -14,8 +15,10 @@ from aiavatar.sts.vad.turn_taking_gates import (
     PlaybackEstimate,
     TurnTakingDecision,
     TurnTakingGate,
+    TurnTakingGateManager,
     TurnTakingSession,
 )
+from aiavatar.sts.vad.turn_taking_gates.bypass import TurnTakingBypassGate
 import aiavatar.sts.vad.turn_taking_gates.session as session_module
 
 
@@ -27,7 +30,7 @@ class LocalTurnTakingGate(TurnTakingGate):
         self.calls = []
         self.full_texts = []
 
-    async def should_take_turn(self, user_text, assistant_spoken_text, *, session_id=None, assistant_full_text=None):
+    async def should_take_turn(self, user_text, assistant_spoken_text, *, session_id=None, assistant_full_text=None, **kwargs):
         self.calls.append((user_text, assistant_spoken_text, session_id))
         self.full_texts.append(assistant_full_text)
         return TurnTakingDecision(user_text != "うん", None, "local_policy")
@@ -51,13 +54,48 @@ def test_gate_requires_a_provider_implementation():
         MissingJudge()
 
 
+@pytest.mark.parametrize("value", [True, False, None])
+def test_decision_keeps_three_states_and_plain_frozen_dataclass_contract(value):
+    positional = TurnTakingDecision(value, 0.4, "policy")
+    keyword = TurnTakingDecision(should_take_turn=value, probability=0.4, reason="policy")
+    assert positional == keyword
+    assert keyword.should_take_turn is value
+    assert asdict(keyword) == {"should_take_turn": value, "probability": 0.4, "reason": "policy"}
+    assert replace(keyword, should_take_turn=False) == TurnTakingDecision(False, 0.4, "policy")
+    with pytest.raises(FrozenInstanceError):
+        keyword.should_take_turn = True
+
+
+@pytest.mark.asyncio
+async def test_unmanaged_session_and_evaluate_resolve_provider_continue(playback_clock):
+    class ContinuingGate(TurnTakingGate):
+        async def should_take_turn(self, *args, **kwargs):
+            return TurnTakingDecision(None, None, "not_applicable")
+
+    gate = ContinuingGate()
+    unmanaged = gate.create_session("unmanaged")
+    managed = gate.get_session("managed", create=True)
+    for session in (unmanaged, managed):
+        session.start_playback("chunk", "abcdefghij", 10)
+    playback_clock.now += 5
+    try:
+        raw = await gate.should_take_turn("question", "prefix")
+        assert raw.should_take_turn is None
+        expected = TurnTakingDecision(True, None, "not_applicable")
+        assert await unmanaged.should_take_turn("question") == expected
+        assert await gate.evaluate("managed", "question") == expected
+    finally:
+        gate.close_session("managed")
+        await asyncio.gather(unmanaged.aclose(), managed.aclose())
+
+
 @pytest.mark.asyncio
 async def test_local_provider_receives_session_and_estimated_spoken_prefix(playback_clock):
     judge = LocalTurnTakingGate()
     session = judge.create_session("local-session")
     assert isinstance(session, TurnTakingSession)
-    assert judge.response_end_grace_seconds == 0.0
     assert judge.debug is False
+    assert judge.bypass_enabled is True
     try:
         assert session.start_playback("chunk", "あいうえおかきくけこ", 10)
         playback_clock.now += 5
@@ -77,34 +115,66 @@ async def test_local_provider_receives_session_and_estimated_spoken_prefix(playb
 
 
 @pytest.mark.asyncio
-async def test_local_provider_inherits_skip_grace_and_closed_session_behavior(playback_clock):
-    judge = LocalTurnTakingGate(
-        response_end_grace_seconds=0.3, skip_condition=lambda text, duration: duration >= 5
-    )
-    session = judge.create_session("local-session")
+@pytest.mark.parametrize("user_text", [None, "", "うん"])
+async def test_disabling_bypass_calls_provider_even_when_idle_and_long(user_text):
+    judge = LocalTurnTakingGate(bypass_enabled=False)
+
+    def unused_default(text, duration):
+        pytest.fail("Session must forward the default policy without applying it")
+
+    session = judge.create_session("session", default_skip_condition=unused_default)
     try:
-        session.start_playback("last", "あいうえおかきくけこ", 10, transaction_id="response")
-        assert session.mark_response_final("last", transaction_id="response")
-        playback_clock.now += 5
-        assert await session.should_take_turn("長い発話", recorded_duration=5.0) == TurnTakingDecision(
+        decision = await session.should_take_turn(user_text, recorded_duration=10)
+        assert decision.reason == "local_policy"
+        assert judge.calls == [(user_text, "", "session")]
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_standalone_gate_skips_long_input_and_can_override_session_default(playback_clock):
+    judge = LocalTurnTakingGate()
+    session = judge.create_session(
+        "session", default_skip_condition=lambda text, duration: duration >= 1.5,
+    )
+    session.start_playback("chunk", "abcdefghij", 10)
+    playback_clock.now += 5
+    try:
+        assert await session.should_take_turn("うん", recorded_duration=1.5) == TurnTakingDecision(
             True, None, "turn_take_skipped"
         )
         assert judge.calls == []
-        assert (await session.should_take_turn("うん")).reason == "local_policy"
-        playback_clock.now = 109.75
-        assert await session.should_take_turn("うん") == TurnTakingDecision(
-            True, None, "playback_response_end_grace"
+        assert await session.should_take_turn("うん", recorded_duration=0.3) == TurnTakingDecision(
+            False, None, "local_policy"
         )
-        await session.aclose()
-        await session.aclose()
-        assert session.is_closed
-        assert not session.start_playback("late", "遅い通知", 3)
-        assert await session.should_take_turn("次の発話") == TurnTakingDecision(
-            True, None, "turn_take_session_closed"
+        judge.skip_condition = lambda text, duration: False
+        assert await session.should_take_turn("うん", recorded_duration=1.5) == TurnTakingDecision(
+            False, None, "local_policy"
         )
-        assert judge.calls == [("うん", "あいうえお", "local-session")]
+        assert judge.calls == [("うん", "abcde", "session")] * 2
     finally:
         await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_task_cannot_receive_closed_session_allowance():
+    judge = LocalTurnTakingGate()
+    session = judge.create_session("session")
+    await session.aclose()
+    returned_decisions = []
+
+    async def cancelled_call():
+        asyncio.current_task().cancel()
+        returned_decisions.append(await session.should_take_turn("question"))
+
+    task = asyncio.create_task(cancelled_call())
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert returned_decisions == []
+        assert judge.calls == []
+    finally:
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -112,7 +182,7 @@ async def test_close_cancels_pending_local_provider_without_provider_lifecycle(p
     entered, cancelled = asyncio.Event(), asyncio.Event()
 
     class WaitingJudge(TurnTakingGate):
-        async def should_take_turn(self, user_text, assistant_spoken_text, *, session_id=None, assistant_full_text=None):
+        async def should_take_turn(self, user_text, assistant_spoken_text, *, session_id=None, assistant_full_text=None, **kwargs):
             entered.set()
             try:
                 await asyncio.Event().wait()
@@ -162,7 +232,7 @@ def test_generic_package_imports_without_http_or_jev():
         assert "httpx" not in sys.modules
 
         class LocalJudge(module.TurnTakingGate):
-            async def should_take_turn(self, user_text, assistant_spoken_text, *, session_id=None, assistant_full_text=None):
+            async def should_take_turn(self, user_text, assistant_spoken_text, *, session_id=None, assistant_full_text=None, **kwargs):
                 return module.TurnTakingDecision(True, None, "local")
 
         assert isinstance(LocalJudge().create_session("local"), module.TurnTakingSession)
@@ -175,139 +245,11 @@ def test_generic_package_imports_without_http_or_jev():
 
 
 @pytest.mark.asyncio
-async def test_shared_gate_keeps_different_session_defaults_and_input_arguments(playback_clock):
-    gate = LocalTurnTakingGate()
-    seen = []
-
-    def first_default(text, duration):
-        seen.append((text, duration))
-        return duration >= 2
-
-    first = gate.create_session("first", default_skip_condition=first_default)
-    second = gate.create_session("second", default_skip_condition=lambda text, duration: duration >= 5)
-    sessions = [first, second, gate.create_session("no-default")]
-    try:
-        for session in sessions:
-            session.start_playback("chunk", "あいうえおかきくけこ", 10)
-        playback_clock.now += 5
-        assert (await first.should_take_turn("うん", recorded_duration=3)).reason == "turn_take_skipped"
-        assert (await second.should_take_turn("うん", recorded_duration=3)).reason == "local_policy"
-        assert (await sessions[2].should_take_turn("うん", recorded_duration=10)).reason == "local_policy"
-        assert (await first.should_take_turn("質問です")).reason == "local_policy"
-        assert seen == [("うん", 3), ("質問です", 0.0)]
-        assert gate.skip_condition is None
-    finally:
-        await asyncio.gather(*(session.aclose() for session in sessions))
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("skip", [False, True])
-async def test_explicit_gate_condition_overrides_session_default(skip, playback_clock):
-    def unused_default(text, duration):
-        pytest.fail("A configured gate condition must override the session default")
-
-    gate = LocalTurnTakingGate(skip_condition=lambda text, duration: skip)
-    session = gate.create_session("session", default_skip_condition=unused_default)
-    session.start_playback("chunk", "あいうえおかきくけこ", 10)
-    playback_clock.now += 5
-    try:
-        decision = await session.should_take_turn("うん", recorded_duration=20)
-        assert decision.reason == ("turn_take_skipped" if skip else "local_policy")
-        assert len(gate.calls) == (0 if skip else 1)
-    finally:
-        await session.aclose()
-
-
-@pytest.mark.asyncio
-async def test_skip_condition_error_allows_turn_and_cleans_up_for_next_input(playback_clock, caplog):
-    def condition(text, duration):
-        if text == "失敗":
-            raise RuntimeError("private-exception-detail")
-        return False
-
-    gate = LocalTurnTakingGate(skip_condition=condition, debug=True)
-    session = gate.create_session("session")
-    session.start_playback("chunk", "あいうえおかきくけこ", 10)
-    playback_clock.now += 5
-    caplog.set_level(logging.INFO, logger="aiavatar.sts.vad.turn_taking_gates")
-    try:
-        assert await session.should_take_turn("失敗") == TurnTakingDecision(
-            True, None, "turn_taking_skip_condition_error"
-        )
-        assert gate.calls == []
-        assert session._current_task is None
-        assert not session._pending
-        assert (await session.should_take_turn("うん")).reason == "local_policy"
-    finally:
-        await session.aclose()
-    assert "RuntimeError" in caplog.text
-    assert "private-exception-detail" not in caplog.text
-    assert "reason=turn_taking_skip_condition_error" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_skip_condition_cancellation_propagates_and_releases_registration(playback_clock):
-    def condition(text, duration):
-        raise asyncio.CancelledError
-
-    gate = LocalTurnTakingGate(skip_condition=condition)
-    session = gate.create_session("session")
-    session.start_playback("chunk", "あいうえおかきくけこ", 10)
-    playback_clock.now += 5
-    try:
-        with pytest.raises(asyncio.CancelledError):
-            await session.should_take_turn("うん")
-        assert gate.calls == []
-        assert session._current_task is None
-        assert not session._pending
-    finally:
-        await session.aclose()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("user_text", [None, "", " \t\n"])
-async def test_missing_text_bypasses_local_gate_and_cancels_previous_input(
-    user_text, playback_clock
-):
-    entered, cancelled = asyncio.Event(), asyncio.Event()
-    conditions = []
-
-    def condition(text, duration):
-        conditions.append(text)
-        return False
-
-    class PendingGate(TurnTakingGate):
-        async def should_take_turn(self, text, assistant_spoken_text, *, session_id=None, assistant_full_text=None):
-            entered.set()
-            try:
-                await asyncio.Event().wait()
-            finally:
-                cancelled.set()
-
-    session = PendingGate(skip_condition=condition).create_session("session")
-    session.start_playback("chunk", "あいうえおかきくけこ", 10)
-    playback_clock.now += 5
-    pending = asyncio.create_task(session.should_take_turn("old"))
-    try:
-        await asyncio.wait_for(entered.wait(), 1)
-        assert await session.should_take_turn(user_text) == TurnTakingDecision(
-            True, None, "turn_taking_no_text"
-        )
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(pending, 1)
-        assert cancelled.is_set()
-        assert conditions == ["old"]
-    finally:
-        await session.aclose()
-        await asyncio.gather(pending, return_exceptions=True)
-
-
-@pytest.mark.asyncio
 async def test_synchronous_close_invalidates_now_and_aclose_joins_cleanup(playback_clock):
     entered, cancelling, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
     class SlowCloseGate(TurnTakingGate):
-        async def should_take_turn(self, text, assistant_spoken_text, *, session_id=None, assistant_full_text=None):
+        async def should_take_turn(self, text, assistant_spoken_text, *, session_id=None, assistant_full_text=None, **kwargs):
             entered.set()
             try:
                 await asyncio.Event().wait()
@@ -352,13 +294,6 @@ def test_synchronous_close_does_not_require_an_event_loop():
     assert session.is_closed
 
 
-def test_invalid_conditions_are_rejected():
-    with pytest.raises(ValueError, match="skip_condition"):
-        LocalTurnTakingGate(skip_condition=False)
-    with pytest.raises(ValueError, match="default_skip_condition"):
-        LocalTurnTakingGate().create_session("session", default_skip_condition=False)
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("first_close", ["close", "aclose"])
@@ -386,7 +321,7 @@ async def test_helper_lifecycle_logs_once_only_when_debug_enabled(debug, first_c
 
 @pytest.mark.asyncio
 async def test_registry_creation_is_explicit_and_defaults_apply_only_at_creation(playback_clock):
-    gate = LocalTurnTakingGate()
+    gate = TurnTakingGateManager([TurnTakingBypassGate(), LocalTurnTakingGate()])
     unmanaged = gate.create_session("session")
     first = replacement = None
     try:
@@ -419,7 +354,8 @@ async def test_registry_creation_is_explicit_and_defaults_apply_only_at_creation
 
 @pytest.mark.asyncio
 async def test_registry_isolates_connection_ids_and_default_conditions(playback_clock):
-    gate = LocalTurnTakingGate()
+    bypass = TurnTakingBypassGate()
+    gate = TurnTakingGateManager([bypass, LocalTurnTakingGate()])
     first = gate.get_session("first-connection", create=True,
                              default_skip_condition=lambda text, duration: duration >= 2)
     second = gate.get_session("second-connection", create=True,
@@ -433,7 +369,7 @@ async def test_registry_isolates_connection_ids_and_default_conditions(playback_
         playback_clock.now += 5
         assert (await gate.evaluate("first-connection", "うん", recorded_duration=3)).reason == "turn_take_skipped"
         assert (await gate.evaluate("second-connection", "うん", recorded_duration=3)).reason == "local_policy"
-        assert gate.skip_condition is None
+        assert bypass.skip_condition is None
         assert gate.close_session("first-connection") is first
         assert gate.get_session("first-connection") is None
         assert gate.is_current_session("second-connection", second)

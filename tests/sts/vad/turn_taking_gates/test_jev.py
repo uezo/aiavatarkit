@@ -75,6 +75,30 @@ async def test_request_contract_and_custom_configuration():
 
 
 @pytest.mark.asyncio
+async def test_standalone_jev_can_disable_automatic_bypass():
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json=response_body(0.1))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        gate = JevTurnTakingGate(
+            http_client=client, api_key="test-key", bypass_enabled=False,
+            skip_condition=lambda text, duration: True,
+        )
+        session = gate.get_session("session", create=True)
+        try:
+            # Idle playback and a matching skip condition must both be ignored.
+            decision = await gate.evaluate("session", "相槌", recorded_duration=10)
+            assert decision == TurnTakingDecision(False, 0.1, "jev_backchannel")
+            assert len(requests) == 1
+        finally:
+            gate.close_session("session")
+            await session.aclose()
+
+
+@pytest.mark.asyncio
 async def test_question_full_text_reaches_jev_separately_from_the_playing_prefix(monotonic_clock):
     requests = []
     question = "今日のご予定について教えていただけますか？"
@@ -472,7 +496,7 @@ async def test_unusable_context_allows_turn_without_api_and_logs_reason(
             await session.aclose()
 
     assert "event=final_input" in caplog.text
-    assert "event=bypass" in caplog.text
+    assert ("event=bypass" if state == "closed" else "event=decision") in caplog.text
     assert "recording_id=optional-rid" in caplog.text
     assert "user_text='質問です'" in caplog.text
     assert "should_take_turn=True" in caplog.text
@@ -887,7 +911,7 @@ async def test_explicit_skip_is_one_call_only_and_does_not_affect_another_sessio
             await second.aclose()
 
     assert any(
-        "event=bypass" in record.message
+        "event=decision" in record.message
         and "recording_id=long-input" in record.message
         and "reason=turn_take_skipped" in record.message
         for record in caplog.records
@@ -1601,7 +1625,7 @@ async def test_response_end_grace_boundary_and_disabled_default(
     assert "is_final_chunk=True" in caplog.text
     assert f"remaining_seconds={remaining:.3f}" in caplog.text
     if should_bypass:
-        assert "event=bypass" in caplog.text
+        assert "event=decision" in caplog.text
         assert "reason=playback_response_end_grace" in caplog.text
 
 

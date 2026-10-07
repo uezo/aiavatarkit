@@ -50,8 +50,10 @@ class JevTurnTakingGate(TurnTakingGate):
     ``http_client`` remains caller-owned and must be closed by the application.
     ``debug=True`` logs the spoken assistant prefix, known full text, recognized user text, and
     decision at INFO level, including fallback decisions.
-    ``response_end_grace_seconds`` lets sessions bypass Jev near the confirmed
-    final chunk's natural end. Its default of zero disables this bypass.
+    Standalone evaluation bypasses this classifier for idle playback, long
+    utterances or the configured response-ending grace period. Set
+    ``bypass_enabled=False`` to classify every input. In a manager, configure
+    these policies on the manager or on an explicit TurnTakingBypassGate.
     """
 
     def __init__(
@@ -64,6 +66,7 @@ class JevTurnTakingGate(TurnTakingGate):
         discard_threshold: float = 0.2,
         response_end_grace_seconds: float = 0.0,
         skip_condition: Optional[Callable[[Optional[str], float], bool]] = None,
+        bypass_enabled: bool = True,
         instructions: Optional[str] = None,
         debug: bool = False,
     ):
@@ -77,7 +80,7 @@ class JevTurnTakingGate(TurnTakingGate):
             raise ValueError("discard_threshold must be a finite number between 0 and 1")
         super().__init__(
             response_end_grace_seconds=response_end_grace_seconds,
-            skip_condition=skip_condition, debug=debug,
+            skip_condition=skip_condition, bypass_enabled=bypass_enabled, debug=debug,
         )
         if instructions is not None and not isinstance(instructions, str):
             raise ValueError("instructions must be a string or None")
@@ -96,6 +99,7 @@ class JevTurnTakingGate(TurnTakingGate):
         *,
         session_id: Optional[str] = None,
         assistant_full_text: Optional[str] = None,
+        **kwargs,
     ) -> TurnTakingDecision:
         normalized_user_text = (user_text or "").strip()
         normalized_assistant_text = (assistant_spoken_text or "").strip()

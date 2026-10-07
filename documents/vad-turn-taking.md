@@ -8,6 +8,7 @@ give an answer, or otherwise take a turn.
 - [Quick start with Jev](#quick-start-with-jev)
 - [Built-in gates](#built-in-gates)
 - [Combining multiple gates](#combining-multiple-gates)
+- [Wakeword filtering](vad-wakeword.md)
 - [Playback and barge-in policies](#playback-and-barge-in-policies)
 - [Deep dive](#deep-dive)
 - [Diagnostics and limitations](#diagnostics-and-limitations)
@@ -102,8 +103,9 @@ Its required constructor arguments are `http_client` and `api_key`.
 | `model` | `"jev-latest"` | Jev model to use. |
 | `discard_threshold` | `0.2` | Discard when the take-turn probability is at or below this value. Lower values allow more inputs. |
 | `request_timeout` | `1.0` | Total API request deadline in seconds; also applied to HTTPX I/O timeouts. |
+| `bypass_enabled` | `True` | Apply automatic playback and duration bypasses when used directly as the VAD gate. `False` disables all automatic bypasses. |
+| `skip_condition` | `None` | Use the VAD-supplied duration condition unless an explicit predicate is provided. |
 | `response_end_grace_seconds` | `0.0` | Allow replies near the confirmed end of the response without classification; zero disables this policy. |
-| `skip_condition` | `None` | Use the VAD-supplied duration policy unless an explicit predicate is provided. |
 | `instructions` | Built-in instructions | Optional replacement instructions for Jev. |
 | `debug` | `False` | Log playback context and classification decisions. |
 
@@ -115,6 +117,29 @@ Timeouts allow the current input with reason `jev_timeout`. Other API errors or
 invalid responses allow it with `jev_error`. Cancellation propagates instead of
 being converted into an accepted turn. When used together with a turn-end gate,
 Jev's turn-taking request runs after the turn-end gate has released the recording.
+
+Passed directly to the VAD, Jev retains the automatic bypasses shown in the quick
+start. Inside a Manager, its bypass options are ignored; configure the Manager's
+automatic bypass or an explicit `TurnTakingBypassGate` in the chain instead.
+
+### TurnTakingBypassGate
+
+This gate explicitly allows inputs that do not need playback-aware
+classification. It returns `True` when there is no recognized text, no playback
+at the estimated speech-end time, or no estimated spoken prefix, or when a
+configured duration or response-end policy matches. Otherwise it returns `None`
+so the next gate can classify the input.
+
+Import it from `aiavatar.sts.vad.turn_taking_gates.bypass`. In a Manager, put it
+before Jev and after mandatory checks such as a wakeword gate. Including this
+gate in the Manager's direct child list disables the Manager's automatic bypass
+by default, so these conditions apply at the position you choose.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `skip_condition` | `None` | Synchronous predicate receiving text and recorded duration. `None` uses the VAD-supplied duration condition. |
+| `response_end_grace_seconds` | `0.0` | Allow replies near the confirmed end of the response; zero disables this policy. |
+| `debug` | `False` | Enable diagnostics when used as a managed gate. |
 
 ### SessionAllowTurnTakingGate
 
@@ -141,9 +166,13 @@ def cleanup_connection(session_id):
 
 Place it before Jev in a Manager, as shown below. An active allowance returns
 `True` regardless of the input text and is consumed once. Without an allowance,
-or after expiry, it returns `False` so the Manager can ask the next gate. It does
-not provide a force-reject mode. Used alone, it rejects classified inputs that
-have no active allowance.
+or after expiry, it returns `None` so the Manager can ask the next gate. It
+does not provide a force-reject mode. Used alone, `None` resolves to acceptance;
+use a later gate to reject unwanted inputs.
+
+For standalone use, it accepts the same `bypass_enabled`, `skip_condition`, and
+`response_end_grace_seconds` options as Jev. Inside a Manager, these options are
+ignored; configure the Manager or an explicit bypass gate instead.
 
 `allow(session_id, expires_in=None, reason="session_allow")` uses
 `default_expires_in` when no expiry is supplied. Repeated calls replace the
@@ -152,7 +181,7 @@ inspects it without consuming it; `release()` and `reset_session()` clear it.
 Expiry uses monotonic time and is checked lazily, without a background timer.
 
 The allowance applies to the **next evaluation of this gate**, which may not be
-the next utterance. A shared bypass or an earlier gate's acceptance can skip its
+the next utterance. An earlier bypass or another gate's acceptance can skip its
 evaluation. Release any unused allowance when handling the answer and on
 disconnect; Manager session cleanup does not clear child allowances. Use a
 [custom gate](#custom-gates) when acceptance must also depend on the answer text.
@@ -179,27 +208,69 @@ vad = SileroStreamSpeechDetector(
 # Construct the WebSocket server and forward playback events as in the quick start.
 ```
 
-Children run in list order. The first `should_take_turn=True` accepts the input
-and stops evaluation. `False` continues to the next gate; all `False` results
-discard the input. An empty Manager allows input. This is an OR policy, unlike
-the all-must-pass policy used by turn-end gates.
+Children run in list order and return a `TurnTakingDecision`. Its
+`should_take_turn` field determines what happens next:
 
-Set **`skip_condition` and `response_end_grace_seconds` on the Manager**. These
-policies run once before any child classifier. Child values for these options
-are ignored, even if the Manager uses its defaults. With
-`manager.skip_condition=None`, the VAD supplies its duration-based default; the
-Manager does not inherit a child's condition. Jev's model, instructions,
-threshold, request timeout, and debug settings still apply.
+| `should_take_turn` | Manager behavior |
+| --- | --- |
+| `True` | Allow the input and stop evaluation. |
+| `False` | Block the input and stop evaluation. |
+| `None` | Continue to the next gate. |
+
+If every child returns `None`, the managed evaluation allows the input. An empty
+Manager also allows input. The raw `manager.should_take_turn()` decision can
+still contain `None`; the outer session resolves the final deferral to `True`.
+
+A [wakeword gate](vad-wakeword.md) belongs before gates that can return `True`.
+It returns `False` while waiting for a call and `None` after a call or during
+an ongoing conversation, leaving turn-taking classification to later gates:
+
+```python
+from aiavatar.sts.vad.turn_taking_gates.bypass import TurnTakingBypassGate
+
+manager = TurnTakingGateManager(
+    gates=[
+        wakeword_gate,
+        TurnTakingBypassGate(response_end_grace_seconds=0.3),
+        session_allow,
+        jev_gate,
+    ],
+)
+```
+
+**Migration:** a `False` decision now blocks immediately. Change custom gates
+that previously used `False` to mean "try the next gate" to return
+`TurnTakingDecision(None, None, "no_match")`. All three constructor fields remain
+required: `should_take_turn`, `probability`, and `reason`. All-deferral chains now
+allow input; add a final gate returning `False` if the chain needs default
+rejection. `SessionAllowTurnTakingGate` already returns `None` for missing or
+expired allowances.
+
+The Manager's `bypass_enabled=None` default is resolved once at construction:
+automatic bypass is disabled if its **direct child list** contains a
+`TurnTakingBypassGate`, and enabled otherwise. Explicit `True` or `False`
+overrides this choice. Automatic bypass runs before any child gate; configure
+its `skip_condition` and `response_end_grace_seconds` on the Manager. When
+automatic bypass is disabled, those Manager settings are unused; configure the
+explicit bypass gate instead. Child gates' standalone bypass settings are
+always ignored.
+
+For `[wakeword_gate, jev_gate]` without an explicit bypass gate, set
+`bypass_enabled=False` on the Manager so idle playback or long utterances cannot
+skip the wakeword check. Standalone Jev and SessionAllow retain their automatic
+bypasses by default and do not require a Manager.
 
 The Manager owns one playback history and one active decision per session. All
 children receive the same frozen spoken-prefix and full-text snapshot through
 their `should_take_turn()` methods. Playback events go to the Manager, and no
 child playback sessions need to be created.
 
-A provider failure allows the input through normal VAD evaluation; it is not
-treated as `False` to continue the chain. Jev timeout/error decisions also allow
-it immediately. Cancellation propagates. The Manager adds no overall timeout,
-so sequential classifiers can add their individual waiting times.
+An uncaught provider failure allows the input through normal VAD evaluation;
+it is not treated as deferral. Jev turn-taking timeout/error decisions also
+allow it immediately. Gates that must block on expected failures, such as
+wakeword gates, return `False` themselves. Cancellation propagates. The Manager
+adds no overall timeout, so sequential classifiers can add their individual
+waiting times.
 
 ## Playback and barge-in policies
 
@@ -219,10 +290,13 @@ uses duration only; `on_recording_started_min_text_length` does not trigger it.
 Without a gate, the default still allows either duration or text length.
 An explicit `should_trigger_recording_started` callback overrides these defaults.
 
-With `skip_condition=None`, the VAD supplies the matching classification bypass:
+With `skip_condition=None`, automatic bypass or an explicit bypass gate uses the
+VAD-supplied duration condition:
 `recorded_duration >= vad.on_recording_started_min_duration`. A matching finalized
-input passes with reason `turn_take_skipped`. Each input uses its own duration;
-no skip flag carries over to the next recording.
+input is allowed with reason `turn_take_skipped`. Manager automatic bypass skips
+all children; an explicit bypass skips only later gates, preserving earlier
+wakeword checks. Each input uses its own duration; no skip flag carries over to
+the next recording.
 
 Stopping playback does not finalize the recording or bypass a turn-end gate.
 The duration includes internal pauses and excludes current trailing silence;
@@ -234,13 +308,15 @@ later audio chunks from the response.
 For interruption only after a turn-taking decision, set the server's
 `mute_on_barge_in=False`. This disables its recording-start stop callback, while
 the browser's Barge-in option must remain enabled to capture the user. The
-VAD-supplied duration bypass still applies unless explicitly overridden.
+VAD-supplied duration bypass still applies when automatic bypass is enabled, or
+an explicit `TurnTakingBypassGate` is present, unless its duration condition has
+been overridden.
 
 ### Custom skip conditions
 
 `skip_condition(text, recorded_duration)` is a synchronous predicate. An explicit
-condition on the gate overrides the VAD default. For example, to classify long
-utterances as well:
+condition overrides the VAD default. For standalone Jev, classify long utterances
+as well with:
 
 ```python
 jev_gate = JevTurnTakingGate(
@@ -250,16 +326,25 @@ jev_gate = JevTurnTakingGate(
 )
 ```
 
-For multiple gates, set this condition on the Manager instead. Changing the skip
-condition does not change when `on_recording_started` fires. Keep these policies
+Other bypass conditions, such as idle playback, still apply. Use
+`bypass_enabled=False` to disable all automatic bypasses on a standalone gate.
+For a Manager, configure its automatic bypass or the explicit bypass gate. To
+classify every input, set the Manager's `bypass_enabled=False` and omit the
+explicit bypass gate. Changing the skip condition does not change when
+`on_recording_started` fires. Keep these policies
 aligned if that callback stops playback: an input already stopped by the
 callback can otherwise be rejected by classification.
 
 ### Replies near the end of a response
 
-`response_end_grace_seconds=0.3` allows inputs in the final 300 ms of the
+`response_end_grace_seconds=0.3` on standalone Jev, a Manager with automatic
+bypass enabled, or `TurnTakingBypassGate`
+allows inputs in the final 300 ms of the
 **confirmed last audio chunk** without a classifier call, with reason
 `playback_response_end_grace`. The default is `0.0` (disabled).
+
+Manager automatic bypass skips all children. An explicit bypass skips only
+later gates, so checks placed before it still run.
 
 This uses the estimated playback position at the user's speech end, including
 when the audio has naturally finished by decision time. Earlier chunks, gaps,
@@ -281,16 +366,19 @@ and invokes an `STSRequest`. The VAD does not create the request itself. A
 rejected utterance never reaches the pipeline's `accepted` notification, request
 queue, or response-stop operation.
 
-No application speech-filter callback or special registration order is needed.
+No separate application speech-filter callback is needed.
 Callbacks run in registration order and their return values do not stop later
 callbacks. Ordinary callback exceptions are logged and the next handler runs;
 cancellation propagates. Closing a session during one accepted-input callback
 does not suppress later callbacks.
 
-The gate does not suppress partial-recognition or recording-start events. A
-detector supplying no recognized text passes through without classification;
-recognition is not moved from the pipeline into the VAD. Text requests sent
-directly with `invoke` also do not pass through the VAD gate.
+The gate does not suppress partial-recognition or recording-start events.
+Automatic bypass or `TurnTakingBypassGate` allows inputs without
+recognized text. Wakeword gates do not automatically bypass, and a wakeword
+gate before the explicit bypass can reject that input. Recognition is not moved
+from the pipeline into the VAD, so wakeword filtering requires a streaming
+recognizer that supplies text at this point. Text requests sent directly with
+`invoke` also do not pass through the VAD gate.
 
 ### Playback events and progress estimation
 
@@ -335,8 +423,8 @@ For each chunk started by that target time, the estimate includes its spoken
 text. A partial chunk contributes
 `text[:floor(len(text) * elapsed / duration_seconds)]`. Prefixes accumulate within
 the transaction, so a speech end in an earlier chunk or a known gap can still be
-evaluated after the next chunk starts. Ended or expired playback without a
-transaction ID keeps the single-chunk bypass behavior.
+evaluated after the next chunk starts. Automatic bypass and `TurnTakingBypassGate`
+treat ended or expired playback without a transaction ID as a single-chunk bypass.
 
 At a known boundary after a completed chunk, if the next chunk has zero
 estimated characters, the classifier receives a continuation hint: the next
@@ -414,22 +502,40 @@ class CustomTurnTakingGate(TurnTakingGate):
         *,
         session_id: Optional[str] = None,
         assistant_full_text: Optional[str] = None,
+        **kwargs,
     ) -> TurnTakingDecision:
         take_turn = await classify_turn(user_text, assistant_spoken_text, assistant_full_text)
         return TurnTakingDecision(take_turn, None, "custom_classifier")
 
-custom_gate = CustomTurnTakingGate(response_end_grace_seconds=0.3, debug=True)
+custom_gate = CustomTurnTakingGate(debug=True)
 # Pass custom_gate as turn_taking_gate, or include it in a Manager.
 ```
 
-Use `probability=None` if the implementation has no probability score. Handle
-expected provider failures by allowing the turn with a diagnostic reason, and
-preserve `asyncio.CancelledError`. If defining a constructor, call
-`super().__init__()` to initialize the shared policies and registry.
+Return `TurnTakingDecision(None, None, "no_match")` when another gate should
+decide. A prerequisite such as wakeword filtering usually returns `None` on
+success and `False` on failure; `True` would skip the remaining gates. Place
+mandatory checks before `TurnTakingBypassGate`.
+
+Custom gates inherit automatic bypasses when used directly with the VAD. Pass
+`bypass_enabled=False` to the base constructor when a standalone prerequisite
+must always classify. Inside a Manager, these settings are ignored and bypass
+is controlled by the Manager's settings or explicit chain order.
+
+The session also supplies `playback` (the frozen `PlaybackEstimate`),
+`recorded_duration`, `default_skip_condition`, and `is_current` keyword arguments.
+Accept `**kwargs` if the classifier does not use them. The Manager forwards these
+arguments and checks whether the input is still current between children.
+
+Use `probability=None` if the implementation has no probability score. Choose
+an explicit fallback for expected provider failures: ordinary turn-taking
+classification can allow the input, while a required wakeword check should
+block it. Always preserve `asyncio.CancelledError`. If defining a constructor,
+call `super().__init__()` to initialize the registry, policies, and diagnostics.
 
 `base.py` owns the interface, immutable `TurnTakingDecision`, session registry,
-and managed `evaluate()` flow. `session.py` owns playback estimation, bypasses,
-and cancellation; `manager.py` composes classifiers. Provider implementations
+bypass conditions, and managed `evaluate()` flow. `session.py` owns playback
+estimation and cancellation; `manager.py` composes classifiers; `bypass.py` applies
+the shared bypass conditions as an explicit gate. Provider implementations
 only need to classify the supplied context. Generic package exports do not
 import the Jev implementation.
 
@@ -444,6 +550,8 @@ The Jev API log labels the supplemented evaluation text `assistant_spoken_text`
 and includes `user_text`, `should_take_turn`, `probability`, `reason`, and elapsed
 time. Manager debug logs identify each evaluated child's order, class, and result;
 each child's own debug setting controls its classifier diagnostics.
+Bypass-gate results appear as ordinary `event=decision` entries, with the bypass
+identified by `reason`, such as `turn_take_skipped` or `playback_idle`.
 
 `event=superseded` means newer finalized input replaced a pending decision.
 Repeated cleanup does not duplicate `event=session_closed`. These lifecycle
@@ -453,9 +561,12 @@ With debug disabled, these diagnostic logs are silent; failure warnings remain.
 
 Keep the following boundaries in mind:
 
-- Classification is skipped when there is no recognized text, no playback at
-  the estimated time, or no estimated spoken prefix. A configured skip condition
-  or final-response grace can also accept an input without consulting any gate.
+- Standalone gates automatically bypass classification when no recognized text,
+  playback, or estimated spoken prefix is available, unless `bypass_enabled=False`.
+  A skip condition or final-response grace can also allow input. Wakeword gates
+  disable their own automatic bypass. For a chain, place wakeword checks before
+  an explicit `TurnTakingBypassGate`, or disable the Manager's automatic bypass
+  with `bypass_enabled=False`.
 - Progress is an approximation at the user's speech end, not speech onset.
   Network delay and uneven text-to-audio alignment affect it. The continuation
   hint previews unread text; it does not claim the user heard it.
