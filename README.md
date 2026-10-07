@@ -19,6 +19,8 @@
 
 - **⚡️ Ultra-low latency** — streaming and parallel throughout the pipeline, even running STT speculatively and giving a spoken nod before the answer itself. **&lt;1s** from end of speech to first audio, measured.
 
+- **💬 Semantic turn management** — turn end, turn taking, and even the wakeword are judged by meaning, not just by silence or keywords. A thinking pause doesn't cut the user off, a backchannel doesn't interrupt the avatar, and picking up where the last conversation left off wakes it without saying its name.
+
 - **🧩 Modular architecture** — VAD, STT, LLM, and TTS are swappable parts: popular providers are built in, and a small interface covers the rest. A more natural voice or a smarter model ships — your avatar levels up with it.
 
 - **🦜 AI Agent native** — tool calls and MCP, of course. Tools load only when needed, so a large catalog never confuses the model, and slow ones never stall the conversation: background execution, or a reply straight from a template.
@@ -123,8 +125,8 @@ Every component is a swappable module, and these are the implementations that sh
 | Component | Services |
 | --- | --- |
 | **Voice Activity Detection** | [Silero VAD](documents/vad.md#silero-speech-detector) · [Silero VAD (streaming)](documents/vad.md#silero-stream-speech-detector) · [Azure Speech](documents/vad.md#azure-stream-speech-detector) · [Amazon Transcribe](documents/vad.md#aws-stream-speech-detector) · [Parapper](documents/vad.md#parapper-stream-speech-detector) · [volume threshold](documents/vad.md#standard-speech-detector-legacy) |
-| **Turn-end gates** (semantic VAD) | [Smart Turn](documents/vad-turn-end.md#smart-turn-gate) · [Namo Turn](documents/vad-turn-end.md#namo-turn-gate) · [filler-only](documents/vad-turn-end.md#filler-only-gate) · [LLM-based](documents/vad-turn-end.md#llm-turn-gate) · [session hold](documents/vad-turn-end.md#session-hold-gate) · [custom](documents/vad-turn-end.md#custom-gate) |
-| **Turn-taking gates** | [Jev](documents/vad-turn-taking.md#quick-start-with-jev) · [session allowance](documents/vad-turn-taking.md#sessionallowturntakinggate) · [multiple gates](documents/vad-turn-taking.md#combining-multiple-gates) · [custom](documents/vad-turn-taking.md#custom-gates) |
+| **Turn-end gates** | [Smart Turn](documents/vad-turn-end.md#smart-turn-gate) · [Namo Turn](documents/vad-turn-end.md#namo-turn-gate) · [Jev](documents/vad-turn-end.md#jev-turn-gate) · [OpenAI Decisions](documents/vad-turn-end.md#openai-decisions-turn-gate) · [LLM-based](documents/vad-turn-end.md#llm-turn-gate) · [filler-only](documents/vad-turn-end.md#filler-only-gate) · [session hold](documents/vad-turn-end.md#session-hold-gate) · [custom](documents/vad-turn-end.md#custom-gate) |
+| **Turn-taking gates** | [Jev](documents/vad-turn-taking.md#quick-start-with-jev) · [OpenAI Decisions](documents/vad-turn-taking.md#decisionsturntakinggate) · [wakeword](documents/vad-wakeword.md) · [session allowance](documents/vad-turn-taking.md#sessionallowturntakinggate) · [multiple gates](documents/vad-turn-taking.md#combining-multiple-gates) · [custom](documents/vad-turn-taking.md#custom-gates) |
 | **Speech-to-Text** | [Azure Speech](documents/stt.md#azure-speech) · [Google Cloud Speech-to-Text](documents/stt.md#google-cloud-speech-to-text) · [OpenAI](documents/stt.md#openai) · [AmiVoice](documents/stt.md#amivoice), and any OpenAI-compatible endpoint |
 | **LLM** | [OpenAI Chat Completions](documents/llm-chat-completions.md) · [Azure OpenAI](documents/llm-chat-completions.md#azure-openai) · [OpenAI Responses API](documents/llm-responses.md) · [Anthropic Claude](documents/llm-claude.md) · [Google Gemini](documents/llm-gemini.md) · [xAI Grok](documents/llm-openai-compatible.md#xai-grok) · [OpenRouter](documents/llm-openai-compatible.md#openrouter) · [LM Studio](documents/llm-openai-compatible.md#lm-studio) · [Dify](documents/llm-dify.md) · [LiteLLM](documents/llm-litellm.md) |
 | **Text-to-Speech** | [VOICEVOX](documents/tts.md#voicevox) · [AivisSpeech](documents/tts.md#voicevox) · [Azure](documents/tts.md#azure) · [Google](documents/tts.md#google) · [OpenAI](documents/tts.md#openai) · [VOISONA](documents/tts.md#voisona) · [SpeechGateway](documents/tts.md#speechgateway) · [Style-Bert-VITS2](documents/tts-instant.md#style-bert-vits2) · [Aivis Cloud API](documents/tts-instant.md#aivis-cloud-api) · [ElevenLabs](documents/tts-instant.md#elevenlabs) · [Kotodama](documents/tts-instant.md#kotodama) · [CoeFont](documents/tts-instant.md#coefont) · [Amazon Polly](documents/tts-instant.md#amazon-polly) · [COEIROINK](documents/tts-instant.md#coeiroink) |
@@ -401,12 +403,14 @@ person* resume their conversation when they switch channels, add a channel conte
     - Tuning — pre-roll buffer, muting and barge-in, minimum and maximum duration
     - Callbacks — segment recognition, text validation, `on_recording_started`, custom trigger conditions, custom detectors
 - [Semantic turn end](documents/vad-turn-end.md)
-    - Gates — Smart Turn, Namo Turn, filler-only, LLM turn gate, session hold, custom gates
+    - Gates — Smart Turn, Namo Turn, Jev, OpenAI Decisions, LLM turn gate, filler-only, session hold, custom gates
     - Coordination — turn-end gate manager, wait timeouts, background gates
 - [Semantic turn taking](documents/vad-turn-taking.md)
-    - Jev quick start, session allowances, and multiple gates
+    - Gates — Jev, OpenAI Decisions, session allowances, multiple gates
     - Playback context, barge-in policies, custom gates, and diagnostics
+    - [Wakeword activation](documents/vad-wakeword.md) — keyword matching, semantic activation with Jev or OpenAI Decisions, conversation continuation, wakeword gates vs. pipeline wakewords
 - [Audio filters](documents/vad-filters.md) — AGC, high-shelf EQ, near-field gate, session audio recorder
+    - [Hush background-speech filter](documents/vad-filter-hush.md) — suppressing background speech and ambient noise without voice enrollment
 
 ### 👂 Speech-to-Text
 
@@ -480,7 +484,7 @@ person* resume their conversation when they switch channels, add a channel conte
 ### 🔖 Reference
 
 - [Migration guide](documents/migration.md) — v0.6.x to v0.7.0 and later
-- [examples/](examples/) — WebSocket browser UI, local client, Twilio, Asterisk, speech recognition server
+- [examples/](examples/) — WebSocket browser UI, local client, Twilio, Asterisk, speech recognition server, [Realtime API and GPT-Live](examples/websocket/realtime/), [Nod backchannels](examples/nod/) (🧪 experimental)
 
 
 ## ⚖️ License

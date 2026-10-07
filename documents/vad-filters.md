@@ -80,6 +80,7 @@ Filters may keep short internal buffers and return `b""` while warming up. The d
 ## See also
 
 - [Speech detector](vad.md) — attaching filters to a detector
+- [Hush background-speech filter](vad-filter-hush.md) — suppressing background speech and ambient noise without voice enrollment
 - [Semantic turn end](vad-turn-end.md) — deciding when a turn is complete
 
 ---
