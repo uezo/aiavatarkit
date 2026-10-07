@@ -7,6 +7,7 @@ give an answer, or otherwise take a turn.
 
 - [Quick start with Jev](#quick-start-with-jev)
 - [Built-in gates](#built-in-gates)
+- [OpenAI Decisions](#decisionsturntakinggate)
 - [Combining multiple gates](#combining-multiple-gates)
 - [Wakeword filtering](vad-wakeword.md)
 - [Playback and barge-in policies](#playback-and-barge-in-policies)
@@ -122,6 +123,93 @@ Passed directly to the VAD, Jev retains the automatic bypasses shown in the quic
 start. Inside a Manager, its bypass options are ignored; configure the Manager's
 automatic bypass or an explicit `TurnTakingBypassGate` in the chain instead.
 
+### DecisionsTurnTakingGate
+
+`DecisionsTurnTakingGate` uses the [OpenAI Decisions API](https://developers.openai.com/api/docs/guides/decisions)
+to distinguish backchannels from speech that should take the conversational
+floor. Like Jev, it receives `user_text`, `assistant_spoken_text`, and
+`assistant_full_text`, and uses the existing playback estimator and session
+lifecycle. The full text contains known started chunks and may include unheard
+words; it may not contain the entire response.
+
+To use it in the quick-start setup, replace the Jev gate with this configuration
+and keep the same WebSocket playback-event bridge:
+
+```python
+import os
+import httpx
+from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
+from aiavatar.sts.vad.turn_taking_gates.decisions import DecisionsTurnTakingGate
+
+decisions_http_client = httpx.AsyncClient()
+decisions_gate = DecisionsTurnTakingGate(
+    http_client=decisions_http_client,
+    api_key=os.environ["OPENAI_API_KEY"],
+    discard_threshold=0.3,
+)
+vad = SileroStreamSpeechDetector(
+    speech_recognizer=speech_recognizer,
+    turn_taking_gate=decisions_gate,
+)
+```
+
+The application supplies the key and owns the client. Close it with
+`await decisions_http_client.aclose()` after active sessions and pending gate
+work finish. It may be shared with
+[DecisionsTurnEndGate](vad-turn-end.md#openai-decisions-turn-gate) and
+[DecisionsWakewordGate](vad-wakeword.md#semantic-activation-with-openai-decisions).
+No additional SDK or provider extra is required.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `http_client`, `api_key` | Required | Reusable HTTPX async client and OpenAI API key. |
+| `model` | `"gpt-6-luna"` | Decisions model name. |
+| `discard_threshold` | `0.3` | Discard when the take-turn probability is at or below this value. Lower values allow more inputs. |
+| `request_timeout` | `1.0` | Total HTTP request deadline in seconds, also applied to HTTPX I/O phases. |
+| `bypass_enabled` | `True` | Apply automatic playback and duration bypasses when used directly as the VAD gate. |
+| `skip_condition` | `None` | Use the VAD-supplied duration condition unless an explicit predicate is provided. |
+| `response_end_grace_seconds` | `0.0` | Allow replies near the confirmed end without classification; zero disables this policy. |
+| `instructions` | Built-in instructions | Replacement instructions; true must mean take the conversational floor. |
+| `debug` | `False` | Log playback context and classification decisions. |
+
+The named `take_turn` predicate returns the unmodified API probability in
+`TurnTakingDecision.probability`. With the default threshold, `P(take_turn) > 0.3`
+allows input and `P(take_turn) <= 0.3` discards it. Session bypasses work as for
+Jev: configure them on the standalone gate, or on the Manager/an explicit bypass
+gate when composed. Calling `should_take_turn()` directly classifies without
+session-level bypasses. For direct session use and cleanup, see
+[session ownership and cancellation](#session-ownership-and-cancellation).
+
+The prompt and threshold are tuned as a pair. The same acknowledgment can be a
+backchannel during an explanation but an answer after a confirmation question.
+The prompt distinguishes encouragement to continue a story from requests for
+specific new information and ignores questions only present later in the
+unspoken full text. A custom `instructions` string replaces the **entire predicate
+instruction**, including its criteria, and needs separate calibration. Unlike
+Jev, there is no separate criteria field retained after this replacement.
+
+Requests send the three text fields as JSON text `input` to
+`POST https://api.openai.com/v1/decisions`. The gate selects the named `take_turn`
+answer, rejecting missing or duplicate answers, wrong types, invalid JSON,
+and probabilities outside finite `[0, 1]`; booleans are not probabilities.
+Requests are neither automatically retried nor redirected. Empty text skips the API and
+passes with `decisions_no_text`. Timeouts allow the input with
+`decisions_timeout`; other API errors or malformed responses allow it with
+`decisions_error`. These fallback results have no probability. Cancellation
+propagates. Successful classifications use `decisions_take_turn` or
+`decisions_backchannel`. Error logs contain exception types rather than response
+bodies, headers, or exception messages; `debug=True` enables transcript logging.
+
+The test file includes mock-transport checks and live API cases. Live cases run
+automatically when `OPENAI_API_KEY` is available in the environment or
+`pytest.ini`'s `[pytest] env` block, and incur API usage charges. No additional
+opt-in flag is required; only missing credentials cause live cases to skip.
+
+```sh
+python3 -m pytest -c /dev/null --rootdir=. -p no:cacheprovider \
+  tests/sts/vad/test_decisions_gates.py -q
+```
+
 ### TurnTakingBypassGate
 
 This gate explicitly allows inputs that do not need playback-aware
@@ -131,8 +219,8 @@ configured duration or response-end policy matches. Otherwise it returns `None`
 so the next gate can classify the input.
 
 Import it from `aiavatar.sts.vad.turn_taking_gates.bypass`. In a Manager, put it
-before Jev and after mandatory checks such as a wakeword gate. Including this
-gate in the Manager's direct child list disables the Manager's automatic bypass
+before Jev or Decisions and after mandatory checks such as a wakeword gate.
+Including this gate in the Manager's direct child list disables its automatic bypass
 by default, so these conditions apply at the position you choose.
 
 | Option | Default | Meaning |
@@ -266,8 +354,8 @@ their `should_take_turn()` methods. Playback events go to the Manager, and no
 child playback sessions need to be created.
 
 An uncaught provider failure allows the input through normal VAD evaluation;
-it is not treated as deferral. Jev turn-taking timeout/error decisions also
-allow it immediately. Gates that must block on expected failures, such as
+it is not treated as deferral. Jev and Decisions turn-taking timeout/error
+decisions also allow it immediately. Gates that must block on expected failures, such as
 wakeword gates, return `False` themselves. Cancellation propagates. The Manager
 adds no overall timeout, so sequential classifiers can add their individual
 waiting times.
@@ -440,8 +528,8 @@ a transaction ID, this is only the current chunk's full text. Queued chunks that
 have not started and text not yet generated are unknown to the gate. Both text
 fields are frozen before awaiting classification.
 
-Jev uses this full text to interpret answers to a question currently being read.
-A question occurring later in the full text alone does not make every listening
+Jev and Decisions use this full text to interpret answers to a question currently
+being read. A question occurring later in the full text alone does not make every listening
 acknowledgment an answer. Supplying full text improves the available context but
 does not guarantee acceptance of every short answer.
 
@@ -481,7 +569,8 @@ Use a new session ID for each connection. Playback bridges must reject controls
 from disconnected connections before updating state. Evaluation obtains the
 helper when it starts and checks ownership again after classification. Neither
 evaluation nor playback controls recreate missing state. Provider resources,
-including Jev's HTTP client, still require separate application shutdown cleanup.
+including Jev's and Decisions' HTTP clients, still require separate application
+shutdown cleanup.
 
 ### Custom gates
 
@@ -537,7 +626,7 @@ bypass conditions, and managed `evaluate()` flow. `session.py` owns playback
 estimation and cancellation; `manager.py` composes classifiers; `bypass.py` applies
 the shared bypass conditions as an explicit gate. Provider implementations
 only need to classify the supplied context. Generic package exports do not
-import the Jev implementation.
+import the Jev or Decisions implementations.
 
 ## Diagnostics and limitations
 
@@ -546,8 +635,8 @@ With `debug=True` and INFO logging enabled, loggers under
 events, finalized input, bypasses, and decisions. Session logs include
 `transaction_id`, `assistant_spoken_text`, `assistant_full_text`,
 `evaluation_text`, `continuation_hint`, `is_final_chunk`, and `remaining_seconds`.
-The Jev API log labels the supplemented evaluation text `assistant_spoken_text`
-and includes `user_text`, `should_take_turn`, `probability`, `reason`, and elapsed
+The Jev and Decisions API logs label the supplemented evaluation text
+`assistant_spoken_text` and include `user_text`, `should_take_turn`, `probability`, `reason`, and elapsed
 time. Manager debug logs identify each evaluated child's order, class, and result;
 each child's own debug setting controls its classifier diagnostics.
 Bypass-gate results appear as ordinary `event=decision` entries, with the bypass

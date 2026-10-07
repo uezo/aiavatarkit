@@ -7,7 +7,7 @@ utterance is really finished.
 
 AIAvatarKit supports semantic VAD by combining acoustic VAD with optional turn-end gates. The acoustic VAD first detects a turn-end candidate from silence, then turn-end gates inspect audio, recognized text, or model-specific signals to decide whether the user's utterance is semantically complete.
 
-`SileroSpeechDetector` and `SileroStreamSpeechDetector` can use built-in gates such as Smart Turn, Filler-only, Namo Turn, Jev, and LLM-based gates. You can also implement your own `TurnEndGate` when you need domain-specific turn-end logic. Gates are called only after `silence_duration_threshold` has already been reached. All gates must pass to end the turn. If any gate returns "wait", the detector keeps the current recording open until the user resumes speaking or the waiting gate's timeout forces the turn to end.
+`SileroSpeechDetector` and `SileroStreamSpeechDetector` can use built-in gates such as Smart Turn, Filler-only, Namo Turn, Jev, OpenAI Decisions, and LLM-based gates. You can also implement your own `TurnEndGate` when you need domain-specific turn-end logic. Gates are called only after `silence_duration_threshold` has already been reached. All gates must pass to end the turn. If any gate returns "wait", the detector keeps the current recording open until the user resumes speaking or the waiting gate's timeout forces the turn to end.
 
 This is useful for utterances that contain a short pause but are likely to continue, such as trailing conjunctions, filler phrases, or incomplete requests.
 
@@ -210,6 +210,104 @@ Jev runs in the background by default. Inference starts **after** the normal sil
 During a latched silence hold, the manager does not call the API again. Speech resuming cancels a pending decision and allows a fresh decision at the next turn-end candidate. Empty text makes no request and allows the turn to end; request failures, malformed responses, and request timeouts also allow it to end. Task cancellation propagates normally.
 
 Set `turn_end_gates=[jev_gate]` to use Jev alone. If combined with other gates, any waiting gate still holds the turn, and the longest active timeout applies.
+
+## OpenAI Decisions Turn Gate
+
+`DecisionsTurnEndGate` uses the [OpenAI Decisions API](https://developers.openai.com/api/docs/guides/decisions)
+to estimate whether the speaker will continue. Its `hold` predicate returns
+`p_hold`: a higher probability means the turn should remain open. Like Jev, it
+evaluates recognized text; audio is not uploaded. It uses the existing `httpx`
+dependency and needs no additional SDK or provider extra.
+
+Pass your OpenAI API key and an application-owned `httpx.AsyncClient`. The gate
+does not read environment variables itself. In this example, `serve_audio(vad)`
+runs and shuts down the detector, including pending gate work, before returning:
+
+```python
+import os
+
+import httpx
+
+from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
+from aiavatar.sts.vad.turn_end_gates.decisions import DecisionsTurnEndGate
+
+
+async def run(speech_recognizer, serve_audio):
+    async with httpx.AsyncClient() as http_client:
+        decisions_gate = DecisionsTurnEndGate(
+            http_client=http_client,
+            api_key=os.environ["OPENAI_API_KEY"],
+            model="gpt-6-luna",
+            request_timeout=1.0,
+            run_in_background=True,
+        )
+        vad = SileroStreamSpeechDetector(
+            speech_recognizer=speech_recognizer,
+            silence_duration_threshold=0.5,
+            turn_end_gates=[decisions_gate],
+        )
+        await serve_audio(vad)
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `http_client`, `api_key` | Required | Reusable HTTPX async client and OpenAI API key. |
+| `model` | `"gpt-6-luna"` | Decisions model name. |
+| `name` | `"decisions"` | Gate name; use distinct names for multiple instances in one manager. |
+| `hold_ranges` | `((0.6, 0.4), (0.8, 1.0), (0.9, 2.0))` | Pairs of minimum hold probability and additional silence seconds. |
+| `request_timeout` | `1.0` | Total HTTP request deadline in seconds, also applied to HTTPX I/O phases. |
+| `run_in_background` | `True` | Evaluate without blocking audio processing. |
+| `instructions` | Built-in instructions | Replacement instructions; true must mean hold the turn open. |
+| `debug` | `False` | Log successful evaluations, including the transcript. |
+
+The default hold policy matches [Jev's three ranges](#jev-turn-gate): below 0.6
+the turn ends; thresholds of 0.6, 0.8, and 0.9 hold it for an additional 0.4, 1.0,
+and 2.0 seconds respectively. The highest matching threshold wins, including an
+exact boundary match. For custom `hold_ranges`, thresholds must be finite numbers
+in `[0, 1]` in strictly increasing order; durations must be finite positive
+seconds in nondecreasing order. The gate copies the ranges at construction.
+
+The legacy `hold_threshold`, `long_hold_threshold`, `hold_timeout`, and
+`long_hold_timeout` arguments select a two-range policy. Supplying any of
+them fills omitted values with 0.5, 0.8, 0.8 seconds, and 2.0 seconds respectively.
+Do not combine them with `hold_ranges`; omit all policy arguments for the three
+default ranges.
+
+Hold durations count additional silence after the VAD threshold, not after the
+API response. While a background request is pending, the manager uses
+`max(request_timeout, longest_hold_timeout)` as a provisional timeout, with
+reason `decisions_pending` for the default gate name. The actual result replaces
+that provisional hold. Returned `confidence` is `1 - p_hold`.
+
+The request sends one named `hold` predicate to `POST https://api.openai.com/v1/decisions`.
+Its JSON text `input` contains the transcript and recording/silence durations.
+The default instructions reproduce Jev's judging policy and true/false criteria.
+Custom `instructions` replace the **entire predicate instruction**, including
+the criteria; Jev instead keeps a separate criteria field when its instructions
+are customized.
+
+Answers are selected by name rather than array position. Missing or duplicate
+answers, wrong types, invalid JSON, and probabilities outside finite `[0, 1]`
+are rejected; booleans are not probabilities. Empty text skips the API and
+allows completion. Timeouts, HTTP errors, and malformed responses also allow
+completion, with no confidence. Cancellation propagates. Requests are neither
+automatically retried nor redirected. Error logs contain exception types rather
+than response bodies, headers, or exception messages.
+
+Result reasons are `decisions_complete`, `decisions_incomplete`,
+`decisions_long_hold`, `decisions_no_text`, and `decisions_error`.
+For the separate interruption classifier, see
+[DecisionsTurnTakingGate](vad-turn-taking.md#decisionsturntakinggate).
+
+The test file includes mock-transport checks and live API cases. Live cases run
+automatically when `OPENAI_API_KEY` is available in the environment or
+`pytest.ini`'s `[pytest] env` block, and incur API usage charges. No additional
+opt-in flag is required; only missing credentials cause live cases to skip.
+
+```sh
+python3 -m pytest -c /dev/null --rootdir=. -p no:cacheprovider \
+  tests/sts/vad/test_decisions_gates.py -q
+```
 
 ## LLM Turn Gate
 
