@@ -9,7 +9,7 @@ import math
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .session import TurnTakingSession
+    from .session import PlaybackEstimate, TurnTakingSession
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +23,18 @@ def _finite_number(value: Any) -> bool:
         return False
 
 
+def _check_evaluation_current(is_current: Optional[Callable[[], bool]]) -> None:
+    """Reject cancelled or superseded work, including providers that uncancel."""
+    task = asyncio.current_task()
+    if (task is not None and task.cancelling()) or (is_current is not None and not is_current()):
+        raise asyncio.CancelledError
+
+
 @dataclass(frozen=True)
 class TurnTakingDecision:
-    """Decision with an optional probability of taking the turn, not of its label."""
+    """True allows, False blocks, and None continues to the next gate."""
 
-    should_take_turn: bool
+    should_take_turn: Optional[bool]
     probability: Optional[float]
     reason: str
 
@@ -37,16 +44,21 @@ class TurnTakingGate(ABC):
 
     Implement ``should_take_turn()`` to classify user text against the spoken assistant
     prefix. Return ``probability=None`` when the implementation has no score.
-    Expected provider failures should allow the turn with a diagnostic reason;
+    Return None to defer to the next gate; True and False stop the chain.
+    Ordinary provider failures allow the turn with a diagnostic reason.
+    Gates that require a positive match must handle expected failures with False;
     cancellation must propagate instead of becoming an allowed turn.
 
     The gate may be shared between sessions. Keep mutable conversation and
     playback state in the session returned by ``create_session()``. Each owner
     must await its session's ``aclose()``; that does not close provider resources.
 
-    ``skip_condition(text, recorded_duration)`` is synchronous and skips
-    classification only when it returns True. An explicit condition overrides
-    each session's default; use a condition returning False to disable skipping.
+    Standalone managed evaluation applies playback and duration bypasses by
+    default. An explicit ``skip_condition`` overrides the VAD-supplied duration
+    condition; ``bypass_enabled=False`` disables all automatic bypasses.
+    Wakeword gates disable automatic bypasses. Managers infer this setting from
+    the presence of an explicit ``TurnTakingBypassGate`` unless overridden;
+    children's standalone bypass settings are not applied.
 
     ``get_session(create=True)`` registers managed state by session ID, which
     must uniquely identify each connection when sharing this gate.
@@ -57,14 +69,16 @@ class TurnTakingGate(ABC):
     def __init__(
         self, *, response_end_grace_seconds: float = 0.0,
         skip_condition: Optional[Callable[[Optional[str], float], bool]] = None,
+        bypass_enabled: bool = True,
         debug: bool = False,
     ):
         if not _finite_number(response_end_grace_seconds) or response_end_grace_seconds < 0:
             raise ValueError("response_end_grace_seconds must be a finite number greater than or equal to 0")
-        self.response_end_grace_seconds = response_end_grace_seconds
         if skip_condition is not None and not callable(skip_condition):
             raise ValueError("skip_condition must be callable or None")
+        self.response_end_grace_seconds = response_end_grace_seconds
         self.skip_condition = skip_condition
+        self.bypass_enabled = bypass_enabled
         self.debug = debug
         self._sessions: dict[str, "TurnTakingSession"] = {}
 
@@ -190,6 +204,49 @@ class TurnTakingGate(ABC):
                 session_id, recording_id, action, reason,
             )
 
+    def _get_bypass_decision(
+        self, user_text: Optional[str], *,
+        playback: Optional["PlaybackEstimate"] = None,
+        recorded_duration: float = 0.0,
+        default_skip_condition: Optional[Callable[[Optional[str], float], bool]] = None,
+    ) -> Optional[TurnTakingDecision]:
+        """Shared bypass policy for standalone gates and explicit bypass gates."""
+        if not user_text or not user_text.strip():
+            return TurnTakingDecision(True, None, "turn_taking_no_text")
+
+        condition = self.skip_condition if self.skip_condition is not None else default_skip_condition
+        if condition is not None:
+            try:
+                if condition(user_text, recorded_duration) is True:
+                    return TurnTakingDecision(True, None, "turn_take_skipped")
+            except Exception as exc:
+                logger.warning(
+                    "Turn-taking skip condition failed (%s); skipping playback classification",
+                    type(exc).__name__,
+                )
+                return TurnTakingDecision(True, None, "turn_taking_skip_condition_error")
+
+        if playback is not None:
+            if not playback.is_playing:
+                return TurnTakingDecision(True, None, "playback_" + playback.reason)
+            if (
+                playback.reason == "playing" and playback.is_final_chunk
+                and self.response_end_grace_seconds > 0
+                and (
+                    playback.remaining_seconds <= self.response_end_grace_seconds
+                    or math.isclose(
+                        playback.remaining_seconds, self.response_end_grace_seconds,
+                        rel_tol=0.0, abs_tol=1e-9,
+                    )
+                )
+            ):
+                # Preserve the tolerance for rounding at the grace threshold.
+                return TurnTakingDecision(True, None, "playback_response_end_grace")
+            if not playback.assistant_spoken_text.strip():
+                return TurnTakingDecision(True, None, "playback_empty_estimate")
+
+        return None
+
     @abstractmethod
     async def should_take_turn(
         self,
@@ -198,10 +255,18 @@ class TurnTakingGate(ABC):
         *,
         session_id: Optional[str] = None,
         assistant_full_text: Optional[str] = None,
+        playback: Optional["PlaybackEstimate"] = None,
+        recorded_duration: float = 0.0,
+        default_skip_condition: Optional[Callable[[Optional[str], float], bool]] = None,
+        is_current: Optional[Callable[[], bool]] = None,
     ) -> TurnTakingDecision:
         """Classify using the spoken prefix and known text, including unread parts.
 
         ``assistant_full_text`` covers started chunks of the current response;
         it does not imply that the user heard them or that the response is complete.
+        ``playback`` is a snapshot at speech end. ``recorded_duration`` and the
+        session's ``default_skip_condition`` let a bypass gate apply VAD policy.
+        ``is_current`` lets composite gates reject superseded input between children.
+        Implementations may accept unused context through ``**kwargs``.
         """
         pass

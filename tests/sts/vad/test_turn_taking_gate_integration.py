@@ -16,7 +16,8 @@ from aiavatar.sts.vad import SpeechDetectorDummy
 from aiavatar.sts.vad.base import RecordingSessionBase
 from aiavatar.sts.vad.silero import SileroSpeechDetector
 from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
-from aiavatar.sts.vad.turn_taking_gates import TurnTakingDecision, TurnTakingGate
+from aiavatar.sts.vad.turn_taking_gates import TurnTakingDecision, TurnTakingGate, TurnTakingGateManager
+from aiavatar.sts.vad.turn_taking_gates.bypass import TurnTakingBypassGate
 from aiavatar.sts.vad.turn_taking_gates import session as turn_taking_session
 
 
@@ -27,7 +28,7 @@ class FixedGate(TurnTakingGate):
         self.calls = []
         self.full_texts = []
 
-    async def should_take_turn(self, user_text, assistant_spoken_text, *, session_id=None, assistant_full_text=None):
+    async def should_take_turn(self, user_text, assistant_spoken_text, *, session_id=None, assistant_full_text=None, **kwargs):
         self.calls.append((user_text, assistant_spoken_text, session_id))
         self.full_texts.append(assistant_full_text)
         if isinstance(self.outcome, BaseException):
@@ -42,7 +43,7 @@ class BlockingGate(FixedGate):
         self.cancelled = asyncio.Event()
         self.release_cleanup = asyncio.Event()
 
-    async def should_take_turn(self, user_text, assistant_spoken_text, *, session_id=None, assistant_full_text=None):
+    async def should_take_turn(self, user_text, assistant_spoken_text, *, session_id=None, assistant_full_text=None, **kwargs):
         self.calls.append((user_text, assistant_spoken_text, session_id))
         self.full_texts.append(assistant_full_text)
         if user_text != "old input":
@@ -191,7 +192,9 @@ async def test_gate_cancellation_does_not_become_an_allowed_turn(clock):
 @pytest.mark.parametrize("text", [None, "", "  "])
 async def test_missing_recognition_text_passes_to_downstream_stt(clock, text):
     gate = FixedGate(False)
-    vad = SpeechDetectorDummy(turn_taking_gate=gate)
+    bypass = TurnTakingBypassGate()
+    manager = TurnTakingGateManager([bypass, gate])
+    vad = SpeechDetectorDummy(turn_taking_gate=manager)
     begin_playback(vad, clock)
     seen = collect_speech(vad)
     try:
@@ -204,9 +207,17 @@ async def test_missing_recognition_text_passes_to_downstream_stt(clock, text):
 
 
 @pytest.mark.asyncio
-async def test_default_skip_condition_uses_the_live_detector_duration(clock):
+@pytest.mark.parametrize("configuration", ["standalone", "automatic_manager", "explicit_bypass"])
+async def test_default_skip_condition_uses_the_live_detector_duration(clock, configuration):
     gate = FixedGate(False)
-    vad = SpeechDetectorDummy(turn_taking_gate=gate, on_recording_started_min_duration=1.5)
+    if configuration == "explicit_bypass":
+        bypass = TurnTakingBypassGate()
+        configured_gate = TurnTakingGateManager([bypass, gate])
+    elif configuration == "automatic_manager":
+        bypass = configured_gate = TurnTakingGateManager([gate])
+    else:
+        bypass = configured_gate = gate
+    vad = SpeechDetectorDummy(turn_taking_gate=configured_gate, on_recording_started_min_duration=1.5)
     begin_playback(vad, clock)
     seen = collect_speech(vad)
     try:
@@ -217,7 +228,7 @@ async def test_default_skip_condition_uses_the_live_detector_duration(clock):
         await dispatch(vad, text="new boundary", duration=2.0)
         assert [item[1] for item in seen] == ["at boundary", "new boundary"]
         assert [item[0] for item in gate.calls] == ["short", "now short"]
-        assert gate.skip_condition is None
+        assert bypass.skip_condition is None
     finally:
         await vad.finalize_session("session")
 
@@ -258,11 +269,12 @@ async def test_recording_started_notification_alone_does_not_force_a_turn(clock)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("custom_skip_condition", [False, True], ids=["default_skip", "custom_skip"])
 async def test_configured_gate_notifies_recording_start_only_by_voiced_duration(custom_skip_condition):
-    gate = FixedGate(
-        False,
+    gate = FixedGate(False)
+    bypass = TurnTakingBypassGate(
         skip_condition=(lambda text, duration: bool(text)) if custom_skip_condition else None,
     )
-    vad = SpeechDetectorDummy(turn_taking_gate=gate, on_recording_started_min_duration=1.5)
+    manager = TurnTakingGateManager([bypass, gate])
+    vad = SpeechDetectorDummy(turn_taking_gate=manager, on_recording_started_min_duration=1.5)
     recording = RecordingSessionBase("session")
     recording.last_recognized_text = "many recognized characters"
     notified = asyncio.Event()
@@ -345,8 +357,10 @@ async def test_speech_end_metadata_corrects_the_prefix_and_survives_dispatch(clo
 
 @pytest.mark.asyncio
 async def test_explicit_text_condition_replaces_default_duration_condition(clock):
-    gate = FixedGate(False, skip_condition=lambda text, duration: len(text or "") >= 5)
-    vad = SpeechDetectorDummy(turn_taking_gate=gate, on_recording_started_min_duration=1.5)
+    gate = FixedGate(False)
+    bypass = TurnTakingBypassGate(skip_condition=lambda text, duration: len(text or "") >= 5)
+    manager = TurnTakingGateManager([bypass, gate])
+    vad = SpeechDetectorDummy(turn_taking_gate=manager, on_recording_started_min_duration=1.5)
     begin_playback(vad, clock)
     seen = collect_speech(vad)
     try:
@@ -360,8 +374,10 @@ async def test_explicit_text_condition_replaces_default_duration_condition(clock
 
 @pytest.mark.asyncio
 async def test_explicit_false_disables_duration_skip(clock):
-    gate = FixedGate(False, skip_condition=lambda text, duration: False)
-    vad = SpeechDetectorDummy(turn_taking_gate=gate)
+    gate = FixedGate(False)
+    bypass = TurnTakingBypassGate(skip_condition=lambda text, duration: False)
+    manager = TurnTakingGateManager([bypass, gate])
+    vad = SpeechDetectorDummy(turn_taking_gate=manager)
     begin_playback(vad, clock)
     seen = collect_speech(vad)
     try:
@@ -375,8 +391,10 @@ async def test_explicit_false_disables_duration_skip(clock):
 @pytest.mark.asyncio
 async def test_shared_gate_isolates_detector_conditions_and_session_cleanup(clock):
     gate = FixedGate(False)
-    first = SpeechDetectorDummy(turn_taking_gate=gate, on_recording_started_min_duration=1.0)
-    second = SpeechDetectorDummy(turn_taking_gate=gate, on_recording_started_min_duration=2.0)
+    bypass = TurnTakingBypassGate()
+    manager = TurnTakingGateManager([bypass, gate])
+    first = SpeechDetectorDummy(turn_taking_gate=manager, on_recording_started_min_duration=1.0)
+    second = SpeechDetectorDummy(turn_taking_gate=manager, on_recording_started_min_duration=2.0)
     first_state = begin_playback(first, clock, "first-session")
     clock.now = 100.0
     second_state = begin_playback(second, clock, "second-session")
@@ -388,12 +406,12 @@ async def test_shared_gate_isolates_detector_conditions_and_session_cleanup(cloc
         assert len(first_seen) == 1
         assert second_seen == []
         assert len(gate.calls) == 1
-        assert gate.skip_condition is None
+        assert bypass.skip_condition is None
 
         await first.finalize_session("first-session")
         assert first_state.is_closed
         assert not second_state.is_closed
-        assert gate.get_session("second-session") is second_state
+        assert manager.get_session("second-session") is second_state
         assert second_state.estimate_playback().assistant_spoken_text == "abcde"
         await dispatch(second, text="still judged", duration=1.5, session_id="second-session")
         assert second_seen == []
@@ -410,7 +428,9 @@ async def test_shared_gate_isolates_detector_conditions_and_session_cleanup(cloc
 @pytest.mark.parametrize("new_text,new_duration", [("new input", 0.3), ("long input", 2.0), (None, 0.3)])
 async def test_new_input_supersedes_pending_gate_even_when_bypassed(clock, new_text, new_duration):
     gate = BlockingGate()
-    vad = SpeechDetectorDummy(turn_taking_gate=gate)
+    bypass = TurnTakingBypassGate()
+    manager = TurnTakingGateManager([bypass, gate])
+    vad = SpeechDetectorDummy(turn_taking_gate=manager)
     begin_playback(vad, clock)
     seen = collect_speech(vad)
     pending = asyncio.create_task(dispatch(vad, text="old input"))

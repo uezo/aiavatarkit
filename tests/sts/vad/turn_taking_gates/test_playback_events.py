@@ -15,7 +15,7 @@ class LocalGate(TurnTakingGate):
         self.calls = []
         self.full_texts = []
 
-    async def should_take_turn(self, user_text, assistant_spoken_text, *, session_id=None, assistant_full_text=None):
+    async def should_take_turn(self, user_text, assistant_spoken_text, *, session_id=None, assistant_full_text=None, **kwargs):
         self.calls.append((user_text, assistant_spoken_text, session_id))
         self.full_texts.append(assistant_full_text)
         return TurnTakingDecision(False, None, "local_decline")

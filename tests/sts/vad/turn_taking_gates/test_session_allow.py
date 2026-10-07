@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from aiavatar.sts.vad.turn_taking_gates import TurnTakingDecision, TurnTakingGate, TurnTakingGateManager
+from aiavatar.sts.vad.turn_taking_gates.bypass import TurnTakingBypassGate
 from aiavatar.sts.vad.turn_taking_gates.session_allow import SessionAllowTurnTakingGate, SessionTurnAllowance
 import aiavatar.sts.vad.turn_taking_gates.session as playback_module
 import aiavatar.sts.vad.turn_taking_gates.session_allow as allowance_module
@@ -29,7 +30,7 @@ class DecliningGate(TurnTakingGate):
         self.calls = []
         self.full_texts = []
 
-    async def should_take_turn(self, user_text, assistant_spoken_text, *, session_id=None, assistant_full_text=None):
+    async def should_take_turn(self, user_text, assistant_spoken_text, *, session_id=None, assistant_full_text=None, **kwargs):
         self.calls.append((user_text, assistant_spoken_text, session_id))
         self.full_texts.append(assistant_full_text)
         return TurnTakingDecision(False, 0.1, "declined")
@@ -49,9 +50,9 @@ async def test_allowance_is_one_use_and_independent_for_each_session(clock):
 
     assert await classify(gate, "first") == TurnTakingDecision(True, None, "session_allow")
     assert gate.get_allowance("first") is None
-    assert await classify(gate, "first") == TurnTakingDecision(False, None, "session_allow_inactive")
+    assert await classify(gate, "first") == TurnTakingDecision(None, None, "session_allow_inactive")
     assert await classify(gate, "second") == TurnTakingDecision(True, None, "manual_interrupt")
-    assert await classify(gate, "unknown") == TurnTakingDecision(False, None, "session_allow_inactive")
+    assert await classify(gate, "unknown") == TurnTakingDecision(None, None, "session_allow_inactive")
 
 
 @pytest.mark.asyncio
@@ -79,8 +80,8 @@ async def test_expiry_boundary_is_exclusive_and_read_removes_expired_allowance(c
     clock.now = 101.99
     assert (await classify(gate, "before")).should_take_turn
     clock.now = 102.0
-    assert await classify(gate, "at_boundary") == TurnTakingDecision(False, None, "session_allow_expired")
-    assert await classify(gate, "at_boundary") == TurnTakingDecision(False, None, "session_allow_inactive")
+    assert await classify(gate, "at_boundary") == TurnTakingDecision(None, None, "session_allow_expired")
+    assert await classify(gate, "at_boundary") == TurnTakingDecision(None, None, "session_allow_inactive")
     assert gate.get_allowance("read_at_boundary") is None
     assert (await classify(gate, "read_at_boundary")).reason == "session_allow_inactive"
 
@@ -104,11 +105,11 @@ async def test_release_and_reset_are_idempotent_and_session_scoped(clock):
     gate.allow("second")
     gate.release("first")
     gate.release("first")
-    assert not (await classify(gate, "first")).should_take_turn
+    assert (await classify(gate, "first")).should_take_turn is None
     assert gate.get_allowance("second") is not None
     gate.reset_session("second")
     gate.reset_session("second")
-    assert not (await classify(gate, "second")).should_take_turn
+    assert (await classify(gate, "second")).should_take_turn is None
 
 
 def test_allowance_validates_expiry_and_session_id(clock):
@@ -135,7 +136,8 @@ async def test_concurrent_thread_evaluations_consume_only_one_allowance(clock):
     results = await asyncio.gather(
         asyncio.to_thread(evaluate_in_thread), asyncio.to_thread(evaluate_in_thread),
     )
-    assert sum(result.should_take_turn for result in results) == 1
+    assert sum(result.should_take_turn is True for result in results) == 1
+    assert sum(result.should_take_turn is None for result in results) == 1
     assert {result.reason for result in results} == {"session_allow", "session_allow_inactive"}
 
 
@@ -151,7 +153,7 @@ async def test_manager_stops_at_allowance_then_uses_later_gate_for_next_evaluati
     try:
         assert await manager.evaluate("session", "question") == TurnTakingDecision(True, None, "explicit_input")
         assert fallback.calls == []
-        assert await manager.evaluate("session", "yes") == TurnTakingDecision(False, None, "all_gates_declined")
+        assert await manager.evaluate("session", "yes") == TurnTakingDecision(False, 0.1, "declined")
         assert fallback.calls == [("yes", "abcde", "session")]
         assert fallback.full_texts == ["abcdefghij"]
     finally:
@@ -164,11 +166,11 @@ async def test_manager_stops_at_allowance_then_uses_later_gate_for_next_evaluati
 @pytest.mark.parametrize("bypass", ["skip", "grace", "idle"])
 async def test_common_bypasses_leave_allowance_for_next_actual_gate_evaluation(clock, bypass):
     allowance = SessionAllowTurnTakingGate()
-    manager = TurnTakingGateManager(
-        [allowance],
+    bypass_gate = TurnTakingBypassGate(
         skip_condition=(lambda text, duration: True) if bypass == "skip" else None,
         response_end_grace_seconds=0.3 if bypass == "grace" else 0.0,
     )
+    manager = TurnTakingGateManager([bypass_gate, allowance])
     state = manager.get_session("session", create=True)
     if bypass != "idle":
         state.start_playback("chunk", "abcdefghij", 10, transaction_id="response")
@@ -183,8 +185,8 @@ async def test_common_bypasses_leave_allowance_for_next_actual_gate_evaluation(c
         }[bypass]
         assert allowance.get_allowance("session") is not None
 
-        manager.skip_condition = lambda text, duration: False
-        manager.response_end_grace_seconds = 0.0
+        bypass_gate.skip_condition = lambda text, duration: False
+        bypass_gate.response_end_grace_seconds = 0.0
         state.start_playback("next", "klmnopqrst", 10, transaction_id="next_response")
         clock.now += 5
         assert await manager.evaluate("session", "next question") == TurnTakingDecision(True, None, "pending_input")
