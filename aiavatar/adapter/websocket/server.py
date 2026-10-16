@@ -2,8 +2,10 @@ import asyncio
 import base64
 import io
 import logging
+import math
 import re
 import wave
+from time import monotonic
 from typing import List, Dict, Callable, Awaitable, Optional, Iterator
 from uuid import uuid4
 from fastapi import APIRouter, Header, HTTPException, WebSocket, WebSocketException, status
@@ -93,6 +95,7 @@ class WebSocketSessionData:
         self.data = {}
         self.send_lock = asyncio.Lock()
         self.active_transaction_id: Optional[str] = None
+        self.last_response_at = monotonic()
 
 
 class AIAvatarWebSocketServer(Adapter):
@@ -263,6 +266,31 @@ class AIAvatarWebSocketServer(Adapter):
                     session_id=session_id
                 ))
 
+    def set_context_resolver(
+        self,
+        resolver: Callable[[str], Awaitable[Optional[str]]],
+        *,
+        after_idle_seconds: float,
+    ):
+        """Register a user-to-context resolver for idle turns during setup."""
+        if not math.isfinite(after_idle_seconds) or after_idle_seconds <= 0:
+            raise ValueError("after_idle_seconds must be a positive finite number")
+
+        @self.sts.on_accepted(channels=self.channel)
+        async def refresh_context(request: STSRequest):
+            session = self.sessions.get(request.session_id)
+            if session is None or monotonic() - session.last_response_at < after_idle_seconds:
+                return
+            user_id = self.sts.vad.get_session_data(request.session_id, "user_id")
+            if not user_id:
+                return
+            context_id = await resolver(user_id)
+            if self.sessions.get(request.session_id) is not session:
+                return
+            request.user_id = user_id
+            request.context_id = context_id
+            self.sts.vad.set_session_data(request.session_id, "context_id", request.context_id)
+
     def get_config(self) -> dict:
         return {
             "response_audio_chunk_size": self.response_audio_chunk_size,
@@ -429,6 +457,9 @@ class AIAvatarWebSocketServer(Adapter):
                         response.type, response.transaction_id, session_data.active_transaction_id
                     )
                 return
+
+        if response.type == "start":
+            session_data.last_response_at = monotonic()
 
         aiavatar_response = AIAvatarResponse(
             type=response.type,

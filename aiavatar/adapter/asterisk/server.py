@@ -6,6 +6,7 @@ import math
 from numbers import Real
 import re
 import secrets
+from time import monotonic
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Set, TYPE_CHECKING
 from uuid import uuid4
 
@@ -171,6 +172,40 @@ class AIAvatarAsteriskServer(Adapter):
         if self._call_manager is not None and self._call_manager is not manager:
             raise RuntimeError("This Asterisk adapter is already bound to a call manager")
         self._call_manager = manager
+
+    def set_context_resolver(
+        self,
+        resolver: Callable[[str], Awaitable[Optional[str]]],
+        *,
+        after_idle_seconds: float,
+    ):
+        """Refresh context before an invocation after an idle interval.
+
+        Register the resolver once during setup.
+        """
+        if not math.isfinite(after_idle_seconds) or after_idle_seconds <= 0:
+            raise ValueError("after_idle_seconds must be a positive finite number")
+
+        @self.sts.on_accepted(channels=self.channel)
+        async def refresh_context(request: STSRequest):
+            session = self._pipeline_sessions.get(request.session_id)
+            if not session or not self.can_handle(request.session_id) or not session.user_id:
+                return
+            if monotonic() - session.last_response_at < after_idle_seconds:
+                return
+
+            websocket = session.websocket
+            connection_generation = session.connection_generation
+            user_id = session.user_id
+            context_id = await resolver(user_id)
+            if self._pipeline_sessions.get(request.session_id) is not session or not self._owns_media_connection(
+                session, websocket=websocket, connection_generation=connection_generation
+            ):
+                return
+            request.user_id = user_id
+            request.context_id = context_id
+            session.context_id = context_id or ""
+            self.sts.vad.set_session_data(request.session_id, "context_id", context_id)
 
     def on_connect(
         self,
@@ -446,6 +481,7 @@ class AIAvatarAsteriskServer(Adapter):
             session.muted = bool(metadata.get("block_barge_in"))
 
         elif response.type == "start":
+            session.last_response_at = monotonic()
             session.last_mark = ""
             session.unmute_mark = ""
             session.pending_operation = None

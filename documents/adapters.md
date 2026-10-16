@@ -141,7 +141,21 @@ await bridge.link_channel_user(
 )
 ```
 
-The WebSocket client should continue to send its channel-specific ID (`"web-user-123"`) as `user_id`; the bridge resolves it to `"user-123"` before the request reaches the pipeline. After `timeout` seconds without a context update, a request that does not supply its own `context_id` starts a new context.
+The WebSocket client should continue to send its channel-specific ID (`"web-user-123"`) as `user_id`; the bridge resolves it to `"user-123"` before the request reaches the pipeline. After `timeout` seconds without a context update, the bridge stops returning that context. Existing streaming sessions retain their context by default.
+
+For long-lived WebSocket, Twilio Voice, or Asterisk sessions, replace the bind call above with the following to enable context refresh:
+
+```python
+bridge.bind(
+    websocket_adapter,
+    channel_id="websocket",
+    refresh_context_after_idle_seconds=300,
+)
+```
+
+Each streaming session records the time of its last `start` response, initially its creation time. When an invocation arrives at least 300 seconds later, the adapter calls the resolver registered by the bridge and applies the returned `context_id` to that request and session. The resolver receives only the linked application user's ID and returns `None` if no valid context remains; the adapter then clears the old ID and lets the pipeline create a new one. Below the threshold, the adapter performs no extra lookup and preserves the usual request handling. The option defaults to `None` (disabled).
+
+Only `start` responses reset the timer; incoming audio frames and keepalives do not. There is no background polling. This option improves ordinary idle/resume behavior; it does not add synchronization for queued or concurrent turns.
 
 For PostgreSQL storage and custom user ID generation, see [Database](database.md).
 
