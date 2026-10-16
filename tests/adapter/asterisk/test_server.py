@@ -1,12 +1,14 @@
 import asyncio
 import base64
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from aiavatar.adapter.asterisk.protocol import AsteriskProtocolError
 from aiavatar.adapter.asterisk.server import AIAvatarAsteriskServer
-from aiavatar.sts.models import STSResponse
+from aiavatar.sts.models import STSRequest, STSResponse
 
 from .conftest import DummySTS, FakeMediaWebSocket
 
@@ -55,6 +57,92 @@ def _register_media_session(server, session_id="call-1", channel_id="media-1"):
         session_id,
         media_channel_id=channel_id,
     )
+
+
+class ContextRefreshSTS(DummySTS):
+    def on_accepted(self, *, channels):
+        def register(handler):
+            self.accepted_handler = handler
+            return handler
+        return register
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("latest_context_id", ["context-b", None])
+async def test_context_refresh_after_idle_uses_mapped_user_and_private_session(
+    monkeypatch, latest_context_id
+):
+    now = SimpleNamespace(value=100.0)
+    monkeypatch.setattr("aiavatar.adapter.asterisk.server.monotonic", lambda: now.value)
+    sts = ContextRefreshSTS()
+    server = AIAvatarAsteriskServer(sts=sts)
+    server.register_session(
+        "call-1", media_channel_id="media-1", user_id="app-user", context_id="context-a"
+    )
+    session = await server.process_control_frame(FakeMediaWebSocket(), _media_start())
+    session.last_response_at = now.value
+    resolver = AsyncMock(return_value=latest_context_id)
+    server.set_context_resolver(resolver, after_idle_seconds=300)
+    request = STSRequest(
+        session_id="media-1", user_id="channel-user", context_id="context-a", text="hello"
+    )
+
+    try:
+        await sts.accepted_handler(request)
+        resolver.assert_not_awaited()
+
+        now.value = 400.0
+        await sts.accepted_handler(request)
+        resolver.assert_awaited_once_with("app-user")
+        assert request.user_id == "app-user"
+        assert request.context_id == latest_context_id
+        assert session.context_id == (latest_context_id or "")
+        assert sts.vad.get_session_data("media-1", "context_id") == latest_context_id
+        assert "call-1" not in sts.vad.session_data
+
+        now.value = 405.0
+        await server.handle_response(STSResponse(
+            type="start", session_id="media-1", context_id=latest_context_id or "context-new"
+        ))
+        assert session.last_response_at == 405.0
+        now.value = 406.0
+        await sts.accepted_handler(request)
+        resolver.assert_awaited_once()
+    finally:
+        await server.unregister_session("call-1")
+
+
+@pytest.mark.asyncio
+async def test_context_refresh_does_not_update_replacement_media(monkeypatch):
+    monkeypatch.setattr("aiavatar.adapter.asterisk.server.monotonic", lambda: 400.0)
+    sts = ContextRefreshSTS()
+    server = AIAvatarAsteriskServer(sts=sts)
+    server.register_session(
+        "call-1", media_channel_id="media-1", user_id="app-user", context_id="context-a"
+    )
+    old_websocket = FakeMediaWebSocket()
+    session = await server.process_control_frame(old_websocket, _media_start())
+    session.last_response_at = 100.0
+
+    async def resolve_context(user_id):
+        await server._cleanup_media_session(session, expected_websocket=old_websocket)
+        server.register_session("call-1", media_channel_id="media-2", context_id="replacement")
+        await server.process_control_frame(
+            FakeMediaWebSocket(),
+            _media_start(channel_id="media-2", connection_id="connection-2"),
+        )
+        return "context-b"
+
+    server.set_context_resolver(resolve_context, after_idle_seconds=300)
+    request = STSRequest(session_id="media-1", context_id="context-a", text="hello")
+    try:
+        await sts.accepted_handler(request)
+        assert request.context_id == "context-a"
+        assert server.sessions["call-1"].context_id == "replacement"
+        assert sts.vad.get_session_data("media-2", "context_id") == "replacement"
+        assert "media-1" not in sts.vad.session_data
+    finally:
+        await server.unregister_session("call-1")
 
 
 @pytest.mark.asyncio

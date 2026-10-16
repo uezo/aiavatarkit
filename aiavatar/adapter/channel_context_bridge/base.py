@@ -81,9 +81,28 @@ class ChannelContextBridge(ABC):
         return await self.get_context(user_id)
 
     # Hook registration
-    def bind(self, adapter, channel_id: str, auto_create_channel_user: bool = True):
+    def bind(
+        self,
+        adapter,
+        channel_id: str,
+        auto_create_channel_user: bool = True,
+        *,
+        refresh_context_after_idle_seconds: Optional[float] = None,
+    ):
         """Register on_session_start and on_response hooks to sync context_id
-        between the adapter and user_contexts automatically."""
+        between the adapter and user_contexts automatically.
+
+        Persistent adapters can optionally resolve context again after an idle
+        interval. The adapter owns timing and session state.
+        """
+        if refresh_context_after_idle_seconds is not None:
+            async def resolve_context(user_id: str) -> Optional[str]:
+                context = await self.get_context(user_id)
+                return context.context_id if context else None
+
+            adapter.set_context_resolver(
+                resolve_context, after_idle_seconds=refresh_context_after_idle_seconds
+            )
 
         @adapter.on_session_start
         async def on_session_start(request, session_data):

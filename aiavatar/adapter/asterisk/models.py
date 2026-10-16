@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass, field
+from time import monotonic
 from typing import Any, Dict, Optional
 
 
@@ -85,6 +86,7 @@ class AsteriskSessionData:
     transfer_variables: Dict[str, str] = field(default_factory=dict)
     destination_channel_id: str = ""
     holding_bridge_id: str = ""
+    last_response_at: float = field(default_factory=monotonic)
 
     def __post_init__(self) -> None:
         self.media_writable.set()

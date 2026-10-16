@@ -5,6 +5,8 @@ from datetime import datetime
 import io
 import json
 import logging
+import math
+from time import monotonic
 from typing import List, Dict, Callable, Awaitable, Optional
 from uuid import uuid4
 import wave
@@ -45,6 +47,7 @@ class TwilioSessionData:
         self.is_first_utterance_timeout_invoked: bool = False
         self.max_turn: bool = False
         self.idling_start_at: datetime = datetime.now()
+        self.last_response_at: float = monotonic()
         self.data = {}
 
 
@@ -307,6 +310,31 @@ class AIAvatarTwilioServer(Adapter):
                         request.session_id
                     )
 
+    def set_context_resolver(
+        self, resolver: Callable[[str], Awaitable[Optional[str]]], *, after_idle_seconds: float
+    ):
+        """Resolve the context when a conversation resumes after an idle period."""
+        if not math.isfinite(after_idle_seconds) or after_idle_seconds <= 0:
+            raise ValueError("after_idle_seconds must be a positive finite number")
+
+        @self.sts.on_accepted(channels=self.channel)
+        async def refresh_context(request: STSRequest):
+            session_data = self.sessions.get(request.session_id)
+            if session_data is None or monotonic() - session_data.last_response_at < after_idle_seconds:
+                return
+
+            user_id = self.sts.vad.get_session_data(request.session_id, "user_id")
+            if not user_id:
+                return
+
+            context_id = await resolver(user_id)
+            if self.sessions.get(request.session_id) is not session_data:
+                return
+
+            request.user_id = user_id
+            request.context_id = context_id
+            self.sts.vad.set_session_data(request.session_id, "context_id", request.context_id)
+
     def get_config(self) -> dict:
         return {
             "first_utterance_timeout": self.first_utterance_timeout,
@@ -476,6 +504,7 @@ class AIAvatarTwilioServer(Adapter):
                 session_data.muted = True
 
         elif response.type == "start":
+            session_data.last_response_at = monotonic()
             # Reset marks
             session_data.last_mark = ""
             session_data.hang_mark = ""
