@@ -261,3 +261,88 @@ async def test_remote_or_unacknowledged_close_cleans_up(monkeypatch, remote):
         assert socket.closed and not pipeline._sessions
     finally:
         await pipeline.shutdown()
+
+
+def push_tool_response(socket, *, delegation_id="d", response_id="r", calls=None):
+    def push(event):
+        socket.push({"type": "response.event", "delegation_id": delegation_id, "event": event})
+
+    push({"type": "response.created", "response": {"id": response_id}})
+    for call in calls or []:
+        push({"type": "response.output_item.done", "item": {"type": "function_call", **call}})
+    # Live deliberately omits function calls from the terminal output array.
+    push({"type": "response.completed", "response": {"id": response_id, "output": []}})
+
+
+@pytest.mark.asyncio
+async def test_function_results_continue_once_without_blocking_audio(monkeypatch):
+    release = asyncio.Event()
+    received = []
+
+    async def tool(name, arguments, metadata):
+        received.append((name, arguments, metadata))
+        await release.wait()
+        return {"answer": "完了しました"}
+
+    pipeline, sockets, events, _ = create_pipeline(monkeypatch, tool_handler=tool, delegation={
+        "type": "responses", "responses": {"model": "test-model", "tools": [{"type": "function", "name": "wxo"}]},
+    })
+    socket = sockets[0]
+    try:
+        await pipeline.start_session(STSRequest(session_id="s", context_id="c", user_id="u"))
+        push_tool_response(socket, calls=[
+            {"call_id": "first", "name": "wxo", "arguments": '{"message":"予約して"}'},
+            {"call_id": "second", "name": "wxo", "arguments": "invalid json"},
+        ])
+        await until(lambda: received)
+        socket.push({"type": "session.output_audio.delta", "delta": "AQI="})
+        await until(lambda: any(e.audio_data for e in events))
+        assert not any(e["type"] == "response.create" for e in socket.sent)
+        assert received == [("wxo", {"message": "予約して"}, {
+            "session_id": "s", "context_id": "c", "user_id": "u", "channel": None,
+            "delegation_id": "d", "response_id": "r", "call_id": "first",
+        })]
+        release.set()
+        await until(lambda: any(e["type"] == "response.create" for e in socket.sent))
+        results = [e for e in socket.sent if e["type"].startswith("response.")]
+        assert [e["type"] for e in results] == ["response.item.create", "response.item.create", "response.create"]
+        assert results[0]["item"]["call_id"] == "first"
+        assert json.loads(results[0]["item"]["output"]) == {"answer": "完了しました"}
+        assert json.loads(results[1]["item"]["output"]) == {"error": "tool_execution_failed"}
+        assert len(received) == 1
+    finally:
+        await pipeline.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_tool_work_is_scoped_to_session_and_cancelled_on_disconnect(monkeypatch):
+    started, cancelled = set(), set()
+    release = asyncio.Event()
+
+    async def tool(name, arguments, metadata):
+        session_id = metadata["session_id"]
+        started.add(session_id)
+        try:
+            await release.wait()
+            return session_id
+        except asyncio.CancelledError:
+            cancelled.add(session_id)
+            raise
+
+    pipeline, sockets, _, _ = create_pipeline(
+        monkeypatch, sockets=[FakeWebSocket(), FakeWebSocket()], tool_handler=tool,
+    )
+    try:
+        for session_id, socket in zip(("a", "b"), sockets):
+            await pipeline.start_session(STSRequest(session_id=session_id))
+            push_tool_response(socket, calls=[{"call_id": "same", "name": "wxo", "arguments": "{}"}])
+        await until(lambda: started == {"a", "b"})
+        await pipeline.finalize("a")
+        assert cancelled == {"a"}
+        release.set()
+        await until(lambda: any(e["type"] == "response.create" for e in sockets[1].sent))
+        assert not any(e["type"].startswith("response.") for e in sockets[0].sent)
+        result = next(e for e in sockets[1].sent if e["type"] == "response.item.create")
+        assert result["item"]["output"] == "b"
+    finally:
+        await pipeline.shutdown()

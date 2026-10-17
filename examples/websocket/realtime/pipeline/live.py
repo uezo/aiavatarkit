@@ -9,7 +9,7 @@ import logging
 import math
 import os
 from time import monotonic
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from websockets.asyncio.client import connect
 
@@ -43,6 +43,9 @@ class _Session:
     last_output_audio_at: float | None = None
     first_output_audio_at: float | None = None
     output_audio_bytes: int = 0
+    delegation_responses: dict[str, str] = field(default_factory=dict)
+    tool_calls: dict[tuple[str, str], dict[str, dict]] = field(default_factory=dict)
+    tool_tasks: set[asyncio.Task] = field(default_factory=set)
 
 
 class OpenAILivePipeline(StreamingSTSPipeline):
@@ -56,8 +59,8 @@ class OpenAILivePipeline(StreamingSTSPipeline):
     callback. Return processed mono PCM16 at input_sample_rate with
     send_output_audio(); omitting session_id broadcasts to active sessions.
 
-    Responses delegation supports provider-managed tools. Client delegation and
-    application function tools are intentionally outside this initial backend.
+    Responses delegation supports provider-managed tools and application functions
+    through tool_handler(name, arguments, metadata). Client delegation is unsupported.
     """
 
     def __init__(
@@ -69,6 +72,7 @@ class OpenAILivePipeline(StreamingSTSPipeline):
         voice: str = "marin",
         input_sample_rate: int = 16000,
         delegation: dict = None,
+        tool_handler: Callable[[str, dict, dict], Awaitable[Any]] | None = None,
         startup_timeout: float = 15.0,
         close_timeout: float = 5.0,
         output_audio_callback: Callable[[bytes], None] | None = None,
@@ -88,8 +92,10 @@ class OpenAILivePipeline(StreamingSTSPipeline):
         responses = self.delegation.get("responses", {})
         if not responses.get("model"):
             raise ValueError("delegation.responses.model is required")
-        if any(tool.get("type") == "function" for tool in responses.get("tools", [])):
-            raise ValueError("Application function tools are not supported by OpenAILivePipeline")
+        if (any(tool.get("type") == "function" for tool in responses.get("tools", []))
+                and tool_handler is None):
+            raise ValueError("tool_handler is required for application function tools")
+        self.tool_handler = tool_handler
         self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         self.model = model
         self.instructions = instructions
@@ -265,6 +271,9 @@ class OpenAILivePipeline(StreamingSTSPipeline):
                 await self._report_error(session, session.failure)
         finally:
             session.closing = True
+            for task in session.tool_tasks:
+                task.cancel()
+            await asyncio.gather(*session.tool_tasks, return_exceptions=True)
             try:
                 if not session.ready.done():
                     session.ready.set_exception(RuntimeError(session.failure or "GPT-Live startup was interrupted"))
@@ -319,9 +328,72 @@ class OpenAILivePipeline(StreamingSTSPipeline):
                 })
         elif event_type == "response.event":
             # Delegated response.done is not a voice turn completion.
+            self._receive_tool_event(session, event)
             await self._emit(session, "backend_event", metadata={"event": event})
         elif event_type == "session.usage.updated":
             await self._emit(session, "usage", metadata={"usage": event.get("usage")})
+
+    def _receive_tool_event(self, session: _Session, envelope: dict):
+        if self.tool_handler is None:
+            return
+        event = envelope.get("event", {})
+        delegation_id = envelope.get("delegation_id")
+        event_type = event.get("type")
+        if event_type == "response.created":
+            response_id = event["response"]["id"]
+            session.delegation_responses[delegation_id] = response_id
+            session.tool_calls.setdefault((delegation_id, response_id), {})
+            return
+        response_id = (event.get("response", {}).get("id")
+                       or event.get("response_id")
+                       or session.delegation_responses.get(delegation_id))
+        key = (delegation_id, response_id)
+        if event_type == "response.output_item.done":
+            item = event.get("item", {})
+            if item.get("type") == "function_call" and key in session.tool_calls:
+                session.tool_calls[key][item["call_id"]] = item
+        elif event_type in ("response.completed", "response.failed", "response.incomplete"):
+            calls = session.tool_calls.pop(key, {})
+            if session.delegation_responses.get(delegation_id) == response_id:
+                session.delegation_responses.pop(delegation_id, None)
+            if event_type == "response.completed" and calls:
+                task = asyncio.create_task(self._run_tools(session, key, list(calls.values())))
+                session.tool_tasks.add(task)
+                task.add_done_callback(session.tool_tasks.discard)
+
+    async def _run_tools(self, session: _Session, key: tuple[str, str], calls: list[dict]):
+        try:
+            for call in calls:
+                if session.closing or self._sessions.get(session.session_id) is not session:
+                    return
+                metadata = {
+                    "session_id": session.session_id, "context_id": session.context_id,
+                    "user_id": session.user_id, "channel": session.channel,
+                    "delegation_id": key[0], "response_id": key[1], "call_id": call["call_id"],
+                }
+                try:
+                    arguments = json.loads(call["arguments"])
+                    if not isinstance(arguments, dict):
+                        raise ValueError("Function arguments must be an object")
+                    result = await self.tool_handler(call["name"], arguments, metadata)
+                    output = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+                except Exception as exc:
+                    logger.warning("Live tool failed: %s", type(exc).__name__)
+                    output = json.dumps({"error": "tool_execution_failed"})
+                if session.closing or self._sessions.get(session.session_id) is not session:
+                    return
+                await self._send(session, {
+                    "type": "response.item.create",
+                    "item": {"type": "function_call_output", "call_id": call["call_id"], "output": output},
+                })
+            if not session.closing and self._sessions.get(session.session_id) is session:
+                await self._send(session, {"type": "response.create"})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Live tool result delivery failed: %s", type(exc).__name__)
+            if not session.closing:
+                await self._report_error(session, "Could not return tool results")
 
     async def send_output_audio(self, audio: bytes, session_id: str | None = None):
         """Deliver PCM16 at input_sample_rate, bypassing output_audio_callback.

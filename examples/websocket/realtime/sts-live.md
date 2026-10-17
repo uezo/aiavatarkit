@@ -78,10 +78,27 @@ not define turn boundaries, trigger TTS, or identify words already heard.
 Caption text stays in metadata so it is not parsed as avatar control tags.
 
 Responses delegation is configured on the pipeline. Completion of a delegated
-response does not end the voice stream. Application function tools, text/image
+response does not end the voice stream. Text/image
 requests, recording, Admin integration, and persistent conversation history
 are outside this example. A `context_id` does not restore a Live conversation
 after reconnecting.
+
+## Application function tools
+
+Add function definitions to `delegation.responses.tools` and pass an async
+`tool_handler(name, arguments, metadata)` to `OpenAILivePipeline`. The handler
+returns a string or JSON-serializable result. Metadata includes `session_id`,
+`context_id`, `user_id`, `channel`, `delegation_id`, `response_id`, and `call_id`;
+use those application identifiers to keep a backend conversation per user/context.
+
+The pipeline collects completed function items, runs the calls after the backend
+response completes, returns every function result, and sends `response.create`
+once to continue. Tool work runs separately from audio reception and is canceled
+on disconnect. Exceptions become a generic tool error, without forwarding raw
+exception details. Tool handlers should propagate cancellation and close streams.
+The injected handler and its clients remain owned by the application.
+
+This follows the [Live function-result protocol](https://developers.openai.com/api/docs/guides/live-delegation#run-a-custom-function-and-return-its-result).
 
 ## Optional diagnostics
 
