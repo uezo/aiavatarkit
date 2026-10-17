@@ -5,9 +5,20 @@ someone pauses mid-thought — after a conjunction, during a filler, or while re
 name. Turn-end gates run *after* the silence threshold is reached and decide whether the
 utterance is really finished.
 
+- [Smart Turn Gate](#smart-turn-gate)
+- [Filler-Only Gate](#filler-only-gate)
+- [Namo Turn Gate](#namo-turn-gate)
+- [Jev Turn Gate](#jev-turn-gate)
+- [OpenAI Decisions Turn Gate](#openai-decisions-turn-gate)
+- [Microsoft Decision Turn Gate](#microsoft-decision-turn-gate)
+- [LLM Turn Gate](#llm-turn-gate)
+- [Session Hold Gate](#session-hold-gate)
+- [Custom Gate](#custom-gate)
+- [See also](#see-also)
+
 AIAvatarKit supports semantic VAD by combining acoustic VAD with optional turn-end gates. The acoustic VAD first detects a turn-end candidate from silence, then turn-end gates inspect audio, recognized text, or model-specific signals to decide whether the user's utterance is semantically complete.
 
-`SileroSpeechDetector` and `SileroStreamSpeechDetector` can use built-in gates such as Smart Turn, Filler-only, Namo Turn, Jev, OpenAI Decisions, and LLM-based gates. You can also implement your own `TurnEndGate` when you need domain-specific turn-end logic. Gates are called only after `silence_duration_threshold` has already been reached. All gates must pass to end the turn. If any gate returns "wait", the detector keeps the current recording open until the user resumes speaking or the waiting gate's timeout forces the turn to end.
+`SileroSpeechDetector` and `SileroStreamSpeechDetector` can use built-in gates such as Smart Turn, Filler-only, Namo Turn, Jev, OpenAI Decisions, Microsoft Decision, and LLM-based gates. You can also implement your own `TurnEndGate` when you need domain-specific turn-end logic. Gates are called only after `silence_duration_threshold` has already been reached. All gates must pass to end the turn. If any gate returns "wait", the detector keeps the current recording open until the user resumes speaking or the waiting gate's timeout forces the turn to end.
 
 This is useful for utterances that contain a short pause but are likely to continue, such as trailing conjunctions, filler phrases, or incomplete requests.
 
@@ -308,6 +319,83 @@ opt-in flag is required; only missing credentials cause live cases to skip.
 python3 -m pytest -c /dev/null --rootdir=. -p no:cacheprovider \
   tests/sts/vad/test_decisions_gates.py -q
 ```
+
+## Microsoft Decision Turn Gate
+
+`MicrosoftDecisionTurnEndGate` sends recognized text to a deployed
+[Microsoft-Decision-1 model](https://ai.azure.com/catalog/models/Microsoft-Decision-1)
+in Microsoft Foundry. It implements the same Noul hold question and hold-time
+policy as `JevTurnEndGate`, using the deployed model's `answers.hold.noul` value
+as `p_hold`. Audio is not uploaded. It uses the existing `httpx` dependency.
+
+Copy the **full inference endpoint** and **deployment name** from the deployment's
+Details page. Use an API key for that same Foundry resource. An Azure OpenAI key
+for a different resource will not work. The deployment name is sent as `model`;
+it need not be the catalog model name `Microsoft-Decision-1`.
+
+```python
+import os
+
+import httpx
+
+from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
+from aiavatar.sts.vad.turn_end_gates.microsoft_decision import MicrosoftDecisionTurnEndGate
+
+
+async def run(speech_recognizer, serve_audio):
+    async with httpx.AsyncClient() as http_client:
+        decision_gate = MicrosoftDecisionTurnEndGate(
+            http_client=http_client,
+            api_key=os.environ["DECISION_API_KEY"],
+            endpoint=os.environ["DECISION_ENDPOINT"],
+            deployment_name=os.environ["DECISION_DEPLOYMENT_NAME"],
+            request_timeout=1.0,
+            run_in_background=True,
+        )
+        vad = SileroStreamSpeechDetector(
+            speech_recognizer=speech_recognizer,
+            silence_duration_threshold=0.5,
+            turn_end_gates=[decision_gate],
+        )
+        await serve_audio(vad)
+```
+
+For example, `DECISION_ENDPOINT` has the form
+`https://YOUR-RESOURCE.services.ai.azure.com/providers/microsoft/v1/systemone`,
+and `DECISION_DEPLOYMENT_NAME` might be `Decision-1`. The gate sends the key in
+the `api-key` header and does not follow redirects. It does not read environment
+variables or configuration files itself; the application supplies its settings.
+
+The default gate name is `microsoft_decision`. Its default ranges are identical
+to Jev's: below `0.6`, allow the turn to end; from `0.6`, wait up to `0.4` seconds;
+from `0.8`, wait up to `1.0` second; from `0.9`, wait up to `2.0` seconds. These are
+additional silence durations counted from the VAD threshold, not from receipt
+of the API response. `hold_ranges`, the four legacy threshold/timeout options,
+`instructions`, `run_in_background`, and `debug` behave as documented for Jev
+above. Matching defaults do not imply equally calibrated model probabilities;
+evaluate the thresholds with representative transcripts.
+
+The HTTP client remains application-owned. Background requests are canceled
+when speech resumes or the session is reset, and the manager does not repeatedly
+request scores during a latched silence hold. `request_timeout` defaults to
+`1.0` second and bounds the complete request. Empty transcripts, timeouts, HTTP
+errors, and invalid probabilities allow the turn to end. Cancellation propagates.
+`TurnEndDecision.confidence` means `1 - p_hold`. Debug logging includes the text;
+failure logs exclude response bodies, request headers, and exception messages.
+
+To check the API locally with synthetic Japanese examples, set the three
+environment variables above and run:
+
+```sh
+python -m examples.turn_end_gate_microsoft_decision
+python -m examples.turn_end_gate_microsoft_decision --text '確認するので少し待ってください。'
+```
+
+The example makes billable requests and prints the hold probability, selected
+timeout, and client-observed elapsed time. Use `--request-timeout 3` to inspect a
+slow deployment separately from the default one-second gate deadline. Stop audio
+processing and pending gate work before closing the HTTP client in a live app.
+
 
 ## LLM Turn Gate
 
