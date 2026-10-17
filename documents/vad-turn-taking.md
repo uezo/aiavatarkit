@@ -7,7 +7,9 @@ give an answer, or otherwise take a turn.
 
 - [Quick start with Jev](#quick-start-with-jev)
 - [Built-in gates](#built-in-gates)
+- [Jev](#jevturntakinggate)
 - [OpenAI Decisions](#decisionsturntakinggate)
+- [Microsoft Decision](#microsoftdecisionturntakinggate)
 - [Combining multiple gates](#combining-multiple-gates)
 - [Wakeword filtering](vad-wakeword.md)
 - [Playback and barge-in policies](#playback-and-barge-in-policies)
@@ -209,6 +211,70 @@ opt-in flag is required; only missing credentials cause live cases to skip.
 python3 -m pytest -c /dev/null --rootdir=. -p no:cacheprovider \
   tests/sts/vad/test_decisions_gates.py -q
 ```
+
+### MicrosoftDecisionTurnTakingGate
+
+`MicrosoftDecisionTurnTakingGate` uses Microsoft Decision deployed in Azure AI
+Foundry. It uses Jev's Noul question format, context fields, and default discard
+threshold (`0.2`). Its instructions explicitly distinguish short answers to
+a question already spoken or in progress from acknowledgments during an
+explanation. The classifier is asked to allow answers, questions, corrections,
+and stop requests, and to discard confident listening acknowledgments.
+
+Replace the gate in the quick start with:
+
+```python
+import os
+import httpx
+from aiavatar.sts.vad.turn_taking_gates.microsoft_decision import MicrosoftDecisionTurnTakingGate
+
+decision_http_client = httpx.AsyncClient()
+decision_gate = MicrosoftDecisionTurnTakingGate(
+    http_client=decision_http_client,
+    api_key=os.environ["DECISION_API_KEY"],
+    endpoint=os.environ["DECISION_ENDPOINT"],
+    deployment_name=os.environ["DECISION_DEPLOYMENT_NAME"],
+    discard_threshold=0.2,
+    request_timeout=1.0,
+)
+# Pass decision_gate as the VAD's turn_taking_gate.
+```
+
+`endpoint` is the **full HTTPS inference URL**, typically
+`https://YOUR-RESOURCE.services.ai.azure.com/providers/microsoft/v1/systemone`.
+`deployment_name` is your Azure deployment name (for example, `Decision-1`),
+sent in the `model` field. The key is sent in the `api-key` header. Redirects
+are not followed.
+
+The remaining options and defaults match [Jev](#jevturntakinggate):
+`request_timeout`, `discard_threshold`, `response_end_grace_seconds`,
+`skip_condition`, `bypass_enabled`, `instructions`, and `debug`.
+`probability` is the probability of **taking the turn**; a value at or below
+`discard_threshold` returns `False` with `microsoft_decision_backchannel`.
+Higher values return `True` with `microsoft_decision_take_turn`.
+Missing user text allows the turn with `microsoft_decision_no_text`.
+Timeouts (`microsoft_decision_timeout`) and other API/response failures
+(`microsoft_decision_error`) allow the turn with `probability=None`.
+Cancellation propagates. `debug=True` logs the conversation text and decision.
+
+Playback estimation, per-session cancellation, automatic bypasses, and
+`TurnTakingGateManager` composition use the existing shared implementation.
+In a Manager, configure bypass policies on the Manager or an explicit
+`TurnTakingBypassGate`. The HTTP client remains application-owned; close it
+after active sessions have finished. It can be shared with
+[`MicrosoftDecisionTurnEndGate`](vad-turn-end.md#microsoft-decision-turn-gate).
+When both gates are enabled, the turn-taking API request runs after turn-end
+evaluation releases the recording, so both calls contribute to response latency.
+
+For a text-only API check, set the three environment variables above and run:
+
+```sh
+python -m examples.turn_taking_gate_microsoft_decision --request-timeout 3
+```
+
+This makes six billable calls covering acknowledgments, an answer to a question,
+a stop request, a correction, and a new question. The `3`-second example deadline
+helps inspect results; the library default remains `1.0` second.
 
 ### TurnTakingBypassGate
 
