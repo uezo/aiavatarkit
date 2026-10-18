@@ -1,5 +1,5 @@
 """Hush background-speech suppression."""
 
-from .hush import HushAudioFilter
+from .hush import HushAudioBufferError, HushAudioFilter
 
-__all__ = ["HushAudioFilter"]
+__all__ = ["HushAudioBufferError", "HushAudioFilter"]

@@ -1,6 +1,14 @@
 from abc import ABC, abstractmethod
 
 
+class RecoverableAudioFilterError(Exception):
+    """Drop this chunk; the filter can accept later input without a reset.
+
+    Filters must not retain the rejected input for retry. Configuration errors
+    and failures that leave a filter unusable must use other exception types.
+    """
+
+
 class AudioFilter(ABC):
     """Transforms audio samples (16-bit linear PCM) before VAD processing.
 
@@ -12,8 +20,9 @@ class AudioFilter(ABC):
 
     A filter may hold audio back internally (e.g. a lookahead buffer)
     and return fewer or more bytes than it received, including b"" while
-    warming up. The only requirement is that audio is conserved over the
-    session.
+    warming up. Audio is conserved over successful processing. A filter may
+    raise RecoverableAudioFilterError to discard a chunk after a transient
+    failure; the detector skips the remaining filters and keeps the session.
     """
 
     @abstractmethod

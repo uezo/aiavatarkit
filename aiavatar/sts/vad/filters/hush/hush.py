@@ -16,7 +16,7 @@ import threading
 
 import numpy as np
 
-from ..base import AudioFilter
+from ..base import AudioFilter, RecoverableAudioFilterError
 from .assets import resolve_library_path, resolve_model_path
 
 
@@ -24,6 +24,10 @@ _SAMPLE_RATE = 16000
 _FRAME_SAMPLES = 160
 _FRAME_BYTES = _FRAME_SAMPLES * 2
 _DELAY_BYTES = _FRAME_BYTES  # FFT (320) - hop (160), zero-lookahead model.
+
+
+class HushAudioBufferError(BufferError, RecoverableAudioFilterError):
+    """The incoming chunk would exceed the session's pending-audio limit."""
 
 
 @dataclass
@@ -356,7 +360,7 @@ class HushAudioFilter(AudioFilter):
             limit = max(_FRAME_BYTES, len(samples) // 2 * 2) if samples else len(state.ready)
             available = min(limit, len(state.ready))
             if state.outstanding + len(samples) - available > self._max_pending_bytes:
-                raise BufferError("Hush audio backlog exceeded max_pending_duration; reset the session")
+                raise HushAudioBufferError("Hush audio backlog exceeded max_pending_duration")
             if samples:
                 state.jobs.append(self._submit(state, self._call, "process", state.audio, samples))
                 state.outstanding += len(samples)

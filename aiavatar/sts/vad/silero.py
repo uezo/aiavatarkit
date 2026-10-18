@@ -11,7 +11,7 @@ import torch
 from typing import Any, AsyncGenerator, Callable, List, Optional, Dict, Awaitable
 from . import SpeechDetector
 from .base import RecordingSessionBase
-from .filters.base import AudioFilter
+from .filters.base import AudioFilter, RecoverableAudioFilterError
 from .turn_end_gates.base import TurnEndGate
 from .turn_taking_gates import TurnTakingGate
 from .turn_end_gates.manager import TurnEndGateManager
@@ -375,18 +375,29 @@ class SileroSpeechDetector(SpeechDetector):
             recorded_data, None, metadata, recorded_duration, session_id
         )
 
+    def _apply_audio_filters(self, samples: bytes, session_id: str) -> bytes:
+        for audio_filter in self.audio_filters:
+            try:
+                samples = audio_filter.process(samples, session_id)
+            except RecoverableAudioFilterError as exc:
+                logger.warning(
+                    "Dropped audio chunk after recoverable filter error: filter=%s, session=%s, audio_bytes=%s, error=%s",
+                    type(audio_filter).__name__, session_id, len(samples), exc,
+                )
+                return b""
+        return samples
+
     async def process_samples(self, samples: bytes, session_id: str) -> bool:
         if self.to_linear16:
             samples = self.to_linear16(samples)
 
         # Apply acoustic filters (near-field gate, noise suppression, etc.)
-        for audio_filter in self.audio_filters:
-            samples = audio_filter.process(samples, session_id)
+        samples = self._apply_audio_filters(samples, session_id)
 
         session = self.get_session(session_id)
 
         if not samples:
-            # A filter is holding audio back (e.g. lookahead buffer warming up)
+            # A filter is buffering audio, or this chunk was dropped.
             return session.is_recording
 
         if self.should_mute():

@@ -9,12 +9,16 @@ import threading
 
 import pytest
 
-from aiavatar.sts.vad.filters.hush import HushAudioFilter
+from aiavatar.sts.vad.filters.hush import HushAudioBufferError, HushAudioFilter
+from aiavatar.sts.vad.filters import RecoverableAudioFilterError
 
 
 def test_public_hush_import_reexports_implementation():
     module = importlib.import_module("aiavatar.sts.vad.filters.hush.hush")
     assert HushAudioFilter is module.HushAudioFilter
+    assert HushAudioBufferError is module.HushAudioBufferError
+    assert issubclass(HushAudioBufferError, BufferError)
+    assert issubclass(HushAudioBufferError, RecoverableAudioFilterError)
 
 
 class _CFunction:
@@ -738,22 +742,28 @@ async def test_process_and_reset_do_not_wait_for_inference(make_filter, native):
 
 
 @pytest.mark.asyncio
-async def test_backlog_limit_rejects_audio_without_passthrough(make_filter, native):
+async def test_backlog_limit_rejects_audio_and_recovers_without_reset(make_filter, native):
     instance = make_filter(max_pending_duration=0.02)
     await instance.prepare()
     native.process_release.clear()
-    instance.process(_pcm([100] * 320), "speaker")
+    accepted = _pcm([100] * 320)
+    assert instance.process(accepted, "speaker") == b""
     await _started(native)
+    state = instance._sessions["speaker"]
+    job = state.jobs[-1]
     try:
-        with pytest.raises((BufferError, RuntimeError)):
+        with pytest.raises(HushAudioBufferError, match="max_pending_duration"):
             instance.process(_pcm([200] * 160), "speaker")
     finally:
         native.process_release.set()
-    instance.reset_session("speaker")
+
+    await asyncio.wait_for(asyncio.wrap_future(job), 2)
     fresh = _pcm([-50] * 160)
     output = instance.process(fresh, "speaker")
+    assert instance._sessions["speaker"] is state
     output += await instance.flush_async("speaker")
-    assert output == fresh
+    # Accepted audio survives and the rejected chunk is neither queued nor retried.
+    assert output == accepted + fresh
 
 
 @pytest.mark.asyncio

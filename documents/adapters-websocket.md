@@ -55,6 +55,10 @@ You can now perform voice interactions just like when running locally.
 
 **NOTE:** When using the WebSocket API, voice activity detection (VAD) is performed on the server side, so clients can simply stream microphone input directly to the server.
 
+The Silero detectors handle [recoverable audio-filter errors](vad-filters.md#recoverable-errors)
+by dropping the affected chunk before VAD processing. The adapter can then
+continue receiving on the same connection, without filter-specific handling.
+
 
 ## Audio delivery
 
