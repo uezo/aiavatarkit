@@ -77,6 +77,24 @@ class MyAudioFilter(AudioFilter):
 
 Filters may keep short internal buffers and return `b""` while warming up. The detector treats this as "no output yet" and keeps the current recording state unchanged.
 
+## Recoverable errors
+
+A filter can raise `RecoverableAudioFilterError` (importable from
+`aiavatar.sts.vad.filters`) for a transient failure when it can accept subsequent
+input without a reset. The rejected input must not be retained for retry.
+
+`SileroSpeechDetector` and `SileroStreamSpeechDetector` handle this exception in
+their shared filter processing: they log a warning, discard the affected chunk,
+and skip the remaining filters and VAD processing for that call. Subsequent
+calls continue normally. They do not pass unfiltered audio through, retry the
+chunk, or reset the filters or recording session. Existing buffered audio and
+session metadata are preserved, so audio gaps and existing latency can remain.
+
+Other exceptions still propagate. Use an ordinary exception for configuration
+errors or failures that leave the filter unusable; marking those as recoverable
+would hide a persistent failure. Direct calls to a filter's `process()` still
+receive its exceptions; recovery is implemented by the detectors.
+
 ## See also
 
 - [Speech detector](vad.md) — attaching filters to a detector

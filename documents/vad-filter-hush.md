@@ -226,8 +226,23 @@ It does not wait for inference to finish, so it may return empty audio, particul
 Processed audio is returned on a subsequent call, so keep supplying input, including silence.
 In addition to model processing, worker wait times and the handoff of roughly one input chunk add latency.
 
-If the duration of audio not yet returned exceeds `max_pending_duration`, the filter raises `BufferError`.
-Stop and reset the stream, then review the number of concurrent conversations and workers.
+If accepting a chunk would exceed `max_pending_duration`, the filter raises
+`HushAudioBufferError`, exported from `aiavatar.sts.vad.filters.hush`. It is a
+subclass of both `BufferError` and the common `RecoverableAudioFilterError`.
+The rejected chunk is not queued; previously accepted audio continues processing.
+
+`SileroSpeechDetector` and `SileroStreamSpeechDetector` catch the common
+[recoverable filter error](vad-filters.md#recoverable-errors), log a warning, and
+discard the rejected chunk before VAD processing. This lets adapters continue
+receiving without Hush-specific handling.
+They do not retry the chunk or reset Hush or VAD. Later chunks can be accepted
+once processed output is available. This can leave gaps in the audio and retain
+existing latency; it does not fix the cause of the backlog. Other filter and
+inference errors still propagate.
+
+Direct filter callers still receive the exception and choose whether to drop
+the chunk or reset the stream. Review input bursts and processing throughput
+when overflows recur.
 
 ### Processing files and other finite audio streams
 

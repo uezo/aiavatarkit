@@ -243,13 +243,12 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
             samples = self.to_linear16(samples)
 
         # Apply acoustic filters (near-field gate, noise suppression, etc.)
-        for audio_filter in self.audio_filters:
-            samples = audio_filter.process(samples, session_id)
+        samples = self._apply_audio_filters(samples, session_id)
 
         session = self.get_session(session_id)
 
         if not samples:
-            # A filter is holding audio back (e.g. lookahead buffer warming up)
+            # A filter is buffering audio, or this chunk was dropped.
             return session.is_recording
 
         if self.should_mute():
