@@ -533,6 +533,185 @@ openclaw_tool.update_openclaw_config("user_id", OpenClawConfig(
 ))
 ```
 
+## Grok Bot
+
+`GrokBotTool` sends a job to Grok Bot over HTTP and waits for its webhook response.
+This integration uses a custom webhook contract that you need to agree on with
+your Grok Bot.
+
+### Agree on the webhook integration with Grok Bot
+
+Ask Grok Bot to accept tasks from your agent and return the results via webhook.
+The message below explains the JSON formats expected by `GrokBotTool` and asks
+Grok Bot to provide a request webhook URL and an API key to protect it.
+
+Before sending the message, prepare a callback endpoint reachable from Grok Bot
+and choose a key to authenticate callbacks. Replace `<CALLBACK_URL>` and
+`<RESPONSE_KEY>` with those values. The example in "Connect the tool" below shows
+how to add the callback endpoint to your app.
+If you change the tool's `timeout`, adjust the five-minute interval in the message.
+
+```text
+I'd like to send you tasks from another AI agent I use. I plan to exchange both
+requests and responses through webhook calls, using the JSON formats described
+below. Please provide a webhook URL for sending you requests and an API key to
+protect that endpoint.
+
+Accept HTTP POST requests with Content-Type: application/json. Authenticate the
+Authorization header, which will contain "Bearer " followed by the request key
+you provide.
+
+The request JSON will look like this:
+{"text": "The task to perform", "request_id": "request-123", "requested_at": "2026-01-01T00:00:00+00:00"}
+
+text is the task, request_id identifies this request, and requested_at is its
+original submission time in UTC.
+After accepting the request, return HTTP 200 or 202 immediately and perform the
+task in the background. The HTTP response body can be a simple acknowledgement;
+send the actual answer through the callback below.
+
+For callbacks, POST JSON to <CALLBACK_URL> with these headers:
+Authorization: Bearer <RESPONSE_KEY>
+Content-Type: application/json
+
+Always copy the original request_id unchanged. Use these status values:
+
+Progress update:
+{"request_id": "request-123", "status": "progress", "text": "Finished checking the sources; now preparing the answer."}
+
+Final answer:
+{"request_id": "request-123", "status": "done", "text": "The final answer."}
+
+Cancellation:
+{"request_id": "request-123", "status": "canceled"}
+
+progress and done require a string text. canceled does not require text.
+For long tasks, send progress describing what is finished or currently happening
+before five minutes pass without an update. Each progress update resets the
+five-minute wait. Finish each request with one done or canceled callback.
+
+Use canceled only when a request is withdrawn or a later correction makes its
+result unnecessary. Send canceled with the old request's ID, and handle the new
+request under its own ID. Independent requests should continue independently;
+a newer request alone is not a reason to cancel an earlier one.
+Cancellation is silent on the user's side. If a task fails or cannot be completed,
+send done with an explanation in text so the user receives an answer.
+
+You may include requested_at in callbacks, but it is optional. If included, copy
+the original value unchanged.
+```
+
+Configure the URL and request key returned by Grok Bot as `GROKBOT_WEBHOOK_URL`
+and `GROKBOT_WEBHOOK_KEY` in your app. Set `GROKBOT_WEBHOOK_RESPONSE_KEY` to the
+response key you supplied in the message. The callback URL is configured on
+Grok Bot's side, rather than included in each request.
+
+### Connect the tool
+
+`requested_at` is the original submission time in ISO 8601 UTC. Grok Bot can echo
+it in callbacks, but the tool retains its own copy, so the echo is optional. Include
+this timestamp and the original request in completion instructions so the LLM can
+recognize a request superseded or canceled in later conversation. Older independent
+requests remain useful; the tool does not discard their results automatically.
+
+Add the following to your existing FastAPI app, using its `app`, `llm`, and
+`aiavatar_app` instances. Register the completion callback **before** `llm.add_tool`
+to enable background execution and deliver the answer to the originating session:
+
+```python
+import os
+from fastapi import HTTPException, Request
+from aiavatar.sts.llm.tools.grokbot_tool import GrokBotTool
+from aiavatar.sts.models import STSRequest
+
+grokbot_tool = GrokBotTool(
+    webhook_url=os.environ["GROKBOT_WEBHOOK_URL"],
+    webhook_key=os.environ["GROKBOT_WEBHOOK_KEY"],
+)
+response_key = os.environ["GROKBOT_WEBHOOK_RESPONSE_KEY"]
+
+@grokbot_tool.on_completed
+async def on_grokbot_completed(result, metadata):
+    if result is None:
+        notification = "Grok Bot request failed."
+    else:
+        notification = (
+            f"Request ID: {result['request_id']}\n"
+            f"Requested at: {result['requested_at']}\n"
+            f"Original request: {result['request']}\n\n"
+            f"Answer: {result['answer']}"
+        )
+    async for response in aiavatar_app.sts.invoke(
+        STSRequest(
+            session_id=metadata["session_id"],
+            user_id=metadata["user_id"],
+            context_id=metadata["context_id"],
+            channel=metadata.get("channel"),
+            text=(
+                "$Grok Bot returned a response. Consider later conversation: "
+                "if this request was superseded or canceled, remain silent. "
+                "Do not suppress an independent request merely because it is older. "
+                "Otherwise, relay the relevant result to the user.\n\n"
+                f"{notification}"
+            ),
+            allow_merge=False,
+            wait_in_queue=True,
+            skip_quick_response=True,
+        )
+    ):
+        await aiavatar_app.handle_response(response)
+
+llm.add_tool(grokbot_tool)
+llm.add_tool(grokbot_tool.create_check_tool())
+
+@app.post("/grokbot/callback")
+async def grokbot_callback(request: Request):
+    if request.headers.get("Authorization") != f"Bearer {response_key}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    payload = await request.json()
+    grokbot_tool.receive_response(
+        payload["request_id"], payload.get("text"), payload.get("status", "done")
+    )
+    return {"ok": True}
+```
+
+The LLM calls `send_query_to_grokbot(query="...")`. Its `request_id` is the background
+`task_id`, or a new UUID when called without one. `requested_at` uses the tool's
+`submitted_at` metadata when available, otherwise the current time.
+`receive_response(request_id, text=None, status="done")` returns whether it accepted
+the update for a pending request. `done` completes the request with the result
+`{"answer": text, "request_id": "...", "requested_at": "...", "request": query}`.
+Without an `on_completed` callback, execution waits for that result normally.
+See [Background Tool Execution](tools.md#background-tool-execution) for other
+delivery patterns.
+
+`canceled` ends the request silently, discards its accumulated progress, and skips
+`on_completed`. Later callbacks for that request ID are ignored; other requests
+continue normally. Use `canceled` for requests whose results are no longer needed.
+To report a failure to the user, send `done` with explanatory `text` instead.
+
+Progress messages accumulate until completion or cancellation without triggering
+spoken notifications, like OpenClaw/Hermes progress tracking. The check tool's default name is
+`check_running_grokbot_tasks`; it returns `running_tasks` with `request_id`, `request`,
+`requested_at`, and `progress`, scoped to the current context and user. This lets the
+avatar answer questions such as "How's it going?" from the received updates.
+
+Requests run independently, so a slow earlier request does not block a later result.
+With the pipeline's invocation queue enabled, completion notifications are queued in
+the order they reach the queue, rather than the original submission order.
+
+`timeout=300.0` controls the callback inactivity timeout in seconds. The initial
+five-minute window starts after the outbound HTTP request completes; each accepted
+`progress` update resets that request's deadline to five minutes from the update
+(or the configured `timeout`). A job can therefore keep running longer than five
+minutes while progress continues. If no further progress or final response arrives
+within that window, it times out. Updates for one request do not extend other requests.
+`http_timeout=30.0` separately controls the outbound HTTP request and is not reset
+by progress updates.
+Pending requests live in memory, so run the tool and callback in one worker;
+restarting loses pending requests. Call
+`await grokbot_tool.aclose()` in your application's shutdown/lifespan cleanup.
+
 ## See also
 
 - [Tools](tools.md) — registering tools and shaping their output
