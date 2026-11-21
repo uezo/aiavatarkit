@@ -383,6 +383,14 @@ adapter = AIAvatarWebSocketServer(
 )
 ```
 
+The WebSocket server also mutes output that has not been sent yet. It drops the rest of
+the response in progress, and of any response accepted while the user is still speaking,
+even when the response has not started speaking. Each of them ends with an empty `final`
+marked `interrupted`, so tags in the dropped text do not run. A response accepted after
+the user stops speaking is delivered as usual. Generation in the pipeline is not
+cancelled, so the conversation context keeps each muted exchange, including the part that
+was not played.
+
 Use `should_mute` directly when the decision depends on something the adapter does not know
 about — a push-to-talk button, a physical switch, or a state machine in your application.
 

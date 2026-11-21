@@ -375,3 +375,194 @@ async def test_audio_chunk_loop_breaks_on_transaction_change():
         AIAvatarResponse.model_validate_json(message).transaction_id == "txn_1"
         for message in ws.sent_messages
     )
+
+
+class HeldWebSocket(MockWebSocket):
+    """Keeps one write in progress until released, so that other writes queue on the send lock."""
+
+    def __init__(self):
+        super().__init__()
+        self.hold = None
+
+    async def send_text(self, message: str):
+        hold, self.hold = self.hold, None
+        if hold is not None:
+            await hold.wait()
+        await super().send_text(message)
+
+
+def sent_summary(ws):
+    import json
+    return [
+        (m["type"], m["transaction_id"], m["text"], bool((m.get("metadata") or {}).get("interrupted")))
+        for m in map(json.loads, ws.sent_messages)
+    ]
+
+
+def accepted_response(session_id, transaction_id):
+    return STSResponse(
+        type="accepted",
+        session_id=session_id,
+        transaction_id=transaction_id,
+        metadata={"block_barge_in": False}
+    )
+
+
+@pytest.mark.asyncio
+async def test_audio_queued_before_a_newer_accepted_does_not_follow_its_final():
+    """Audio checked before a newer accepted is sent before the old final, and none after it"""
+    import io
+    import wave
+
+    session_id = "test_session"
+    server, session_data, _ = create_server_with_session(session_id, response_audio_chunk_size=2)
+    ws = HeldWebSocket()
+    server.websockets[session_id] = ws
+    session_data.active_transaction_id = "txn_1"
+    wav_buffer = io.BytesIO()
+    with wave.open(wav_buffer, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(b"\x00\x01" * 4)  # Four 2-byte PCM chunks
+
+    release = asyncio.Event()
+    ws.hold = release
+    # Another write holds the send lock, so the audio queues behind it.
+    other = asyncio.create_task(server.send_response(AIAvatarResponse(type="voiced", session_id=session_id)))
+    await asyncio.sleep(0)
+    streaming = asyncio.create_task(server.handle_response(STSResponse(
+        type="chunk",
+        session_id=session_id,
+        transaction_id="txn_1",
+        text="audio",
+        voice_text="audio",
+        audio_data=wav_buffer.getvalue(),
+        metadata={}
+    )))
+    await asyncio.sleep(0)
+    switching = asyncio.create_task(server.handle_response(accepted_response(session_id, "txn_2")))
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(other, streaming, switching)
+
+    messages = sent_summary(ws)
+    final_index = messages.index(("final", "txn_1", "", True))
+    assert all(message[1] != "txn_1" for message in messages[final_index + 1:])
+    assert messages[-1] == ("accepted", "txn_2", None, False)
+
+
+@pytest.mark.asyncio
+async def test_final_handled_during_a_newer_accepted_is_not_sent_after_the_interruption():
+    """The old transaction's own final does not follow its interrupted final"""
+    session_id = "test_session"
+    server, session_data, _ = create_server_with_session(session_id)
+    ws = HeldWebSocket()
+    server.websockets[session_id] = ws
+    session_data.active_transaction_id = "txn_1"
+
+    release = asyncio.Event()
+    ws.hold = release  # The interrupted final for txn_1 stays in progress.
+    switching = asyncio.create_task(server.handle_response(accepted_response(session_id, "txn_2")))
+    await asyncio.sleep(0)
+    finishing = asyncio.create_task(server.handle_response(STSResponse(
+        type="final",
+        session_id=session_id,
+        transaction_id="txn_1",
+        text="done [vision:camera]",
+        voice_text="done"
+    )))
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(switching, finishing)
+
+    assert [message for message in sent_summary(ws) if message[1] == "txn_1"] == [
+        ("final", "txn_1", "", True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_finished_transaction_is_not_closed_again_by_the_next_accepted():
+    """A transaction that sent its own final gets no interrupted final"""
+    session_id = "test_session"
+    server, session_data, ws = create_server_with_session(session_id)
+    session_data.active_transaction_id = "txn_1"
+
+    await server.handle_response(STSResponse(
+        type="final",
+        session_id=session_id,
+        transaction_id="txn_1",
+        text="done",
+        voice_text="done"
+    ))
+    await server.handle_response(accepted_response(session_id, "txn_2"))
+
+    assert sent_summary(ws) == [
+        ("final", "txn_1", "done", False),
+        ("accepted", "txn_2", None, False),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_type", ["accepted", "start"])
+async def test_response_replaced_while_hooks_run_does_not_follow_the_interruption(response_type):
+    """accepted or start of a transaction replaced while response hooks run is not sent after its interrupted final"""
+    session_id = "test_session"
+    server, session_data, ws = create_server_with_session(session_id)
+    if response_type == "start":
+        session_data.active_transaction_id = "txn_1"
+    release = asyncio.Event()
+
+    async def slow_hook(aiavatar_response, response):
+        if response.transaction_id == "txn_1":
+            await release.wait()
+
+    server._on_response_handlers.append(slow_hook)
+    handling = asyncio.create_task(server.handle_response(STSResponse(
+        type=response_type,
+        session_id=session_id,
+        transaction_id="txn_1",
+        metadata={}
+    )))
+    await asyncio.sleep(0)  # Now waiting in the hook
+    await server.handle_response(accepted_response(session_id, "txn_2"))
+    release.set()
+    await handling
+
+    assert sent_summary(ws) == [
+        ("final", "txn_1", "", True),
+        ("accepted", "txn_2", None, False),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_type, transaction_id", [("start", "txn_1"), ("voiced", None)])
+async def test_response_for_a_replaced_connection_is_not_sent_to_the_new_one(response_type, transaction_id):
+    """A response whose connection is replaced while response hooks run is dropped"""
+    session_id = "test_session"
+    server, session_data, ws = create_server_with_session(session_id)
+    session_data.active_transaction_id = "txn_1"
+    release = asyncio.Event()
+
+    async def slow_hook(aiavatar_response, response):
+        await release.wait()
+
+    server._on_response_handlers.append(slow_hook)
+    handling = asyncio.create_task(server.handle_response(STSResponse(
+        type=response_type,
+        session_id=session_id,
+        transaction_id=transaction_id,
+        metadata={}
+    )))
+    await asyncio.sleep(0)  # Now waiting in the hook
+    # The client reconnects with the same session ID.
+    new_session_data = WebSocketSessionData()
+    new_session_data.id = session_id
+    server.sessions[session_id] = new_session_data
+    new_ws = MockWebSocket()
+    server.websockets[session_id] = new_ws
+    release.set()
+    await handling
+
+    assert ws.sent_messages == []
+    assert new_ws.sent_messages == []

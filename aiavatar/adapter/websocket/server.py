@@ -96,6 +96,10 @@ class WebSocketSessionData:
         self.send_lock = asyncio.Lock()
         self.active_transaction_id: Optional[str] = None
         self.last_response_at = monotonic()
+        # Barge-in mute: whether the user is still speaking after on_recording_started,
+        # and the transaction whose remaining output is dropped.
+        self.barge_in_active = False
+        self.muted_transaction_id: Optional[str] = None
 
 
 class AIAvatarWebSocketServer(Adapter):
@@ -229,12 +233,23 @@ class AIAvatarWebSocketServer(Adapter):
         # Channel
         self.channel = channel
 
-        # Mute immediately on barge-in
+        # Mute immediately on barge-in. The rest of the response in progress, and of any
+        # response accepted while the user keeps speaking, is dropped. Generation in the
+        # pipeline continues, so the conversation context keeps the whole exchange.
         if mute_on_barge_in:
             @self.sts.vad.on_recording_started
             async def mute_on_barge_in(session_id: str):
-                if not self.can_handle(session_id):
+                session_data = self.sessions.get(session_id)
+                if session_data is None:
                     return
+                # Mark before awaiting so that output arriving meanwhile is dropped.
+                session_data.barge_in_active = True
+                session_data.muted_transaction_id = session_data.active_transaction_id
+                if self.debug:
+                    logger.info(
+                        "Mute on barge-in: session=%s, transaction=%s",
+                        session_id, session_data.muted_transaction_id
+                    )
                 await self.stop_response(session_id, "")
 
         # Debug
@@ -390,7 +405,11 @@ class AIAvatarWebSocketServer(Adapter):
 
         elif request.type == "data":
             audio_data = base64.b64decode(request.audio_data)
-            await self.sts.vad.process_samples(audio_data, request.session_id)
+            is_recording = await self.sts.vad.process_samples(audio_data, request.session_id)
+            data_session = self.sessions.get(request.session_id)
+            if not is_recording and data_session is not None:
+                # The user's speech has ended; requests accepted from now on are new.
+                data_session.barge_in_active = False
 
         elif request.type == "config":
             metadata = request.metadata or {}
@@ -432,31 +451,31 @@ class AIAvatarWebSocketServer(Adapter):
             logger.warning(f"Session not found for response (WebSocket): {response.session_id}")
             return
 
-        # On accepted: finalize old transaction and update active_transaction_id
+        # On accepted: activate the new transaction, then close the old one for the client
+        # unless its own final has been sent. The state changes before the write, so output
+        # of the old transaction handled meanwhile is dropped instead of following its final.
         if response.type == "accepted" and response.transaction_id and session_data:
-            if session_data.active_transaction_id and session_data.active_transaction_id != response.transaction_id:
-                # Send final for the old transaction
-                await self.send_response(AIAvatarResponse(
-                    type="final",
-                    session_id=response.session_id,
-                    user_id=response.user_id,
-                    context_id=response.context_id,
-                    transaction_id=session_data.active_transaction_id,
-                    text="",
-                    voice_text="",
-                    metadata={"interrupted": True}
-                ))
+            previous_transaction_id = session_data.active_transaction_id
             session_data.active_transaction_id = response.transaction_id
+            if session_data.barge_in_active:
+                # Accepted while the user keeps speaking: it answers a request from before the barge-in.
+                session_data.muted_transaction_id = response.transaction_id
+            if previous_transaction_id and previous_transaction_id != response.transaction_id:
+                await self._send_interrupted_final(session_data, response, previous_transaction_id)
 
-        # Skip stale transaction responses
-        if response.transaction_id and session_data:
-            if response.transaction_id != session_data.active_transaction_id:
-                if self.debug:
-                    logger.info(
-                        "Skip stale response: type=%s, transaction=%s, active=%s",
-                        response.type, response.transaction_id, session_data.active_transaction_id
-                    )
-                return
+        # Skip responses of a transaction replaced by a newer one, and the content of one muted
+        # on barge-in, whose unheard text and tags must not reach the client.
+        if not self._is_deliverable(session_data, response):
+            if self.debug:
+                logger.info(
+                    "Skip undeliverable response: type=%s, transaction=%s, active=%s",
+                    response.type, response.transaction_id, session_data.active_transaction_id
+                )
+            if response.type == "final" and session_data.active_transaction_id == response.transaction_id:
+                # Still open for the client (muted): close it with an empty interrupted final.
+                session_data.active_transaction_id = None
+                await self._send_interrupted_final(session_data, response, response.transaction_id)
+            return
 
         if response.type == "start":
             session_data.last_response_at = monotonic()
@@ -495,10 +514,7 @@ class AIAvatarWebSocketServer(Adapter):
                 for audio_response in iter_audio_responses(
                         aiavatar_response, response.audio_data, self.response_audio_chunk_size,
                         debug=self.debug):
-                    if self.sessions.get(response.session_id) is not session_data:
-                        break
-                    if (response.transaction_id
-                            and response.transaction_id != session_data.active_transaction_id):
+                    if not self._is_deliverable(session_data, response):
                         break
                     await self.send_response(audio_response)
                 return
@@ -515,7 +531,57 @@ class AIAvatarWebSocketServer(Adapter):
         elif response.type == "stop":
             await self.stop_response(response.session_id, response.context_id)
 
+        # The response may have been muted or replaced while the handlers above were awaited.
+        if not self._is_deliverable(session_data, response):
+            if self.debug:
+                logger.info(
+                    "Skip undeliverable response: type=%s, transaction=%s, active=%s",
+                    response.type, response.transaction_id, session_data.active_transaction_id
+                )
+            if response.type == "final" and session_data.active_transaction_id == response.transaction_id:
+                # Still open for the client (muted): close it with an empty interrupted final.
+                session_data.active_transaction_id = None
+                await self._send_interrupted_final(session_data, response, response.transaction_id)
+            return
+
+        if response.type == "final" and response.transaction_id:
+            # Its own final closes the transaction, so the next accepted does not close it again.
+            session_data.active_transaction_id = None
+
         await self.send_response(aiavatar_response)
+
+    def _is_deliverable(self, session_data: WebSocketSessionData, response: STSResponse) -> bool:
+        """Return whether the response can be sent to this connection now.
+
+        A response with a transaction ID is sent only while the client has that transaction
+        open. A barge-in mute withholds only the content (chunk, tool_call, and final);
+        accepted and start are still sent, so the client sees the transaction open before
+        its interrupted final.
+        """
+        if self.sessions.get(response.session_id) is not session_data:
+            return False  # The connection has been replaced or closed
+        if not response.transaction_id:
+            return True
+        if response.transaction_id != session_data.active_transaction_id:
+            return False  # Replaced by a newer transaction, or already closed
+        if response.type in ("chunk", "tool_call", "final"):
+            return response.transaction_id != session_data.muted_transaction_id
+        return True
+
+    async def _send_interrupted_final(self, session_data: WebSocketSessionData, response: STSResponse, transaction_id: str):
+        """Close the transaction for the client with an empty final marked interrupted."""
+        if self.sessions.get(response.session_id) is not session_data:
+            return  # Not to a connection that has replaced this one
+        await self.send_response(AIAvatarResponse(
+            type="final",
+            session_id=response.session_id,
+            user_id=response.user_id,
+            context_id=response.context_id,
+            transaction_id=transaction_id,
+            text="",
+            voice_text="",
+            metadata={"interrupted": True}
+        ))
 
     async def stop_response(self, session_id: str, context_id: str):
         # Send stop message to client
