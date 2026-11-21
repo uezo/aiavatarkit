@@ -17,6 +17,7 @@ class RecordingSession(SileroRecordingSession):
     def __init__(self, session_id: str, preroll_buffer_count: int = 5, vad_iterator=None):
         super().__init__(session_id, preroll_buffer_count, vad_iterator)
         self.recording_id: Optional[str] = None
+        self.recording_metadata: dict = {}
         self._speech_recognizer_override: Optional[SpeechRecognizer] = None
         # Segment tracking for on_speech_detecting hook
         # TODO: Remove segment_buffer after compatibility review. Partial STT
@@ -33,6 +34,7 @@ class RecordingSession(SileroRecordingSession):
     def reset(self):
         super().reset()
         self.recording_id = None
+        self.recording_metadata = {}
         # Reset segment tracking
         self.segment_buffer.clear()
         self.segment_duration = 0
@@ -113,11 +115,27 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
         self.on_recording_started_min_text_length = on_recording_started_min_text_length
         self.recording_sessions: Dict[str, RecordingSession] = {}
         self._on_speech_detecting: List[Callable[[str, RecordingSession], Awaitable[None]]] = []
+        self._on_speech_started: List[Callable[[str, dict], None]] = []
         self._on_speech_recognition_error: List[Callable[[Exception, str], Awaitable[None]]] = []
         self._validate_recognized_text: Optional[Callable[[str], Optional[str]]] = None
 
     def get_config(self) -> dict:
         return {**super().get_config(), "min_text_length": self.min_text_length}
+
+    def on_speech_started(self, func: Callable[[str, dict], None]) -> Callable[[str, dict], None]:
+        """Register a synchronous callback for the first voiced frame of each recording.
+
+        The callback receives (session_id, metadata) and can update metadata in place.
+        """
+        self._on_speech_started.append(func)
+        return func
+
+    def _execute_on_speech_started(self, session_id: str, metadata: dict):
+        for handler in self._on_speech_started:
+            try:
+                handler(session_id, metadata)
+            except Exception:
+                logger.exception("Error in on_speech_started callback")
 
     def on_speech_detecting(self, func: Callable[[str, RecordingSession], Awaitable[None]]) -> Callable[[str, RecordingSession], Awaitable[None]]:
         """Register callback for speech detecting (partial results).
@@ -284,7 +302,11 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
         if self.debug:
             logger.debug(f"Speech detected: {speech_detected}, duration: {session.record_duration:.2f}, session: {session.session_id}")
 
+        recording_metadata = None
         if speech_detected:
+            if not session.is_recording and self._on_speech_started:
+                recording_metadata = {}
+                self._execute_on_speech_started(session_id, recording_metadata)
             await self._execute_on_voiced(session_id)
 
         if not session.is_recording:
@@ -292,6 +314,8 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
                 # Start recording
                 session.reset()
                 session.recording_id = str(uuid4())
+                if recording_metadata is not None:
+                    session.recording_metadata = recording_metadata
                 session.is_recording = True
 
                 for f in session.preroll_buffer:
@@ -370,6 +394,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
 
                     recorded_data = bytes(session.buffer)
                     metadata = {
+                        **session.recording_metadata,
                         **(self._build_vad_performance_metadata(session) or {}),
                         "recording_id": session.recording_id,
                     }
@@ -432,6 +457,7 @@ class SileroStreamSpeechDetector(SileroSpeechDetector):
 
                         recorded_data = bytes(session.buffer)
                         metadata = {
+                            **session.recording_metadata,
                             **(self._build_vad_performance_metadata(session) or {}),
                             "recording_id": session.recording_id,
                         }

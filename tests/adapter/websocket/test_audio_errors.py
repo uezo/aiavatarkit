@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
-from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer
+from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer, WebSocketSessionData
 from aiavatar.sts.vad.filters import AudioFilter, RecoverableAudioFilterError
 from aiavatar.sts.vad.silero import SileroSpeechDetector
 from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
@@ -154,3 +154,43 @@ async def test_other_audio_errors_still_propagate(monkeypatch, error):
     pipeline.finalize.assert_awaited_once_with("session-1")
     assert "session-1" not in server.sessions
     assert "session-1" not in server.websockets
+
+
+@pytest.mark.asyncio
+async def test_disconnect_hook_failure_still_finalizes_session(monkeypatch):
+    server, pipeline, endpoint = make_server(monkeypatch, None)
+
+    @server.on_disconnect
+    async def fail_disconnect(_session):
+        raise RuntimeError("disconnect hook failed")
+
+    websocket = FakeWebSocket({"type": "start", "session_id": "session-1"})
+    with pytest.raises(RuntimeError, match="disconnect hook failed"):
+        await endpoint(websocket)
+
+    pipeline.finalize.assert_awaited_once_with("session-1")
+    assert "session-1" not in server.sessions
+    assert "session-1" not in server.websockets
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("during_finalize", [False, True])
+async def test_old_disconnect_preserves_replacement_session(monkeypatch, during_finalize):
+    server, pipeline, endpoint = make_server(monkeypatch, None)
+    start = {"type": "start", "session_id": "session-1"}
+    replacement = FakeWebSocket(start)
+    replacement_session = WebSocketSessionData()
+
+    async def replace_connection(_):
+        await server.process_websocket(replacement, replacement_session)
+
+    if during_finalize:
+        pipeline.finalize.side_effect = replace_connection
+    else:
+        server.on_disconnect(replace_connection)
+
+    await endpoint(FakeWebSocket(start))
+
+    assert pipeline.finalize.await_count == int(during_finalize)
+    assert server.sessions["session-1"] is replacement_session
+    assert server.websockets["session-1"] is replacement

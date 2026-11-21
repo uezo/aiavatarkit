@@ -145,6 +145,33 @@ def test_clean_user_dollar_prefix_fallback_strips_to_user_text():
     assert qrp._clean_user_content(content) == "ユーザーの発話"
 
 
+@pytest.mark.parametrize("guidance", [
+    "$The user spoke again before audio for the previous request began.",
+    '$Use "the bridge" as context for the current request.',
+])
+def test_clean_user_interruption_quotes_are_not_quick_responses(guidance):
+    qrp = QuickResponderPro(model="test", client=object(), tts=None, context_manager=None)
+    body = 'Previous user request:\n「渡月橋」の近くは？\n\nCurrent user message:\n"ランチ"も探して。'
+    assert qrp._clean_user_content(f"{guidance}\n\n{body}") == body
+
+
+def test_clean_user_custom_multiline_request_prefix():
+    prefix = '$Custom instructions.\n\nYou already said "{quick_response_text}".'
+    qrp = QuickResponderPro(
+        model="test", client=object(), tts=None, context_manager=None, request_prefix=prefix,
+    )
+    content = prefix.format(quick_response_text="Sure") + "\n\nHello"
+    assert qrp._clean_user_content(content) == 'Please output the continuation of "Sure".'
+
+
+def test_clean_user_saved_default_request_prefix_with_custom_configuration():
+    qrp = QuickResponderPro(
+        model="test", client=object(), tts=None, context_manager=None, request_prefix="$Custom {quick_response_text}",
+    )
+    content = '$For the following input, you have already output "Sure"—do NOT repeat\n\nHello'
+    assert qrp._clean_user_content(content) == 'Please output the continuation of "Sure".'
+
+
 def test_clean_user_plain_text_unchanged():
     qrp = make_qrp()
     assert qrp._clean_user_content("こんにちは") == "こんにちは"

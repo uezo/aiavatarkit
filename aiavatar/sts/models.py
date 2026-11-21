@@ -1,7 +1,23 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from uuid import uuid4
 from .llm import ToolCall
+
+
+@dataclass(frozen=True, kw_only=True)
+class Interruption:
+    """Interruption facts scoped to the conversation of the interrupted response."""
+
+    interrupted_response_context_id: Optional[str]
+    interrupted_response_transaction_id: str
+    spoken_text: Optional[str] = None
+    answered_through_transaction_id: Optional[str] = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class RequestContext:
+    interruption: Optional[Interruption] = None
+    track_interruption: bool = False
 
 
 @dataclass(kw_only=True)
@@ -24,6 +40,7 @@ class STSRequest:
     quick_response_voice_text: str = None
     quick_response_audio: bytes = None
     skip_quick_response: bool = False
+    request_context: Optional[RequestContext] = None
     metadata: Dict[str, Any] = None
 
 

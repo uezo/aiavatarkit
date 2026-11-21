@@ -134,6 +134,46 @@ aiavatar_app.sts.merge_request_prefix = "$直前のユーザーの要求とあ�
 
 NOTE: Files from the previous request are preserved in the merged request
 
+## Interruption context
+
+An adapter can pass a `RequestContext` from `aiavatar.sts.models` in
+`STSRequest.request_context`. Its optional `interruption` holds an
+`Interruption` with the interrupted response's conversation and transaction IDs.
+`spoken_text` is the estimated transcript of the audio already played. An
+interruption with empty `spoken_text` signals that the response had sent no
+audio when the user began speaking. The adapter can also provide
+`answered_through_transaction_id` to identify the last request that received
+audio or completed delivery.
+
+For requests created from VAD recordings, an adapter can put a `RequestContext`
+into `metadata["request_context"]` in an `on_speech_started` callback. The pipeline
+copies that value into `STSRequest.request_context` when creating the request.
+
+Adapters can call `start_interruption_tracking(session_id)` at session start
+and set `RequestContext.track_interruption` on requests whose original text
+should be available to later interruptions. Use a fresh `session_id` for each
+session. The pipeline updates only the tracking state registered for that ID.
+`finalize(session_id)` removes the registration. Before audio has been sent,
+the pipeline looks up the source transaction in the latest chain for that
+session and builds the previous request text from its unanswered turns.
+Requests replaced while waiting in the queue never enter that chain. The
+pipeline checks the resolved conversation ID before applying either template.
+It formats the request before the `start` event and assumes each conversation
+ID belongs to one user.
+
+The default templates start with `$` to mark application guidance, followed by
+the earlier text and the current request under separate labels. Set
+these options on `STSPipeline`, or pass them to `AIAvatarWebSocketServer` when
+it constructs the pipeline:
+
+- `interruption_spoken_template` uses `{spoken_text}` and `{request_text}`.
+- `interruption_before_audio_template` uses `{previous_request}` and
+  `{request_text}`. The pipeline joins the earlier unanswered utterances in
+  `{previous_request}` with newlines.
+
+The templates use Python string formatting. An app can provide templates with
+or without `$`, in any language.
+
 ## Invoke Queue
 
 A turn can arrive while the previous one is still going. Three modes decide what happens

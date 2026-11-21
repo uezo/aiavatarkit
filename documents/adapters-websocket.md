@@ -135,8 +135,60 @@ Session controls such as `connected`, `voiced`, and the session-wide `stop`
 notification may have no transaction ID. Clients also accept older responses
 without this field. This ID identifies an AI response; it is distinct from the
 browser's per-audio `playback_id` and PCM `audio_id`. The shared browser returns
-the transaction ID in playback
-start notifications for [turn-taking context](../examples/websocket/README.md#playback-context-for-turn-taking).
+the transaction ID in [playback start notifications](../examples/websocket/README.md#playback-context-for-turn-taking).
+
+## Context for interruptions
+
+The LLM can use the part of the assistant response that had already played when
+the user started speaking. This option uses playback reports from the client and
+requires a VAD that calls `on_speech_started` callbacks with `(session_id, metadata)`,
+such as `SileroStreamSpeechDetector`. The adapter updates the recording's metadata
+in place. Enable it when constructing the adapter.
+
+```python
+aiavatar_app = AIAvatarWebSocketServer(
+    vad=vad, stt=speech_recognizer, llm=llm, tts=tts,
+    use_invoke_queue=True,
+    merge_request_threshold=0.0,
+    mute_on_barge_in=True,
+    include_interruption_context=True,
+)
+```
+
+The [invoke queue](pipeline.md#invoke-queue) lets a follow-up wait for the
+previous request to finish and save its history. In direct mode
+(`use_invoke_queue=False`), a follow-up can run before the first reply saves
+any history. If the pipeline creates a new conversation ID in that case, it
+processes the follow-up as an ordinary request without the interruption
+supplement.
+
+The adapter reads the browser's playback reports directly for interruption
+context, with or without a turn-taking gate. If you use
+[playback-aware turn taking](vad-turn-taking.md#quick-start-with-jev), keep
+forwarding the same reports to the gate in your `on_request` hook.
+
+A recording captures the estimated spoken text at its first detected speech.
+During a gap after a completed non-final chunk, it can use the spoken text
+so far if the same response is still active and unmuted.
+When the active response has sent no audio, the adapter captures that response's
+transaction ID and the last transaction that sent audio or an ordinary `final`.
+The pipeline uses those IDs to recover the unanswered text of earlier requests
+that reached processing. A request replaced while waiting in the queue is
+discarded. A normal new turn starts a fresh chain.
+
+The supplement applies to the accepted recording in the same connection and
+conversation. Use a fresh `session_id` for every WebSocket session, including
+reconnects. Pass an existing `context_id` to resume a conversation. When processing
+begins, the adapter finds the session by `session_id` and passes the captured
+facts to the pipeline. The pipeline creates tracking state at session start
+and removes it when the session closes. Requests can only update existing state.
+`start.metadata.request_text`,
+the QuickResponder when used, and the main LLM receive the augmented text.
+`start.metadata.recognized_text` still contains the original transcript. The
+system prompt stays the same, and the LLM's conversation history can retain the
+augmented user message.
+
+Override the wording with the [pipeline's interruption templates](pipeline.md#interruption-context).
 
 ## Connection and disconnection handling
 
