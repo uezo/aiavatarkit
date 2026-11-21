@@ -276,11 +276,14 @@ class QuickResponderPro:
         if self.prompt_prefix and content.startswith(self.prompt_prefix):
             return content
 
-        # request_prefix turns (starts with "$") -> replace with continuation_message
+        # Recognize quick-response prefixes in both current and saved prompts.
         if content.startswith("$"):
-            match = re.search(r'[「"]([^」"]+)[」"]', content)
-            if match:
-                return self.continuation_message.format(quick_response_text=match.group(1))
+            prefixes = (self.request_prefix, DEFAULT_QRP_REQUEST_PREFIX, DEFAULT_QRP_REQUEST_PREFIX_JA)
+            prefix_starts = tuple(prefix.partition("{quick_response_text}")[0] for prefix in prefixes)
+            if content.startswith(prefix_starts):
+                match = re.search(r'[「"]([^」"]+)[」"]', content)
+                if match:
+                    return self.continuation_message.format(quick_response_text=match.group(1))
             idx = content.find("\n\n")
             if idx >= 0:
                 return content[idx + 2:]
