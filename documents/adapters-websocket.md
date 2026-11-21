@@ -128,6 +128,8 @@ top-level field. Events for one response, including `start`, audio `chunk`, and
 `final`, carry the same ID. Both complete-WAV and split-PCM audio preserve it.
 When a new transaction interrupts the previous one, the synthetic interrupted
 `final` carries the old transaction's ID and `accepted` carries the new one.
+Each transaction ends with one `final`: a transaction that already sent its own
+`final` gets no synthetic one, and no output of the old transaction follows it.
 
 Session controls such as `connected`, `voiced`, and the session-wide `stop`
 notification may have no transaction ID. Clients also accept older responses

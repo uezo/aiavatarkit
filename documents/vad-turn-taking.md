@@ -456,8 +456,10 @@ Stopping playback does not finalize the recording or bypass a turn-end gate.
 The duration includes internal pauses and excludes current trailing silence;
 it is not a sum of voiced samples. A `max_duration` flush reports total recording
 duration, including trailing silence, and the skip condition uses that value.
-The existing stop operation does not cancel generation or add suppression of
-later audio chunks from the response.
+The stop does not cancel generation in the pipeline. Instead, the WebSocket
+server drops the later output of that response, and of any response accepted
+while the user is still speaking. Each of them ends with an empty `final` marked
+`interrupted`. A response accepted after the user stops speaking is delivered.
 
 For interruption only after a turn-taking decision, set the server's
 `mute_on_barge_in=False`. This disables its recording-start stop callback, while

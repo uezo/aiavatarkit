@@ -67,13 +67,22 @@ selecting or running tests.
   Adding server-side enforcement is a compatibility change and requires focused tests.
 - Track one active response transaction per session. A newer accepted
   transaction invalidates stale output from the previous one.
-- Preserve the established interruption notification before activating a new
-  transaction.
+- Preserve the established interruption notification: when a newer transaction
+  is accepted, an unfinished one gets its interrupted `final` before any output
+  of the newer one.
+- Send exactly one `final` per transaction. Change transaction state before
+  awaiting the write that announces the change, and do not await between a
+  deliverability check and its `send_response()`. The send lock is FIFO, so
+  output checked earlier stays ahead of the announcement and none follows it.
 - Responses carrying a stale transaction ID must not be delivered. Events that
   intentionally have no transaction ID remain valid according to the protocol.
 - Hold the per-session send lock around each complete WebSocket write.
 - During streamed audio, re-check the active transaction before sending further
   chunks so interrupted audio cannot leak into the next turn.
+- `mute_on_barge_in` stops delivery, not generation: drop the rest of the
+  transaction open at barge-in and of transactions accepted while the user keeps
+  speaking, closing each with an empty `interrupted` final. Do not cancel pipeline
+  generation for it; the conversation context must keep the exchange.
 - Preserve both native-client and browser-compatible authentication paths.
 - Keep complete-audio and chunked-audio modes compatible. Chunked audio must
   communicate its PCM format before raw PCM chunks are consumed.
