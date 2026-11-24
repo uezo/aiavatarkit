@@ -86,10 +86,13 @@ export function installPlaybackContext(client) {
         endPlayback(false);
         latestPlayback = null;
         const message = state?.message;
-        if (client.isBacklogAudioPlaying || message?.metadata?.nod === true
+        if (client.isBacklogAudioPlaying
             || typeof message?.session_id !== "string" || !message.session_id
             || typeof state?.playbackId !== "string" || !state.playbackId
             || !Number.isFinite(state.durationSeconds) || state.durationSeconds <= 0) return;
+
+        if (message.metadata?.nod === true
+            && (typeof message.transaction_id !== "string" || !message.transaction_id.trim())) return;
 
         active = latestPlayback = {
             socket: client.ws, queueGeneration: client.queueGeneration,

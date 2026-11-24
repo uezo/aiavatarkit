@@ -113,6 +113,71 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); aw
 const finalResponse = (overrides = {}) => ({
     type: "final", session_id: "session", transaction_id: "transaction", ...overrides,
 });
+const ackAudio = (overrides = {}) => audio("うん。", {
+    transaction_id: "ack-transaction",
+    metadata: { nod: true },
+    ...overrides,
+});
+
+test("ACK uses ordinary playback reports and does not mark the reply final", async () => {
+    const { client, context, sources } = await harness({ autoDecode: false });
+    const socket = client.ws;
+    try {
+        socket.receive(ackAudio());
+        socket.receive(finalResponse({ transaction_id: "ack-transaction" }));
+        assert.equal(controls(socket).length, 0);
+
+        context.decodes[0].complete();
+        assert.equal(controls(socket).length, 1);
+        const [start] = controls(socket);
+        assert.ok(start.metadata.playback_id);
+        assert.deepEqual(start, {
+            type: "playback", session_id: "session", metadata: {
+                event: "start", playback_id: start.metadata.playback_id,
+                transaction_id: "ack-transaction", text: "うん。", duration_seconds: 4,
+            },
+        });
+
+        sources[0].end();
+        await flush();
+        socket.receive(finalResponse({ transaction_id: "ack-transaction" }));
+
+        assert.deepEqual(controls(socket).map(message => message.metadata), [
+            start.metadata,
+            {
+                event: "end", playback_id: start.metadata.playback_id,
+                completed: true,
+            },
+        ]);
+    } finally { await client.stopListening("session"); }
+});
+
+test("explicit Stop reports the ACK end as incomplete", async () => {
+    const { client } = await harness();
+    const socket = client.ws;
+    try {
+        socket.receive(ackAudio());
+        const [start] = controls(socket);
+        await client.stopListening("session");
+        assert.equal(controls(socket).length, 2);
+        assert.deepEqual(controls(socket)[1].metadata, {
+            event: "end", playback_id: start.metadata.playback_id,
+            completed: false,
+        });
+    } finally { await client.stopListening("session"); }
+});
+
+test("a replaced ACK does not report playback if its decode was canceled", async () => {
+    const { client, context, sources } = await harness({ autoDecode: false });
+    try {
+        client.ws.receive(ackAudio());
+        client.ws.receive({ type: "accepted", transaction_id: "replacement" });
+        context.decodes[0].complete();
+        await flush();
+        assert.equal(sources.length, 0);
+        assert.equal(controls(client.ws).length, 0);
+    } finally { await client.stopListening("session"); }
+});
 
 test("start control is sent once after decode and before playback, with no microphone progress metadata", async () => {
     const { client, context, sources, animationFrames, sendInput, order, installContext } = await harness({
@@ -380,7 +445,10 @@ test("new Nod or backlog playback cannot reuse a previously completed final cand
             client.isBacklogAudioPlaying = false;
             client.ws.receive(finalResponse());
         }
-        assert.deepEqual(controls(client.ws).map(message => message.metadata.event), ["start", "end", "start", "end"]);
+        const reports = controls(client.ws).map(message => message.metadata);
+        assert.deepEqual(reports.map(report => report.event), ["start", "end", "start", "end", "start", "end"]);
+        assert.deepEqual(reports.filter(report => report.event === "start").map(report => report.text),
+            ["spoken", "auxiliary", "spoken"]);
     } finally { await client.stopListening("session"); }
 });
 
@@ -469,6 +537,10 @@ test("Nod, backlog, non-text, and unaddressed audio do not send controls", async
     try {
         for (const [message, backlog] of [
             [audio("nod", { metadata: { nod: true } }), false],
+            [ackAudio({ transaction_id: undefined }), false],
+            [ackAudio({ transaction_id: " " }), false],
+            [ackAudio({ voice_text: " " }), false],
+            [ackAudio(), true],
             [audio("backlog"), true],
             [audio("   "), false],
             [audio(null), false],

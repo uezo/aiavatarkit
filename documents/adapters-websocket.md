@@ -168,10 +168,20 @@ context, with or without a turn-taking gate. If you use
 forwarding the same reports to the gate in your `on_request` hook.
 
 A recording captures the estimated spoken text at its first detected speech.
-During a gap after a completed non-final chunk, it can use the spoken text
-so far if the same response is still active and unmuted.
-When the active response has sent no audio, the adapter captures that response's
-transaction ID and the last transaction that sent audio or an ordinary `final`.
+It uses the current clip as soon as some text has played. While a new clip
+has no spoken text yet, the previous audible clip can supply the context.
+The spoken text remains available for follow-up utterances until the browser
+reports that the reply's last audio clip has played in full.
+Successive chunks in the same streamed reply retain the earlier spoken text.
+
+The adapter matches reported playback to the response's audio chunks by
+transaction ID and `voice_text`. Unplayed chunks do not contribute to the
+spoken text. An ACK marked with `metadata.nod=true` can use the same playback
+reports by carrying its ordinary `voice_text` and `transaction_id`.
+
+When there is no spoken prefix and the active response has sent no audio, the
+adapter can capture that response's transaction ID and the last transaction
+that sent audio or an ordinary `final`.
 The pipeline uses those IDs to recover the unanswered text of earlier requests
 that reached processing. A request replaced while waiting in the queue is
 discarded. A normal new turn starts a fresh chain.

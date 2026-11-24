@@ -304,7 +304,7 @@ class AIAvatarWebSocketServer(Adapter):
 
         @self.on_session_start
         async def initialize_interruption_state(_request, session):
-            session.interruption_state = InterruptionState()
+            session.interruption_state = InterruptionState(debug=self.debug)
 
         @self.on_response
         async def remember_response(_response, response):
@@ -317,10 +317,7 @@ class AIAvatarWebSocketServer(Adapter):
             session = self.sessions.get(session_id)
             if session is None or session.interruption_state is None:
                 return
-            interruption = session.interruption_state.snapshot(
-                session.active_transaction_id,
-                muted_transaction_id=session.muted_transaction_id,
-            )
+            interruption = session.interruption_state.snapshot(session.active_transaction_id)
             metadata["request_context"] = RequestContext(interruption=interruption, track_interruption=True)
 
     def set_context_resolver(

@@ -1,17 +1,20 @@
 """Track response playback for interruption context on an audio connection."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import logging
 from sys import float_info
 from time import monotonic
 from typing import Optional
 
 from ..sts.models import Interruption, STSResponse
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class _Response:
     context_id: Optional[str]
-    voice_text: str = ""
+    audio_texts: list[str] = field(default_factory=list)
     answered: bool = False
     finished: bool = False
 
@@ -43,10 +46,12 @@ class _Playback:
 class InterruptionState:
     """Track delivery and playback of recent responses on one connection."""
 
-    def __init__(self):
+    def __init__(self, *, debug: bool = False):
+        self.debug = debug
         self._responses: dict[str, _Response] = {}
         self._last_answered: Optional[tuple[Optional[str], str]] = None
         self._playback: Optional[_Playback] = None
+        self._last_playback: Optional[_Playback] = None
         self._playback_ids: set[str] = set()
 
     def mark_answered(self, transaction_id: Optional[str]):
@@ -63,8 +68,8 @@ class InterruptionState:
             if len(self._responses) > 8:
                 self._responses.pop(next(iter(self._responses)))
         elif previous := self._responses.get(transaction_id):
-            if response.type == "chunk" and response.audio_data:
-                previous.voice_text += response.voice_text or ""
+            if response.type == "chunk" and response.audio_data and response.voice_text:
+                previous.audio_texts.append(response.voice_text)
             elif response.type in ("final", "error", "canceled", "cancelled"):
                 previous.finished = True
 
@@ -79,10 +84,14 @@ class InterruptionState:
         playback = self._playback
         if playback is None or playback.playback_id != playback_id:
             return
-        if event == "end" and playback.ended_at is None:
+        if (event == "end" and playback.ended_at is None
+                and (transaction_id is None or transaction_id == playback.transaction_id)):
             playback.ended_at = monotonic()
             playback.completed = completed is True
-        elif event == "final" and playback.transaction_id == transaction_id:
+            if self.debug:
+                logger.info("Voice playback: event=end, transaction=%s, playback_id=%s, completed=%s",
+                            playback.transaction_id, playback_id, playback.completed)
+        elif event == "final" and transaction_id == playback.transaction_id:
             playback.is_final_chunk = True
 
     def _start_playback(self, playback_id, transaction_id, text, duration_seconds):
@@ -92,61 +101,64 @@ class InterruptionState:
             or not isinstance(text, str) or not text.strip()
             or type(duration_seconds) not in (int, float) or not 0 < duration_seconds <= float_info.max
         ):
-            self._playback = None
-            self._playback_ids.clear()
             return
 
         now = monotonic()
         previous = self._playback
-        preceding_text = ""
-        if previous is not None and previous.transaction_id == transaction_id:
-            if playback_id in self._playback_ids:
-                return
-            # A new start closes the previous chunk even if its end report was missed.
-            preceding_text = previous.spoken_text(now)
-        else:
+        previous_text = previous.spoken_text(now) if previous is not None else ""
+        same_transaction = previous is not None and previous.transaction_id == transaction_id
+        if same_transaction and playback_id in self._playback_ids:
+            return
+        response = self._responses.get(transaction_id)
+        if response is None:
+            return
+        try:
+            chunk_index = response.audio_texts.index(text)
+        except ValueError:
+            return
+        # The client may have skipped a queued clip. Only accumulate clips that actually played.
+        del response.audio_texts[:chunk_index + 1]
+
+        # Audio is serial. A valid new start bounds the previous clip when its end report is missing.
+        if previous is not None:
+            if previous.ended_at is None:
+                previous.ended_at = now
+            if previous_text != previous.preceding_text:
+                self._last_playback = previous
+        if not same_transaction:
             self._playback_ids.clear()
         self._playback_ids.add(playback_id)
-        self._playback = _Playback(playback_id, transaction_id, text, duration_seconds, now, preceding_text)
+        self._playback = _Playback(
+            playback_id, transaction_id, text, duration_seconds, now, previous_text if same_transaction else "",
+        )
+        if self.debug:
+            logger.info("Voice playback: event=start, transaction=%s, playback_id=%s", transaction_id, playback_id)
 
-    def snapshot(
-        self, active_transaction_id: Optional[str], *, muted_transaction_id: Optional[str] = None,
-    ) -> Optional[Interruption]:
+    def snapshot(self, active_transaction_id: Optional[str]) -> Optional[Interruption]:
         now = monotonic()
+        active_response = self._responses.get(active_transaction_id) if active_transaction_id else None
         playback = self._playback
-        if playback is not None and playback.ended_at is None and now < playback.natural_end:
-            return self._spoken_interruption(playback, now)
+        if playback is None or playback.spoken_text(now) == playback.preceding_text:
+            playback = self._last_playback
+        if playback is not None and not (playback.is_final_chunk and playback.completed):
+            response = self._responses.get(playback.transaction_id)
+            if response is not None and (active_response is None or response.context_id == active_response.context_id):
+                return Interruption(
+                    interrupted_response_context_id=response.context_id,
+                    interrupted_response_transaction_id=playback.transaction_id,
+                    spoken_text=playback.spoken_text(now),
+                )
 
-        if active_transaction_id and (previous := self._responses.get(active_transaction_id)):
-            # Keep the spoken prefix during the silence before the next chunk.
-            if (
-                playback is not None and playback.completed  # Chunk played in full
-                and not playback.is_final_chunk and not previous.finished  # Last chunk unconfirmed, response open
-                and playback.transaction_id == active_transaction_id  # Same active response
-                and active_transaction_id != muted_transaction_id  # Response unmuted
-            ):
-                return self._spoken_interruption(playback, now)
-            if previous.answered or previous.finished:
+        if active_transaction_id and active_response is not None:
+            if active_response.answered or active_response.finished:
                 return None
             answered_through = self._last_answered
             return Interruption(
-                interrupted_response_context_id=previous.context_id,
+                interrupted_response_context_id=active_response.context_id,
                 interrupted_response_transaction_id=active_transaction_id,
                 answered_through_transaction_id=(
-                    answered_through[1] if answered_through and answered_through[0] == previous.context_id else None
+                    answered_through[1]
+                    if answered_through and answered_through[0] == active_response.context_id else None
                 ),
-            )
-        return None
-
-    def _spoken_interruption(self, playback: _Playback, now: float) -> Optional[Interruption]:
-        transaction_id = playback.transaction_id
-        previous = self._responses.get(transaction_id)
-        spoken_text = playback.spoken_text(now)
-        # Verify the playback text against the response produced by the server.
-        if previous and spoken_text and previous.voice_text.startswith(spoken_text):
-            return Interruption(
-                interrupted_response_context_id=previous.context_id,
-                interrupted_response_transaction_id=transaction_id,
-                spoken_text=spoken_text,
             )
         return None

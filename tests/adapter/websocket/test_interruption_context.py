@@ -26,6 +26,7 @@ FOLLOW_UP = 'What about "lunch"?'
 ADDITIONAL_REQUEST = "Add a museum visit too."
 NORMAL_REQUEST = "Thanks!"
 FIRST_RESPONSE = "ABCDEFGH"
+ACK_TEXT = "そうなんですね。"
 VOICE = b"\x01\x00" * 1600
 SILENCE = bytes(3200)
 SYSTEM_PROMPT = "Reply to {name}."
@@ -40,16 +41,19 @@ class PlaybackGate(TurnTakingGate):
 
 
 class CapturingLLM(LLMServiceDummy):
-    def __init__(self, database):
+    def __init__(self, database, *, first_ack=False):
         super().__init__(db_connection_str=str(database), system_prompt=SYSTEM_PROMPT)
         self.calls = asyncio.Queue()
         self.release_first_response = asyncio.Event()
+        self.first_ack = first_ack
 
     async def get_llm_stream_response(
         self, context_id, user_id, messages, system_prompt_params=None, **kwargs,
     ):
         self.calls.put_nowait((messages[0]["content"], messages[-1]["content"], system_prompt_params))
         if messages[-1]["content"] == FIRST_REQUEST:
+            if self.first_ack:
+                yield LLMResponse(context_id=context_id, text=ACK_TEXT, voice_text=ACK_TEXT)
             await self.release_first_response.wait()
             answer = FIRST_RESPONSE
         else:
@@ -91,7 +95,7 @@ class Socket:
 @asynccontextmanager
 async def connected_voice_app(
     monkeypatch, tmp_path, *, wakewords=None, turn_taking_gate=DEFAULT_GATE,
-    transcripts=(FIRST_REQUEST, FOLLOW_UP, NORMAL_REQUEST), **server_options,
+    transcripts=(FIRST_REQUEST, FOLLOW_UP, NORMAL_REQUEST), first_ack=False, **server_options,
 ):
     transcripts = iter(transcripts)
     if turn_taking_gate is DEFAULT_GATE:
@@ -118,7 +122,7 @@ async def connected_voice_app(
     async def track_dispatch(*args):
         dispatch_tasks.add(asyncio.current_task())
 
-    llm = CapturingLLM(tmp_path / "context.db")
+    llm = CapturingLLM(tmp_path / "context.db", first_ack=first_ack)
     tts = SpeechSynthesizerDummy(synthesized_bytes=b"voice")
     server = AIAvatarWebSocketServer(
         vad=vad,
@@ -199,9 +203,10 @@ async def record_follow_up(socket):
     await socket.feed(SILENCE)
 
 
-async def report_playback_start(socket, transaction_id, playback_id, duration_seconds):
+async def report_playback_start(socket, transaction_id, playback_id, duration_seconds, *, text=None):
     audio = await socket.wait_for(lambda message: (
         message["transaction_id"] == transaction_id and bool(message.get("audio_data"))
+        and (text is None or message["voice_text"] == text)
     ))
     await socket.send("playback", metadata={
         "event": "start",
@@ -212,12 +217,20 @@ async def report_playback_start(socket, transaction_id, playback_id, duration_se
     })
 
 
-async def report_completed_playback(socket, transaction_id):
+async def report_completed_playback(socket, transaction_id, *, is_final=False):
     playback_id = f"audio-{transaction_id}"
     await report_playback_start(socket, transaction_id, playback_id, duration_seconds=0.1)
     await socket.send("playback", metadata={
         "event": "end", "playback_id": playback_id, "completed": True,
     })
+    if is_final:
+        final = await socket.wait_for(lambda message: (
+            message["type"] == "final" and message["transaction_id"] == transaction_id
+        ))
+        assert not (final.get("metadata") or {}).get("interrupted")
+        await socket.send("playback", metadata={
+            "event": "final", "playback_id": playback_id, "transaction_id": transaction_id,
+        })
 
 
 async def interrupt_during_playback(socket, llm, clock):
@@ -261,6 +274,150 @@ def test_playback_prefix_accumulates_across_chunks_when_previous_end_arrives_lat
     assert interruption.spoken_text == "ABCDEF"
 
 
+def test_unplayed_ack_is_excluded_when_answer_starts(monkeypatch):
+    clock = fake_playback_clock(monkeypatch)
+    state = adapter_interruption.InterruptionState()
+    state.observe(STSResponse(type="start", context_id="conversation", transaction_id="response"))
+    for text in (ACK_TEXT, FIRST_RESPONSE):
+        state.observe(STSResponse(type="chunk", transaction_id="response", voice_text=text, audio_data=b"voice"))
+
+    state.handle_playback_event(
+        event="start", playback_id="answer", transaction_id="response", text=FIRST_RESPONSE, duration_seconds=8,
+    )
+    clock.now = 102.0
+    interruption = state.snapshot("response")
+    assert interruption is not None and interruption.spoken_text == "AB"
+
+
+@pytest.mark.parametrize("replace_answer", [False, True], ids=["answer-prefix", "answer-replaced"])
+def test_ack_playback_from_previous_transaction_is_attributed_to_its_audio(monkeypatch, replace_answer):
+    clock = fake_playback_clock(monkeypatch)
+    state = adapter_interruption.InterruptionState()
+    context_id = "conversation"
+    state.observe(STSResponse(type="start", context_id=context_id, transaction_id="earlier-response"))
+    state.observe(STSResponse(
+        type="chunk", transaction_id="earlier-response", voice_text=ACK_TEXT, audio_data=b"voice",
+    ))
+    state.handle_playback_event(
+        event="start", playback_id="earlier-ack", transaction_id="earlier-response",
+        text=ACK_TEXT, duration_seconds=8,
+    )
+    state.observe(STSResponse(type="start", context_id=context_id, transaction_id="next-response"))
+    clock.now = 104.0
+
+    interruption = state.snapshot("next-response")
+    assert interruption is not None
+    assert interruption.interrupted_response_transaction_id == "earlier-response"
+    assert interruption.spoken_text == "そうなん"
+
+    clock.now = 108.0
+    state.handle_playback_event(
+        event="end", playback_id="earlier-ack", transaction_id="earlier-response", completed=True,
+    )
+    state.observe(STSResponse(
+        type="chunk", transaction_id="next-response", voice_text=FIRST_RESPONSE, audio_data=b"voice",
+    ))
+    state.handle_playback_event(
+        event="start", playback_id="next-audio", transaction_id="next-response",
+        text=FIRST_RESPONSE, duration_seconds=8,
+    )
+    interruption = state.snapshot("next-response")
+    assert interruption is not None
+    assert interruption.interrupted_response_transaction_id == "earlier-response"
+    assert interruption.spoken_text == ACK_TEXT
+
+    clock.now = 110.0
+    if replace_answer:
+        state.observe(STSResponse(type="start", context_id=context_id, transaction_id="replacement"))
+        state.observe(STSResponse(
+            type="chunk", transaction_id="replacement", voice_text=FIRST_RESPONSE, audio_data=b"voice",
+        ))
+        state.handle_playback_event(
+            event="start", playback_id="replacement-audio", transaction_id="replacement",
+            text=FIRST_RESPONSE, duration_seconds=8,
+        )
+    interruption = state.snapshot("replacement" if replace_answer else "next-response")
+    assert interruption is not None
+    assert interruption.interrupted_response_transaction_id == "next-response"
+    assert interruption.spoken_text == "AB"
+
+
+def test_playback_from_another_context_does_not_hide_pending_request(monkeypatch):
+    clock = fake_playback_clock(monkeypatch)
+    state = adapter_interruption.InterruptionState()
+    state.observe(STSResponse(type="start", context_id="earlier-context", transaction_id="earlier-response"))
+    state.observe(STSResponse(
+        type="chunk", transaction_id="earlier-response", voice_text=ACK_TEXT, audio_data=b"voice",
+    ))
+    state.handle_playback_event(
+        event="start", playback_id="earlier-ack", transaction_id="earlier-response",
+        text=ACK_TEXT, duration_seconds=8,
+    )
+    clock.now = 108.0
+    state.handle_playback_event(
+        event="end", playback_id="earlier-ack", transaction_id="earlier-response", completed=True,
+    )
+    state.observe(STSResponse(type="start", context_id="new-context", transaction_id="new-response"))
+
+    interruption = state.snapshot("new-response")
+    assert interruption is not None
+    assert interruption.interrupted_response_context_id == "new-context"
+    assert interruption.interrupted_response_transaction_id == "new-response"
+    assert interruption.spoken_text is None
+
+
+def test_nonfinal_audio_remains_eligible_after_playback_ends(monkeypatch):
+    clock = fake_playback_clock(monkeypatch)
+    state = adapter_interruption.InterruptionState()
+    state.observe(STSResponse(type="start", context_id="conversation", transaction_id="response"))
+    state.observe(STSResponse(
+        type="chunk", transaction_id="response", voice_text=FIRST_RESPONSE, audio_data=b"voice",
+    ))
+    state.handle_playback_event(
+        event="start", playback_id="audio", transaction_id="response",
+        text=FIRST_RESPONSE, duration_seconds=8,
+    )
+    clock.now = 102.0
+    interruption = state.snapshot(None)
+    assert interruption is not None and interruption.spoken_text == "AB"
+
+    clock.now = 108.0
+    state.handle_playback_event(
+        event="end", playback_id="audio", transaction_id="response", completed=True,
+    )
+    interruption = state.snapshot(None)
+    assert interruption is not None and interruption.spoken_text == FIRST_RESPONSE
+    assert state.snapshot(None) == interruption
+
+
+@pytest.mark.parametrize("final_first", [True, False], ids=["final-before-end", "final-after-end"])
+def test_final_playback_remains_eligible_only_until_completed(monkeypatch, final_first):
+    clock = fake_playback_clock(monkeypatch)
+    state = adapter_interruption.InterruptionState()
+    state.observe(STSResponse(type="start", context_id="conversation", transaction_id="response"))
+    state.observe(STSResponse(
+        type="chunk", transaction_id="response", voice_text=FIRST_RESPONSE, audio_data=b"voice",
+    ))
+    state.handle_playback_event(
+        event="start", playback_id="audio", transaction_id="response", text=FIRST_RESPONSE, duration_seconds=8,
+    )
+    state.observe(STSResponse(type="final", transaction_id="response"))
+    final = {"event": "final", "playback_id": "audio", "transaction_id": "response"}
+    if final_first:
+        state.handle_playback_event(**final)
+    clock.now = 102.0
+    interruption = state.snapshot(None)
+    assert interruption is not None and interruption.spoken_text == "AB"
+
+    clock.now = 108.0
+    state.handle_playback_event(event="end", playback_id="audio", completed=True)
+    if not final_first:
+        interruption = state.snapshot(None)
+        assert interruption is not None and interruption.spoken_text == FIRST_RESPONSE
+        state.handle_playback_event(**final)
+    assert state.snapshot(None) is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_gate", [True, False], ids=["with-gate", "without-gate"])
 async def test_spoken_prefix_is_captured_at_recording_onset_after_sts_final(monkeypatch, tmp_path, with_gate):
@@ -297,10 +454,7 @@ async def test_spoken_prefix_is_captured_at_recording_onset_after_sts_final(monk
             follow_up = await assert_new_start(socket, transaction_id, FOLLOW_UP, text)
             follow_up_id = follow_up["transaction_id"]
 
-            # The playback snapshot belongs to that recording only.
-            await socket.wait_for(lambda message: (
-                message["type"] == "final" and message["transaction_id"] == follow_up_id
-            ))
+            await report_completed_playback(socket, follow_up_id, is_final=True)
             prior_messages = len(socket.sent)
             await socket.feed(VOICE)
             await socket.feed(SILENCE)
@@ -310,12 +464,100 @@ async def test_spoken_prefix_is_captured_at_recording_onset_after_sts_final(monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("phase", "heard", "heard_next"), [
+    ("during-ack", "そう", ACK_TEXT),
+    ("after-ack", ACK_TEXT, ACK_TEXT),
+    ("answer-just-started", ACK_TEXT, ACK_TEXT + "ABCD"),
+    ("during-answer", ACK_TEXT + "AB", ACK_TEXT + "ABCDEF"),
+], ids=["during-ack", "after-ack", "answer-just-started", "during-answer"])
+async def test_ack_and_answer_use_same_spoken_template_at_onset(monkeypatch, tmp_path, phase, heard, heard_next):
+    clock = fake_playback_clock(monkeypatch)
+
+    async with connected_voice_app(
+        monkeypatch, tmp_path, turn_taking_gate=None, first_ack=True, interruption_spoken_template=SPOKEN_TEMPLATE,
+    ) as (socket, llm, _):
+        async with asyncio.timeout(3):
+            first = await start_first_response(socket, llm)
+            first_id = first["transaction_id"]
+            await report_playback_start(socket, first_id, "first-ack", duration_seconds=8, text=ACK_TEXT)
+
+            if phase != "during-ack":
+                clock.now = 108.0
+                await socket.send("playback", metadata={
+                    "event": "end", "transaction_id": first_id,
+                    "playback_id": "first-ack", "completed": True,
+                })
+            answer_started = phase in ("answer-just-started", "during-answer")
+            if answer_started:
+                llm.release_first_response.set()
+                await socket.wait_for(lambda message: message["type"] == "final")
+                await report_playback_start(socket, first_id, "first-audio", duration_seconds=8, text=FIRST_RESPONSE)
+                await socket.send("playback", metadata={
+                    "event": "final", "playback_id": "first-audio", "transaction_id": first_id,
+                })
+
+            if phase != "answer-just-started":
+                clock.now += 2.0
+            await socket.feed(VOICE)
+            clock.now += 4.0
+            await trigger_barge_in(socket)
+            if answer_started:
+                await socket.send("playback", metadata={
+                    "event": "end", "playback_id": "first-audio", "completed": False,
+                })
+            elif phase == "during-ack":
+                await socket.send("playback", metadata={
+                    "event": "end", "transaction_id": first_id,
+                    "playback_id": "first-ack", "completed": True,
+                })
+            await socket.feed(SILENCE)
+            llm.release_first_response.set()
+
+            expected = SPOKEN_TEMPLATE.format(spoken_text=heard, request_text=FOLLOW_UP)
+            assert await llm.calls.get() == ("Reply to Aki.", expected, {"name": "Aki"})
+            follow_up = await assert_new_start(socket, first_id, FOLLOW_UP, expected)
+
+            await socket.wait_for(lambda message: (
+                message["type"] == "final" and message["transaction_id"] == follow_up["transaction_id"]
+            ))
+            await socket.feed(VOICE)
+            await socket.feed(SILENCE)
+            # The follow-up response has not played, so the unfinished audio still supplies context.
+            next_request = SPOKEN_TEMPLATE.format(spoken_text=heard_next, request_text=NORMAL_REQUEST)
+            assert await llm.calls.get() == ("Reply to Aki.", next_request, {"name": "Aki"})
+
+
+@pytest.mark.asyncio
+async def test_unverified_playback_preserves_before_audio_context(monkeypatch, tmp_path):
+    clock = fake_playback_clock(monkeypatch)
+
+    async with connected_voice_app(
+        monkeypatch, tmp_path, turn_taking_gate=None, interruption_before_audio_template=BEFORE_AUDIO_TEMPLATE,
+    ) as (socket, llm, _):
+        async with asyncio.timeout(3):
+            first = await start_first_response(socket, llm)
+            first_id = first["transaction_id"]
+            await socket.send("playback", metadata={
+                "event": "start", "playback_id": "unknown", "transaction_id": first_id,
+                "text": "Unverified speech", "duration_seconds": 8,
+            })
+
+            clock.now = 104.0
+            await record_follow_up(socket)
+            llm.release_first_response.set()
+
+            expected = BEFORE_AUDIO_TEMPLATE.format(previous_request=FIRST_REQUEST, request_text=FOLLOW_UP)
+            assert await llm.calls.get() == ("Reply to Aki.", expected, {"name": "Aki"})
+            await assert_new_start(socket, first_id, FOLLOW_UP, expected)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("boundary", "with_gate"),
     [("completed", True), ("completed", False), ("stopped", True), ("final", True), ("muted", True)],
     ids=["completed", "completed-without-gate", "stopped", "final", "muted"],
 )
-async def test_gap_after_audio_retains_spoken_prefix_for_open_response(monkeypatch, tmp_path, boundary, with_gate):
+async def test_gap_after_audio_retains_spoken_prefix(monkeypatch, tmp_path, boundary, with_gate):
     clock = fake_playback_clock(monkeypatch)
 
     async with connected_voice_app(
@@ -346,14 +588,15 @@ async def test_gap_after_audio_retains_spoken_prefix_for_open_response(monkeypat
                 "event": "end", "playback_id": playback_id, "completed": boundary != "stopped",
             })
 
-            # No later chunk has started, and the response's final is still held.
+            # No later chunk starts. Only the client can confirm that playback finished.
             await record_follow_up(socket)
             release_first_final.set()
 
-            expected = (
-                SPOKEN_TEMPLATE.format(spoken_text=FIRST_RESPONSE, request_text=FOLLOW_UP)
-                if boundary == "completed" else FOLLOW_UP
-            )
+            if boundary == "final":
+                expected = FOLLOW_UP
+            else:
+                heard = "ABCD" if boundary == "stopped" else FIRST_RESPONSE
+                expected = SPOKEN_TEMPLATE.format(spoken_text=heard, request_text=FOLLOW_UP)
             assert await llm.calls.get() == ("Reply to Aki.", expected, {"name": "Aki"})
             await assert_new_start(socket, first_id, FOLLOW_UP, expected)
 
@@ -502,10 +745,7 @@ async def test_interruption_excludes_speech_from_replaced_queue_entry(monkeypatc
                 for message in socket.sent
             )
 
-            await report_completed_playback(socket, third.transaction_id)
-            await socket.wait_for(lambda message: (
-                message["type"] == "final" and message["transaction_id"] == third.transaction_id
-            ))
+            await report_completed_playback(socket, third.transaction_id, is_final=True)
             prior_messages = len(socket.sent)
             await socket.feed(VOICE)
             await socket.feed(SILENCE)
@@ -521,6 +761,7 @@ async def test_interruption_combines_processed_requests_before_audio(monkeypatch
         tmp_path,
         transcripts=(FIRST_REQUEST, FOLLOW_UP, ADDITIONAL_REQUEST),
         interruption_before_audio_template=BEFORE_AUDIO_TEMPLATE,
+        interruption_spoken_template=SPOKEN_TEMPLATE,
     ) as (socket, llm, _):
         release_second_response = asyncio.Event()
 
@@ -536,7 +777,7 @@ async def test_interruption_combines_processed_requests_before_audio(monkeypatch
             if first_heard:
                 # A sends its audio after B opens, while B is too short to mute it.
                 llm.release_first_response.set()
-                await report_completed_playback(socket, first_id)
+                await report_completed_playback(socket, first_id, is_final=True)
             else:
                 await trigger_barge_in(socket)
             await socket.feed(SILENCE)
