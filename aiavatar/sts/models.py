@@ -53,6 +53,7 @@ class STSResponse:
     transaction_id: str = None
     text: str = None
     voice_text: str = None
+    voice_text_tag: str = None
     language: str = None
     audio_data: bytes = None
     tool_call: ToolCall = None

@@ -101,6 +101,11 @@ llm = ChatGPTService(
 )
 ```
 
+When `voice_text` is extracted from a configured tag, the corresponding
+`LLMResponse` and pipeline `STSResponse` chunk carry the tag name
+(`"ack"` or `"answer"`) in `voice_text_tag`. Untagged speech and the aggregated
+pipeline `final` response have `voice_text_tag=None`.
+
 ### LLM Error Handling
 
 You can handle errors that occur during LLM API calls by using the `on_error` decorator. This is useful for customizing avatar responses when content filters are triggered or when API errors occur.

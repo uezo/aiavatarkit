@@ -281,3 +281,48 @@ async def test_pipeline_invocation_filters_all_hooks_by_channel(tmp_path):
         await pipeline.shutdown()
         await pipeline.stt.close()
         await pipeline.tts.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("voice_text_tag", "response_text", "expected"),
+    (
+        pytest.param(
+            ["ack", "answer"],
+            "<ack>了解</ack>\n<think>内部。</think><answer>最初。続き。最後</answer>",
+            [("了解", "ack"), ("最初。", "answer"), ("続き。", "answer"), ("最後", "answer")],
+            id="tagged",
+        ),
+        pytest.param(["answer"], "タグなし。", [("タグなし。", None)], id="fallback"),
+        pytest.param(None, "設定なし。", [("設定なし。", None)], id="unconfigured"),
+    ),
+)
+async def test_pipeline_voice_text_tags(tmp_path, voice_text_tag, response_text, expected):
+    pipeline = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=LLMServiceDummy(
+            response_text=response_text,
+            voice_text_tag=voice_text_tag,
+            db_connection_str=str(tmp_path / "context.db"),
+        ),
+        tts=SpeechSynthesizerDummy(synthesized_bytes=b"voice"),
+        db_connection_str=str(tmp_path / "pipeline.db"),
+        voice_recorder_enabled=False,
+        voice_recorder_dir=str(tmp_path / "voices"),
+    )
+    try:
+        responses = [response async for response in pipeline.invoke(STSRequest(
+            session_id="session", user_id="user", text="request"
+        ))]
+    finally:
+        await pipeline.shutdown()
+        await pipeline.stt.close()
+        await pipeline.tts.close()
+
+    chunks = [response for response in responses if response.type == "chunk"]
+    assert [(chunk.voice_text, chunk.voice_text_tag) for chunk in chunks if chunk.voice_text] == expected
+    assert all(chunk.voice_text_tag is None for chunk in chunks if not chunk.voice_text)
+    assert responses[-1].type == "final"
+    assert responses[-1].voice_text == "".join(text for text, _ in expected)
+    assert responses[-1].voice_text_tag is None
