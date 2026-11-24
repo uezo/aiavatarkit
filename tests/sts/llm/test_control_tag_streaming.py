@@ -1,6 +1,6 @@
 import pytest
 
-from aiavatar.sts.llm.base import LLMResponse, LLMServiceDummy
+from aiavatar.sts.llm.base import LLMResponse, LLMServiceDummy, ToolCall
 
 
 class ChunkedLLMServiceDummy(LLMServiceDummy):
@@ -19,8 +19,11 @@ class ChunkedLLMServiceDummy(LLMServiceDummy):
         session_id=None,
         channel=None,
     ):
-        for text in self.response_chunks:
-            yield LLMResponse(context_id=context_id, text=text)
+        for chunk in self.response_chunks:
+            if isinstance(chunk, LLMResponse):
+                yield chunk
+            else:
+                yield LLMResponse(context_id=context_id, text=chunk)
 
 
 @pytest.mark.asyncio
@@ -98,3 +101,25 @@ async def test_incomplete_known_control_tag_is_not_spoken(tmp_path):
 
     assert "<artifact " in "".join(text_parts)
     assert "".join(voice_parts) == "こちらです。"
+
+
+@pytest.mark.asyncio
+async def test_tool_call_flush_preserves_voice_text_tag(tmp_path):
+    tool_call = ToolCall(name="lookup")
+    service = ChunkedLLMServiceDummy(
+        response_chunks=[
+            "<ack>確認します",
+            LLMResponse("context", None, None, tool_call),
+            "</ack>",
+        ],
+        voice_text_tag="ack",
+        db_connection_str=str(tmp_path / "context.db"),
+    )
+
+    responses = [response async for response in service.chat_stream("context", "user", "check")]
+
+    assert (responses[0].voice_text, responses[0].voice_text_tag) == ("確認します", "ack")
+    assert responses[1].tool_call is tool_call
+    assert responses[1].voice_text_tag is None
+    assert responses[2].voice_text == ""
+    assert responses[2].voice_text_tag is None

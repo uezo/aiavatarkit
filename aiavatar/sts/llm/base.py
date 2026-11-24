@@ -72,10 +72,22 @@ class Guardrail(ABC):
 
 
 class LLMResponse:
-    def __init__(self, context_id: str, text: str = None, voice_text: str = None, tool_call: ToolCall = None, guradrail_name: str = None, error_info: dict = None, structured_content: dict = None):
+    def __init__(
+        self,
+        context_id: str,
+        text: str = None,
+        voice_text: str = None,
+        tool_call: ToolCall = None,
+        guradrail_name: str = None,
+        error_info: dict = None,
+        structured_content: dict = None,
+        *,
+        voice_text_tag: str = None,
+    ):
         self.context_id = context_id
         self.text = text
         self.voice_text = voice_text
+        self.voice_text_tag = voice_text_tag
         self.tool_call = tool_call
         self.guradrail_name = guradrail_name
         self.error_info = error_info or {}
@@ -620,39 +632,35 @@ The list of tools is as follows:
         terminal_tag_closed = False
         discarded_buffer = ""
 
-        def to_voice_text(segment: str) -> Optional[str]:
+        def to_voice_text(segment: str) -> Tuple[Optional[str], Optional[str]]:
             if not voice_text_tags:
-                return self.remove_control_tags(segment)
+                return self.remove_control_tags(segment), None
 
             nonlocal current_voice_tag
 
-            # Check each tag for open/close in this segment
+            # An opening tag takes precedence over the tag carried from the previous segment.
             for tag, (t_start, t_end) in targets.items():
-                if t_start in segment and t_end in segment:
-                    current_voice_tag = None
-                    start_index = segment.find(t_start)
-                    end_index = segment.find(t_end)
-                    voice_segment = segment[start_index + len(t_start): end_index]
-                    return self.remove_control_tags(voice_segment)
+                start_index = segment.find(t_start)
+                if start_index >= 0:
+                    start_index += len(t_start)
+                    break
+            else:
+                tag = current_voice_tag
+                if not tag:
+                    return None, None
+                _, t_end = targets[tag]
+                start_index = 0
 
-                elif t_start in segment:
-                    current_voice_tag = tag
-                    start_index = segment.find(t_start)
-                    voice_segment = segment[start_index + len(t_start):]
-                    return self.remove_control_tags(voice_segment)
+            end_index = segment.find(t_end)
+            if end_index >= 0:
+                current_voice_tag = None
+                voice_segment = segment[start_index:end_index]
+            else:
+                current_voice_tag = tag
+                voice_segment = segment[start_index:]
 
-            # Check for end of current voice tag
-            if current_voice_tag:
-                _, t_end = targets[current_voice_tag]
-                if t_end in segment:
-                    current_voice_tag = None
-                    end_index = segment.find(t_end)
-                    voice_segment = segment[:end_index]
-                    return self.remove_control_tags(voice_segment)
-                else:
-                    return self.remove_control_tags(segment)
-
-            return None
+            voice_text = self.remove_control_tags(voice_segment)
+            return voice_text, tag if voice_text else None
 
         async for chunk in self.get_llm_stream_response(context_id, user_id, messages, system_prompt_params, inline_llm_params=inline_llm_params, session_id=session_id, channel=channel):
             if chunk.error_info:
@@ -665,8 +673,8 @@ The list of tools is as follows:
             if chunk.tool_call:
                 if stream_buffer:
                     # Yield text content before tool call
-                    voice_text = to_voice_text(stream_buffer)
-                    yield LLMResponse(context_id, stream_buffer, voice_text)
+                    voice_text, voice_text_tag = to_voice_text(stream_buffer)
+                    yield LLMResponse(context_id, stream_buffer, voice_text, voice_text_tag=voice_text_tag)
                     response_text += stream_buffer
                     stream_buffer = ""
                 yield chunk
@@ -707,8 +715,8 @@ The list of tools is as follows:
             while len(segments) > 1:
                 sentence = segments.pop(0)
                 stream_buffer = "|".join(segments)
-                voice_text = to_voice_text(sentence)
-                yield LLMResponse(context_id, sentence, voice_text)
+                voice_text, voice_text_tag = to_voice_text(sentence)
+                yield LLMResponse(context_id, sentence, voice_text, voice_text_tag=voice_text_tag)
                 response_text += sentence
                 segments = stream_buffer.split("|")
 
@@ -724,8 +732,8 @@ The list of tools is as follows:
             )
 
         if stream_buffer:
-            voice_text = to_voice_text(stream_buffer)
-            yield LLMResponse(context_id, stream_buffer, voice_text)
+            voice_text, voice_text_tag = to_voice_text(stream_buffer)
+            yield LLMResponse(context_id, stream_buffer, voice_text, voice_text_tag=voice_text_tag)
             response_text += stream_buffer
 
         if voice_text_tags and not any(tag in response_text for tag in voice_text_tags):

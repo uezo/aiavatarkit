@@ -841,6 +841,7 @@ class STSPipeline:
                     transaction_id=request.transaction_id,
                     text=llm_stream_chunk.text,
                     voice_text=llm_stream_chunk.voice_text,
+                    voice_text_tag=llm_stream_chunk.voice_text_tag,
                     language=language,
                     audio_data=audio_chunk,
                     metadata={"is_first_chunk": is_first_chunk, "is_guardrail_triggered": True if guradrail_name else False},
