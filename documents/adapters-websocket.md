@@ -78,8 +78,8 @@ bytes. For 16-bit mono PCM, use a multiple of 2; for 16-bit stereo, a multiple o
 chunk may be shorter but still contains whole PCM frames.
 
 For each original WAV, the server first sends a `type: "chunk"` descriptor with
-`audio_data: null`. It preserves the response's text, `voice_text`, controls, and
-metadata, and adds:
+`audio_data: null`. It preserves the response's text, `voice_text`,
+`voice_text_tag`, controls, and metadata, and adds:
 
 ```json
 {
@@ -101,9 +101,8 @@ ID and determines receipt completion from the total frame count. WebSocket
 preserves delivery order; no sequence numbers, acknowledgments, or retransmission
 messages are needed.
 
-The standard `NodPipelineBridge` uses this same delivery mode. In PCM mode, its
-descriptor carries `metadata.nod=true` and the Nod metadata; its audio messages
-contain PCM, allowing PCM-only clients to play acknowledgments too.
+`send_response()` frames raw audio supplied as `bytes` in `AIAvatarResponse.audio_data`.
+When passing already encoded audio directly, supply the Base64 as a `str`.
 
 The maintained `index.html` and `3d.html` clients support signed 16-bit
 little-endian PCM with the declared sample rate and channel count. Use the
@@ -113,13 +112,45 @@ arrive. The server still synthesizes a complete WAV before splitting it, so the
 total length is known before transmission. See the
 [browser playback details](../examples/websocket/README.md#pcm-audio-playback).
 
-With `debug=True`, the server logs one INFO summary per original audio, including
-Nod, prefixed `WebSocket audio:` with its format, IDs, PCM format, byte/chunk sizes, and `nod` flag.
+With `debug=True`, the server logs one INFO summary per original audio, prefixed
+`WebSocket audio:` with its format, IDs, PCM format, byte/chunk sizes, and `voice_text_tag`.
 For PCM, `audio_id` matches the browser's `playback_id`; `planned_chunks` excludes
 the descriptor and counts planned chunks, so interruption can reduce the number actually sent.
 WAV reports `audio_id=None` and `planned_chunks=1`; its browser playback ID is generated later.
 `debug=False` emits no audio summaries.
 
+### Protect an ACK from barge-in
+
+Set `barge_in_protected_tags` to keep selected voice clips playing during barge-in
+in the maintained browser clients.
+
+```python
+server = AIAvatarWebSocketServer(
+    vad=vad, stt=speech_recognizer, llm=llm, tts=tts,
+    mute_on_barge_in=True,
+    barge_in_protected_tags=["ack"],
+)
+```
+
+WebSocket chunks expose the pipeline's `voice_text_tag` as a top-level field.
+For audio, a tag is carried on the complete WAV message or PCM descriptor.
+Untagged chunks and the following raw PCM payloads have `voice_text_tag: null`.
+An ACK has `voice_text_tag: "ack"` and uses the same audio framing as the answer.
+The adapter matches `barge_in_protected_tags` against this tag and defaults to
+protecting no tags. Include `"ack"` in the LLM's
+[`voice_text_tag`](llm.md#voice-text-tag-think-before-answering) configuration.
+
+The browser keeps protected WAV and PCM clips on an ordinary `stop`, including
+when `mute_on_barge_in` stops playback or the pipeline starts a new response.
+Once the server begins sending protected PCM audio, it finishes the clip using
+the configured chunk size. Muting before a clip begins sending still drops it.
+In this example, the answer remains interruptible, and the microphone stays
+active when BARGE-IN is enabled.
+
+A `stop` with `metadata.force_stop=true` stops even protected audio. Guardrail
+stops use this flag, and applications can set it through
+`server.stop_response(session_id, context_id, metadata={"force_stop": True})`.
+The browser Stop button and disconnect also stop all audio.
 
 ## Response transaction IDs
 
@@ -176,8 +207,10 @@ Successive chunks in the same streamed reply retain the earlier spoken text.
 
 The adapter matches reported playback to the response's audio chunks by
 transaction ID and `voice_text`. Unplayed chunks do not contribute to the
-spoken text. An ACK marked with `metadata.nod=true` can use the same playback
-reports by carrying its ordinary `voice_text` and `transaction_id`.
+spoken text. ACKs use the same playback start and end reports as answers.
+The browser selects the final non-ACK audio clip for its playback final
+report. An ACK-only response still has a response `final`, and its spoken audio
+remains available as interruption context after playback ends.
 
 When there is no spoken prefix and the active response has sent no audio, the
 adapter can capture that response's transaction ID and the last transaction

@@ -118,6 +118,9 @@ class RealtimeWebSocketServer(AIAvatarWebSocketServer):
             raise WebSocketDisconnect(code=1011, reason="Audio session startup failed") from None
 
     async def send_response(self, response):
+        if response.type == "chunk" and isinstance(response.audio_data, bytes) and response.audio_data:
+            await super().send_response(response)
+            return
         session = self.sessions.get(response.session_id)
         if session is None:
             return
@@ -157,7 +160,7 @@ class RealtimeWebSocketServer(AIAvatarWebSocketServer):
             type=response.type, session_id=response.session_id,
             user_id=response.user_id, context_id=response.context_id,
             transaction_id=response.transaction_id, text=response.text,
-            voice_text=response.voice_text, language=response.language,
+            voice_text=response.voice_text, voice_text_tag=response.voice_text_tag, language=response.language,
             audio_data=response.audio_data, metadata=dict(response.metadata),
             structured_content=response.structured_content,
         )

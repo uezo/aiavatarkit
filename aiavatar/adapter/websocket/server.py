@@ -43,9 +43,9 @@ def iter_audio_responses(response: AIAvatarResponse, wav_data: bytes,
         if debug:
             logger.info(
                 "WebSocket audio: format=wav, session=%s, transaction_id=%s, "
-                "audio_id=None, audio_bytes=%s, chunk_size=0, planned_chunks=1, nod=%s",
+                "audio_id=None, audio_bytes=%s, chunk_size=0, planned_chunks=1, voice_text_tag=%s",
                 response.session_id, response.transaction_id, len(wav_data),
-                (response.metadata or {}).get("nod", False),
+                response.voice_text_tag,
             )
         yield response.model_copy(update={
             "audio_data": base64.b64encode(wav_data).decode("ascii")
@@ -65,11 +65,11 @@ def iter_audio_responses(response: AIAvatarResponse, wav_data: bytes,
         logger.info(
             "WebSocket audio: format=pcm, session=%s, transaction_id=%s, audio_id=%s, "
             "sample_rate=%s, channels=%s, sample_width=%s, audio_bytes=%s, "
-            "chunk_size=%s, planned_chunks=%s, nod=%s",
+            "chunk_size=%s, planned_chunks=%s, voice_text_tag=%s",
             response.session_id, response.transaction_id, audio_id,
             pcm_format["sample_rate"], pcm_format["channels"], pcm_format["sample_width"],
             len(pcm_data), chunk_size, (len(pcm_data) + chunk_size - 1) // chunk_size,
-            (response.metadata or {}).get("nod", False),
+            response.voice_text_tag,
         )
     yield response.model_copy(update={
         "audio_data": None,
@@ -153,6 +153,7 @@ class AIAvatarWebSocketServer(Adapter):
         timestamp_prefix: str = "$Current date and time: ",
         timestamp_timezone: str = "UTC",
         mute_on_barge_in: bool = False,
+        barge_in_protected_tags: Optional[List[str]] = None,
         include_interruption_context: bool = False,
         db_pool_provider: PoolProvider = None,
         db_connection_str: str = "aiavatar.db",
@@ -241,6 +242,7 @@ class AIAvatarWebSocketServer(Adapter):
 
         # WebSocket processing
         self.response_audio_chunk_size = response_audio_chunk_size
+        self.barge_in_protected_tags = list(barge_in_protected_tags or [])
 
         # API Key
         self.api_key = api_key
@@ -488,22 +490,45 @@ class AIAvatarWebSocketServer(Adapter):
 
     # Response
     async def send_response(self, aiavatar_response: AIAvatarResponse):
+        """Send a response, framing audio bytes and preserving encoded audio strings."""
         session_id = aiavatar_response.session_id
         session_data = self.sessions.get(session_id)
         if not session_data:
             return
-        async with session_data.send_lock:
-            websocket = self.websockets.get(session_id)
-            if websocket is None:
+        audio_data = aiavatar_response.audio_data
+        raw_audio = audio_data if aiavatar_response.type == "chunk" and isinstance(audio_data, bytes) else None
+        responses = iter((aiavatar_response,))
+        protected_pcm = False
+        if raw_audio:
+            chunk_size = self.response_audio_chunk_size
+            protected_pcm = chunk_size > 0 and (aiavatar_response.metadata or {}).get("protect_from_barge_in") is True
+            responses = iter_audio_responses(aiavatar_response, raw_audio, chunk_size, debug=self.debug)
+
+        # Keep a protected clip's descriptor and audio together under one send lock.
+        batches = (responses,) if protected_pcm else ((response,) for response in responses)
+        for batch in batches:
+            if raw_audio and not self._is_deliverable(session_data, aiavatar_response):
                 return
-            state = session_data.interruption_state
-            await websocket.send_text(aiavatar_response.model_dump_json())
-            if (state is not None and self.sessions.get(session_id) is session_data
-                    and self.websockets.get(session_id) is websocket):
-                metadata = aiavatar_response.metadata or {}
-                if ((aiavatar_response.type == "chunk" and aiavatar_response.audio_data and not metadata.get("nod"))
-                        or (aiavatar_response.type == "final" and not metadata.get("interrupted"))):
-                    state.mark_answered(aiavatar_response.transaction_id)
+            async with session_data.send_lock:
+                websocket = self.websockets.get(session_id)
+                if websocket is None or self.sessions.get(session_id) is not session_data:
+                    return
+                if protected_pcm and not self._is_deliverable(session_data, aiavatar_response):
+                    return
+
+                for response in batch:
+                    state = session_data.interruption_state
+                    await websocket.send_text(response.model_dump_json())
+                    if (self.sessions.get(session_id) is not session_data
+                            or self.websockets.get(session_id) is not websocket):
+                        return
+                    if state is not None:
+                        metadata = response.metadata or {}
+                        # PCM payloads use the original audio clip's tag.
+                        if ((response.type == "chunk" and response.audio_data
+                             and aiavatar_response.voice_text_tag != "ack")
+                                or (response.type == "final" and not metadata.get("interrupted"))):
+                            state.mark_answered(response.transaction_id)
 
     def can_handle(self, session_id: str) -> bool:
         return self.sessions.get(session_id) is not None
@@ -551,6 +576,7 @@ class AIAvatarWebSocketServer(Adapter):
             transaction_id=response.transaction_id,
             text=response.text,
             voice_text=response.voice_text,
+            voice_text_tag=response.voice_text_tag,
             control_tags=(self.parse_control_tags(response.text) or None) if response.type == "chunk" else None,
             audio_data=response.audio_data,
             metadata=response.metadata or {},
@@ -564,7 +590,7 @@ class AIAvatarWebSocketServer(Adapter):
         if response.type == "chunk":
             # Stop response if guardrail triggered
             if response.metadata.get("is_guardrail_triggered"):
-                await self.stop_response(response.session_id, response.context_id)
+                await self.stop_response(response.session_id, response.context_id, metadata={"force_stop": True})
 
             # Language
             aiavatar_response.language = response.language
@@ -572,15 +598,11 @@ class AIAvatarWebSocketServer(Adapter):
             # Face and Animation
             aiavatar_response.avatar_control_request = self.parse_avatar_control_request(response.text)
 
-            # Voice
-            if response.audio_data:
-                for audio_response in iter_audio_responses(
-                        aiavatar_response, response.audio_data, self.response_audio_chunk_size,
-                        debug=self.debug):
-                    if not self._is_deliverable(session_data, response):
-                        break
-                    await self.send_response(audio_response)
-                return
+            if aiavatar_response.audio_data and aiavatar_response.voice_text_tag in self.barge_in_protected_tags:
+                aiavatar_response.metadata = {
+                    **(aiavatar_response.metadata or {}),
+                    "protect_from_barge_in": True,
+                }
 
         elif response.type == "tool_call":
             aiavatar_response.metadata["tool_call"] = response.tool_call.to_dict()
@@ -613,7 +635,7 @@ class AIAvatarWebSocketServer(Adapter):
 
         await self.send_response(aiavatar_response)
 
-    def _is_deliverable(self, session_data: WebSocketSessionData, response: STSResponse) -> bool:
+    def _is_deliverable(self, session_data: WebSocketSessionData, response: STSResponse | AIAvatarResponse) -> bool:
         """Return whether the response can be sent to this connection now.
 
         A response with a transaction ID is sent only while the client has that transaction
@@ -646,12 +668,13 @@ class AIAvatarWebSocketServer(Adapter):
             metadata={"interrupted": True}
         ))
 
-    async def stop_response(self, session_id: str, context_id: str):
+    async def stop_response(self, session_id: str, context_id: str, *, metadata: Optional[dict] = None):
         # Send stop message to client
         await self.send_response(AIAvatarResponse(
             type="stop",
             session_id=session_id,
-            context_id=context_id
+            context_id=context_id,
+            metadata=metadata,
         ))
 
     def _authenticate_websocket(self, websocket: WebSocket) -> Optional[str]:

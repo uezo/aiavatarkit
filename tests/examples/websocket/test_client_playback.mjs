@@ -68,8 +68,11 @@ async function harness({ autoDecode = true, socketError = null, getUserMedia = n
 }
 
 const audio = marker => ({ type: "chunk", audio_data: Buffer.from(marker).toString("base64") });
-const nod = id => ({ ...audio(id), metadata: { nod: true, nod_id: id } });
 const stopResponse = { type: "stop" };
+const forcedStopResponse = { type: "stop", metadata: { force_stop: true } };
+const protectedAudio = marker => ({
+    ...audio(marker), metadata: { protect_from_barge_in: true },
+});
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
 const deferred = () => {
     let resolve;
@@ -77,7 +80,7 @@ const deferred = () => {
     return { promise, resolve };
 };
 
-test("disconnect without nods stops main audio and microphone without generating a response", async () => {
+test("disconnect stops main audio and microphone without generating a response", async () => {
     const { client, socket, context, sources, microphoneTrack } = await harness();
     const received = [];
     client.onResponseReceived = message => received.push(message);
@@ -172,115 +175,65 @@ test("a page may stop again after disconnect without duplicate audio shutdown", 
     assert.equal(microphoneTrack.stopped, true);
 });
 
-test("nod metadata without a playback ID preserves resume and main-response ordering", async () => {
+test("barge-in and response transitions retain decoding and queued protected WAV audio in order", async () => {
     const { client, socket, context, sources } = await harness({ autoDecode: false });
     try {
-        socket.receive({ ...audio("bc"), metadata: { nod: true } });
-        socket.receive(stopResponse);
-        context.autoDecode = true;
-        context.decodes[0]();
-        assert.equal(sources[0].buffer.marker, "bc");
-        socket.receive({ type: "accepted" });
-        socket.receive(audio("main"));
-        assert.equal(sources[0].stopped, undefined);
-        sources[0].end();
-        await flush();
-        assert.deepEqual(sources.map(source => source.buffer.marker), ["bc", "main"]);
-    } finally { await client.stopListening("session"); }
-});
-
-test("an audible nod finishes across user resumption and main response transition", async () => {
-    const { client, socket, sources } = await harness();
-    try {
-        socket.receive(nod("bc-1"));
+        socket.receive(protectedAudio("decoding-ack"));
+        socket.receive(audio("canceled-answer"));
+        socket.receive(protectedAudio("queued-ack"));
         socket.receive(stopResponse);
         socket.receive({ type: "accepted" });
-        socket.receive(audio("main"));
-        assert.equal(sources.length, 1);
-        assert.equal(sources[0].stopped, undefined);
-        assert.equal(client.currentAudioMessage.metadata.nod_id, "bc-1");
-        sources[0].end();
-        await flush();
-        assert.equal(sources.length, 2);
-        assert.equal(sources[1].buffer.marker, "main");
-        assert.equal(sources[0].stopped, undefined);
-    } finally { await client.stopListening("session"); }
-});
+        socket.receive(stopResponse);
+        socket.receive({ type: "start" });
+        socket.receive(audio("next-answer"));
 
-test("barge-in discards queued main audio and preserves queued and audible nods", async () => {
-    const { client, socket, sources } = await harness();
-    try {
-        socket.receive(nod("bc-1"));
-        socket.receive(audio("canceled-main"));
-        socket.receive(nod("pending-bc"));
-        socket.receive(stopResponse);
-        assert.deepEqual(client.messageQueue.map(message => message.metadata.nod_id), ["pending-bc"]);
-        assert.equal(sources[0].stopped, undefined);
-        sources[0].end();
-        await flush();
-        assert.deepEqual(sources.map(source => source.buffer.marker), ["bc-1", "pending-bc"]);
-        sources[1].end();
-        await flush();
-        assert.equal(client.isAudioPlaying, false);
-    } finally { await client.stopListening("session"); }
-});
-
-test("barge-in preserves a decoding nod without restarting its playback", async () => {
-    const { client, socket, context, sources } = await harness({ autoDecode: false });
-    try {
-        socket.receive(nod("decoding-bc"));
-        socket.receive(nod("queued-bc"));
-        socket.receive(stopResponse);
-        socket.receive(stopResponse);
-        assert.equal(client.currentAudioMessage.metadata.nod_id, "decoding-bc");
-        assert.deepEqual(client.messageQueue.map(message => message.metadata.nod_id), ["queued-bc"]);
         context.autoDecode = true;
         context.decodes[0]();
-        assert.deepEqual(sources.map(source => source.buffer.marker), ["decoding-bc"]);
+        assert.deepEqual(sources.map(source => source.buffer.marker), ["decoding-ack"]);
         sources[0].end();
         await flush();
-        assert.deepEqual(sources.map(source => source.buffer.marker), ["decoding-bc", "queued-bc"]);
+        assert.deepEqual(sources.map(source => source.buffer.marker), ["decoding-ack", "queued-ack"]);
         sources[1].end();
         await flush();
-        assert.equal(client.processingQueue, false);
+        assert.deepEqual(sources.map(source => source.buffer.marker), ["decoding-ack", "queued-ack", "next-answer"]);
     } finally { await client.stopListening("session"); }
 });
 
 for (const autoDecode of [true, false]) {
-    test(`barge-in stops ${autoDecode ? "playing" : "decoding"} main audio then plays the retained nod`, async () => {
+    test(`a forced stop cancels ${autoDecode ? "playing" : "decoding"} and queued protected WAV audio`, async () => {
         const { client, socket, context, sources } = await harness({ autoDecode });
         try {
-            socket.receive(audio("main"));
-            socket.receive(audio("queued-main"));
-            socket.receive(nod("queued-bc"));
-            socket.receive(stopResponse);
-            assert.deepEqual(client.messageQueue.map(message => message.metadata.nod_id), ["queued-bc"]);
-            context.autoDecode = true;
+            socket.receive(protectedAudio("current-ack"));
+            socket.receive(protectedAudio("queued-ack"));
+            socket.receive(forcedStopResponse);
+            if (!autoDecode) context.decodes[0]();
             await flush();
+            assert.equal(client.messageQueue.length, 0);
+            assert.equal(client.isAudioPlaying, false);
+            assert.equal(sources.length, autoDecode ? 1 : 0);
             if (autoDecode) assert.equal(sources[0].stopped, true);
-            else context.decodes[0](); // A canceled main decode must not start later.
-            assert.deepEqual(sources.map(source => source.buffer.marker), autoDecode ? ["main", "queued-bc"] : ["queued-bc"]);
-            assert.equal(client.currentAudioMessage.metadata.nod_id, "queued-bc");
-            sources.at(-1).end();
-            await flush();
-            assert.equal(client.processingQueue, false);
         } finally { await client.stopListening("session"); }
     });
 }
 
-for (const transition of ["accepted", "start", "chunk"]) {
-    test(`${transition} drops a decoding and a queued nod before main playback`, async () => {
-        const { client, socket, context, sources } = await harness({ autoDecode: false });
+for (const autoDecode of [true, false]) {
+    test(`barge-in stops ${autoDecode ? "playing" : "decoding"} main audio then plays protected audio`, async () => {
+        const { client, socket, context, sources } = await harness({ autoDecode });
         try {
-            socket.receive(nod("decoding-bc"));
-            socket.receive(nod("queued-bc"));
-            context.autoDecode = true;
-            socket.receive({ type: transition });
             socket.receive(audio("main"));
+            socket.receive(audio("queued-main"));
+            socket.receive(protectedAudio("queued-ack"));
+            socket.receive(stopResponse);
+            assert.equal(client.messageQueue.length, 1);
+            assert.equal(client.messageQueue[0].metadata.protect_from_barge_in, true);
+            context.autoDecode = true;
             await flush();
-            assert.deepEqual(sources.map(source => source.buffer.marker), ["main"]);
-            context.decodes[0]();
-            assert.equal(sources.length, 1);
+            if (autoDecode) assert.equal(sources[0].stopped, true);
+            else context.decodes[0](); // A canceled main decode must not start later.
+            assert.deepEqual(sources.map(source => source.buffer.marker), autoDecode ? ["main", "queued-ack"] : ["queued-ack"]);
+            sources.at(-1).end();
+            await flush();
+            assert.equal(client.processingQueue, false);
         } finally { await client.stopListening("session"); }
     });
 }
@@ -306,10 +259,10 @@ for (const autoDecode of [true, false]) {
 
 for (const autoDecode of [true, false]) {
     for (const disconnect of [true, false]) {
-        test(`${disconnect ? "disconnect" : "explicit Stop"} terminates ${autoDecode ? "playing" : "decoding"} nods and releases resources`, async () => {
+        test(`${disconnect ? "disconnect" : "explicit Stop"} terminates ${autoDecode ? "playing" : "decoding"} protected audio and releases resources`, async () => {
             const { client, socket, context, sources, microphoneTrack } = await harness({ autoDecode });
-            socket.receive(nod("bc-1"));
-            socket.receive(audio("queued-main"));
+            socket.receive(protectedAudio("ack"));
+            socket.receive(protectedAudio("queued-ack"));
             if (disconnect) socket.close();
             else await client.stopListening("session");
             await flush();
@@ -330,38 +283,7 @@ test("startup preserves an error raised before the WebSocket is created", async 
     await assert.rejects(harness({ socketError }), error => error === socketError);
 });
 
-test("nod wire messages preserve playing audio and clear pending audio", async () => {
-    const { client, socket, sources } = await harness();
-    try {
-        const nodAudio = id => ({ ...audio(id), metadata: { nod: true, nod_id: id } });
-        socket.receive(nodAudio("nod-1"));
-        socket.receive(audio("old-main"));
-        socket.receive(nodAudio("nod-2"));
-        socket.receive(stopResponse);
-        assert.equal(sources[0].stopped, undefined);
-        assert.equal(client.messageQueue.length, 1);
-        socket.receive({ type: "accepted" });
-        socket.receive(audio("new-main"));
-        assert.equal(sources[0].stopped, undefined);
-        sources[0].end();
-        await flush();
-        assert.deepEqual(sources.map(source => source.buffer.marker), ["nod-1", "new-main"]);
-        socket.receive(stopResponse);
-        assert.equal(sources[1].stopped, true);
-    } finally { await client.stopListening("session"); }
-});
-
-test("plain stop preserves a playing nod without a playback ID", async () => {
-    const { client, socket, sources } = await harness();
-    try {
-        socket.receive({ ...audio("nod"), metadata: { nod: true } });
-        socket.receive({ type: "stop" });
-        assert.equal(sources[0].stopped, undefined);
-        assert.equal(client.messageQueue.length, 0);
-    } finally { await client.stopListening("session"); }
-});
-
-test("empty-text nods leave the 3D message window unchanged while audio and normal responses continue", async () => {
+test("empty-text audio leaves the 3D message window unchanged", async () => {
     const { client, socket, sources } = await harness();
     const AvatarUI = new Function(`${uiSource}; return AvatarUI;`)();
     const ui = Object.create(AvatarUI.prototype);
@@ -385,20 +307,17 @@ test("empty-text nods leave the 3D message window unchanged while audio and norm
     new Function("aiavatar", "ui", "backlog", "artifacts", "modelAdapter", "vision", "display", "playbackContext", handler)(
         client, ui, consumer("backlog"), consumer("artifacts"), consumer("model"), consumer("vision"), {}, consumer("playback"),
     );
-    const nodAudio = id => ({
-        ...audio(id), text: "", voice_text: "",
-        metadata: { nod: true, nod_id: id, recording_id: "record-a" },
-    });
+    const emptyAudio = marker => ({ ...audio(marker), text: "", voice_text: "" });
     try {
-        socket.receive(nodAudio("nod-1"));
+        socket.receive(emptyAudio("empty-1"));
         assert.deepEqual([...messageClasses], ["hidden"]);
         assert.equal(ui.currentAIText, "");
         assert.equal(received[0][0], "playback");
-        assert.ok(received.some(([name, response]) => name === "backlog" && response.metadata?.nod === true));
-        assert.equal(sources[0].buffer.marker, "nod-1");
+        assert.ok(received.some(([name, response]) => name === "backlog" && response.voice_text === ""));
+        assert.equal(sources[0].buffer.marker, "empty-1");
 
         socket.receive({ type: "info", text: null, metadata: { partial_request_text: "話の続き" } });
-        socket.receive(nodAudio("nod-2"));
+        socket.receive(emptyAudio("empty-2"));
         assert.equal(ui.partialTranscriptText.textContent, "話の続き");
         assert.equal(ui.partialTranscriptLabel.textContent, "User · Transcribing");
         assert.equal(ui.partialTranscript.hidden, false);
@@ -413,12 +332,9 @@ test("empty-text nods leave the 3D message window unchanged while audio and norm
         assert.equal(ui.messageSpeaker.textContent, "AI");
         assert.equal(ui.isServerProcessing, false);
         assert.ok(received.some(([name, response]) => name === "backlog" && response.type === "final"));
-        assert.ok(received.filter(([, response]) => response.metadata?.nod === true)
-            .every(([, response]) => response.text === "" && response.voice_text === ""));
-        assert.equal(sources[0].stopped, undefined);
-        sources[0].end();
+        assert.equal(sources[0].stopped, true);
         await flush();
-        assert.deepEqual(sources.map(source => source.buffer.marker), ["nod-1", "main"]);
+        assert.deepEqual(sources.map(source => source.buffer.marker), ["empty-1", "main"]);
     } finally {
         ui.dispose();
         await client.stopListening("session");

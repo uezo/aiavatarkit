@@ -23,6 +23,7 @@ def create_server_with_session(session_id: str, **kwargs):
     server.websockets = {}
     server.debug = kwargs.get("debug", False)
     server.response_audio_chunk_size = kwargs.get("response_audio_chunk_size", 512)
+    server.barge_in_protected_tags = []
     server._on_response_handlers = []
     server.control_tag_pattern = r'\[{tag}:(\w+)\]|<{tag}\s[^>]*{attr}=["\'](\w+)["\']'
 
@@ -244,6 +245,7 @@ async def test_audio_responses_preserve_transaction_id(response_audio_chunk_size
 
     async def check_response_hook(aiavatar_response, response):
         assert aiavatar_response.transaction_id == response.transaction_id == "txn_1"
+        assert aiavatar_response.voice_text_tag == response.voice_text_tag == "answer"
 
     server._on_response_handlers.append(check_response_hook)
     await server.handle_response(STSResponse(
@@ -252,12 +254,14 @@ async def test_audio_responses_preserve_transaction_id(response_audio_chunk_size
         transaction_id="txn_1",
         text="hello",
         voice_text="hello",
+        voice_text_tag="answer",
         audio_data=wav_data,
         metadata={},
     ))
 
     messages = [json.loads(message) for message in ws.sent_messages]
     assert all(message["transaction_id"] == "txn_1" for message in messages)
+    assert messages[0]["voice_text_tag"] == "answer"
     if response_audio_chunk_size:
         assert len(messages) == 7  # One format/text message and six PCM chunks.
         assert messages[0]["audio_data"] is None

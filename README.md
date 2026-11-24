@@ -17,7 +17,7 @@
 
 ## ✨ Features
 
-- **⚡️ Ultra-low latency** — streaming and parallel throughout the pipeline, even running STT speculatively and giving a spoken nod before the answer itself. **&lt;1s** from end of speech to first audio, measured.
+- **⚡️ Ultra-low latency** — streaming and parallel throughout the pipeline, even running STT speculatively and giving a short spoken acknowledgment before the answer itself. **&lt;1s** from end of speech to first audio, measured.
 
 - **💬 Semantic turn management** — turn end, turn taking, and even the wakeword are judged by meaning, not just by silence or keywords. A thinking pause doesn't cut the user off, a backchannel doesn't interrupt the avatar, and picking up where the last conversation left off wakes it without saying its name.
 
@@ -484,7 +484,7 @@ person* resume their conversation when they switch channels, add a channel conte
 ### 🔖 Reference
 
 - [Migration guide](documents/migration.md) — v0.6.x to v0.7.0 and later
-- [examples/](examples/) — WebSocket browser UI, local client, Twilio, Asterisk, speech recognition server, [Realtime API and GPT-Live](examples/websocket/realtime/), [Nod backchannels](examples/nod/) (🧪 experimental)
+- [examples/](examples/) — WebSocket browser UI, local client, Twilio, Asterisk, speech recognition server, [Realtime API and GPT-Live](examples/websocket/realtime/)
 
 
 ## ⚖️ License

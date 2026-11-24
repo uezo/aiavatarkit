@@ -115,7 +115,8 @@ const finalResponse = (overrides = {}) => ({
 });
 const ackAudio = (overrides = {}) => audio("うん。", {
     transaction_id: "ack-transaction",
-    metadata: { nod: true },
+    voice_text_tag: "ack",
+    metadata: { protect_from_barge_in: true },
     ...overrides,
 });
 
@@ -167,11 +168,11 @@ test("explicit Stop reports the ACK end as incomplete", async () => {
     } finally { await client.stopListening("session"); }
 });
 
-test("a replaced ACK does not report playback if its decode was canceled", async () => {
+test("a forced stop cancels ACK decoding before it can report playback", async () => {
     const { client, context, sources } = await harness({ autoDecode: false });
     try {
         client.ws.receive(ackAudio());
-        client.ws.receive({ type: "accepted", transaction_id: "replacement" });
+        client.ws.receive({ type: "stop", metadata: { force_stop: true } });
         context.decodes[0].complete();
         await flush();
         assert.equal(sources.length, 0);
@@ -388,7 +389,7 @@ test("later non-text audio prevents earlier spoken audio from being called final
     } finally { await client.stopListening("session"); }
 });
 
-test("unmatched, interrupted, error, Nod, and legacy finals do not announce response completion", async () => {
+test("unmatched, interrupted, error, and legacy finals do not announce response completion", async () => {
     const { client } = await harness();
     try {
         client.ws.receive(audio("last", { transaction_id: "transaction" }));
@@ -396,7 +397,6 @@ test("unmatched, interrupted, error, Nod, and legacy finals do not announce resp
             { session_id: "another-session" }, { transaction_id: "another-transaction" },
             { transaction_id: null }, { transaction_id: undefined },
             { metadata: { interrupted: true } }, { metadata: { error: "failed" } },
-            { metadata: { nod: true } },
         ]) client.ws.receive(finalResponse(overrides));
         assert.equal(controls(client.ws).length, 1);
     } finally { await client.stopListening("session"); }
@@ -428,7 +428,7 @@ test("stop and reconnect discard pending and completed final candidates", async 
     } finally { await client.stopListening("session"); }
 });
 
-test("new Nod or backlog playback cannot reuse a previously completed final candidate", async () => {
+test("new ACK or backlog playback cannot reuse a previously completed final candidate", async () => {
     const { client, sources } = await harness();
     try {
         for (const [index, backlog] of [false, true].entries()) {
@@ -437,7 +437,7 @@ test("new Nod or backlog playback cannot reuse a previously completed final cand
             await flush();
             client.isBacklogAudioPlaying = backlog;
             const playback = client.playAudioSync("AA==", audio("auxiliary", {
-                transaction_id: "transaction", metadata: { nod: !backlog },
+                transaction_id: "transaction", voice_text_tag: backlog ? undefined : "ack",
             }));
             client.ws.receive(finalResponse());
             sources[index * 2 + 1].end();
@@ -532,13 +532,10 @@ test("canceling from a start callback never starts an orphaned audio source", as
     } finally { await client.stopListening("session"); }
 });
 
-test("Nod, backlog, non-text, and unaddressed audio do not send controls", async () => {
+test("backlog, non-text, and unaddressed audio do not send controls", async () => {
     const { client } = await harness();
     try {
         for (const [message, backlog] of [
-            [audio("nod", { metadata: { nod: true } }), false],
-            [ackAudio({ transaction_id: undefined }), false],
-            [ackAudio({ transaction_id: " " }), false],
             [ackAudio({ voice_text: " " }), false],
             [ackAudio(), true],
             [audio("backlog"), true],

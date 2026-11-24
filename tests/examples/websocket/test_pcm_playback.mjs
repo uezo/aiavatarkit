@@ -75,11 +75,10 @@ async function harness(t) {
     };
 }
 
-function descriptor(id, count, { rate = 16000, channels = 1, nod = false } = {}) {
-    return { type: "chunk", session_id: "session", transaction_id: nod ? null : "transaction",
-        voice_text: nod ? "" : id, audio_data: null,
-        metadata: { audio_id: id, audio_frame_count: count, pcm_format: { sample_rate: rate, channels, sample_width: 2 },
-            ...(nod ? { nod: true } : {}) },
+function descriptor(id, count, { rate = 16000, channels = 1 } = {}) {
+    return { type: "chunk", session_id: "session", transaction_id: "transaction",
+        voice_text: id, audio_data: null,
+        metadata: { audio_id: id, audio_frame_count: count, pcm_format: { sample_rate: rate, channels, sample_width: 2 } },
     };
 }
 function pcm(header, values) {
@@ -116,6 +115,27 @@ test("PCM starts with the first fragment and reports the original audio only onc
     assert.equal(controls().at(-1).completed, true);
     assert.equal(client.isAudioPlaying, false);
     assert.equal(client.pcmAudio.size, 0);
+});
+
+test("PCM playback reports an ACK and marks only the answer final", async t => {
+    const { receive, sources, advance, controls } = await harness(t);
+    const ack = { ...descriptor("ack", 1600), voice_text_tag: "ack" };
+    const answer = { ...descriptor("answer", 1600), voice_text_tag: "answer" };
+    receive(ack);
+    receive({ ...pcm(ack, Array(1600).fill(1)), voice_text_tag: null });
+    receive(answer);
+    receive({ ...pcm(answer, Array(1600).fill(2)), voice_text_tag: null });
+    receive(final);
+    advance(10.15);
+    sources[0].end();
+    await flush();
+    advance(10.15);
+    sources[1].end();
+
+    assert.deepEqual(controls().map(report => [report.event, report.playback_id]), [
+        ["start", "ack"], ["end", "ack"],
+        ["start", "answer"], ["final", "answer"], ["end", "answer"],
+    ]);
 });
 
 test("stereo PCM deinterleaves and follows the output sample rate", async t => {
@@ -204,63 +224,44 @@ test("stop cancels active and queued PCM and late fragments cannot restart them"
     assert.equal(controls().at(-1).completed, false);
 });
 
-test("an audible PCM Nod drains on stop and main response waits behind it", async t => {
+test("protected PCM completes across barge-in and the next response", async t => {
     const { client, receive, sources, advance, controls } = await harness(t);
-    const nod = descriptor("nod", 3200, { nod: true }), main = descriptor("main", 1600);
-    receive(nod);
-    receive(pcm(nod, Array(1600).fill(1))); // Sender canceled before its remaining frames.
+    const ack = { ...descriptor("ack", 3200), voice_text_tag: "ack" };
+    ack.metadata.protect_from_barge_in = true;
+    const canceled = descriptor("canceled", 1600);
+    const next = { ...descriptor("next", 1600), transaction_id: "next", voice_text_tag: "answer" };
+    receive(ack);
+    receive(pcm(ack, Array(1600).fill(1)));
+    receive(pcm(ack, Array(1600).fill(2)));
+    receive(canceled);
+    receive(pcm(canceled, Array(1600).fill(3)));
     advance(10.06);
     receive({ type: "stop" });
-    receive({ type: "accepted" });
-    receive(main);
-    receive(pcm(main, Array(1600).fill(2)));
-    assert.equal(sources.length, 1);
-    assert.equal(sources[0].stopped, undefined);
-    assert.equal(controls().length, 0);
-    advance(10.15);
-    sources[0].end();
-    await flush();
-    assert.equal(sources.length, 2);
-    advance(10.15);
-    assert.equal(controls()[0].text, "main");
-    assert.equal(client.currentAudioMessage.metadata.audio_id, "main");
-});
-
-test("main acceptance cancels a PCM Nod before audible start and drops queued Nods", async t => {
-    const { client, receive, sources, controls } = await harness(t);
-    const nod = descriptor("nod", 1600, { nod: true }), next = descriptor("next", 1600, { nod: true });
-    receive(nod);
-    receive(pcm(nod, Array(1600).fill(1)));
+    receive({ ...final, metadata: { interrupted: true } });
+    receive({ type: "accepted", transaction_id: "next" });
+    receive({ type: "stop" });
+    receive({ type: "start", transaction_id: "next" });
     receive(next);
-    receive(pcm(next, Array(1600).fill(1)));
-    receive({ type: "accepted" });
-    await flush();
-    assert.equal(sources[0].stopped, true);
-    assert.equal(sources.length, 1);
-    assert.equal(client.pcmAudio.size, 0);
-    assert.equal(controls().length, 0);
-});
+    receive(pcm(next, Array(1600).fill(4)));
 
-for (const receivedFrames of [0, 1600]) {
-    test(`stop drains a queued Nod with ${receivedFrames} received frames without blocking the queue`, async t => {
-        const { client, receive, sources, advance } = await harness(t);
-        const main = descriptor("main", 3200), nod = descriptor("nod", 3200, { nod: true });
-        receive(main);
-        receive(pcm(main, Array(1600).fill(1)));
-        receive(nod);
-        if (receivedFrames) receive(pcm(nod, Array(receivedFrames).fill(2)));
-        receive({ type: "stop" });
-        await flush();
-        if (receivedFrames) {
-            advance(sources[1].startedAt + sources[1].buffer.duration);
-            sources[1].end();
-            await flush();
-        }
-        assert.equal(client.isAudioPlaying, false);
-        assert.equal(client.processingQueue, false);
-        assert.equal(client.pcmAudio.size, 0);
-    });
-}
+    assert.equal(client.pcmAudio.has("canceled"), false);
+    assert.equal(sources.length, 2);
+    assert.ok(sources.every(source => !source.stopped));
+    sources[0].end();
+    assert.equal(client.currentAudioMessage.metadata.audio_id, "ack");
+    advance(10.25);
+    sources[1].end();
+    await flush();
+    assert.deepEqual(controls().slice(0, 2).map(report => report.event), ["start", "end"]);
+    assert.deepEqual(controls()[1], { event: "end", playback_id: "ack", completed: true });
+    assert.equal(sources.length, 3);
+    assert.equal(client.currentAudioMessage.metadata.audio_id, "next");
+    advance(10.40);
+    sources[2].end();
+    assert.deepEqual(controls().slice(2).map(report => [report.event, report.playback_id]), [
+        ["start", "next"], ["end", "next"],
+    ]);
+});
 
 test("an interrupted final closes partial PCM so the next response can play", async t => {
     const { client, receive, sources, advance, controls } = await harness(t);

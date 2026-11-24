@@ -236,14 +236,14 @@ async function assertPcmWav(blob, expectedPcm) {
     assert.deepEqual([...bytes.subarray(44)], expectedPcm);
 }
 
-test("backlog groups PCM by original audio, including Nod, alongside WAV responses", async () => {
+test("backlog groups PCM by original audio, including ACK, alongside WAV responses", async () => {
     const { controller, store } = createController();
     await controller.ready;
     controller.handleResponse({ type: "start", context_id: "context-1", metadata: {} });
     controller.handleResponse(pcmDescriptor("answer", "Answer.", 3));
     controller.handleResponse(pcmChunk("answer", [1, 0]));
-    controller.handleResponse(pcmDescriptor("nod", "Yes.", 1, { nod: true }));
-    controller.handleResponse(pcmChunk("nod", [2, 0]));
+    controller.handleResponse({ ...pcmDescriptor("ack", "Yes.", 1), voice_text_tag: "ack" });
+    controller.handleResponse(pcmChunk("ack", [2, 0]));
     controller.handleResponse(pcmChunk("answer", [3, 0, 4, 0]));
     const wav = Buffer.from("RIFF0000WAVEdata");
     controller.handleResponse({

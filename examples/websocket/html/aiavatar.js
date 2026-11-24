@@ -76,21 +76,6 @@ class AIAvatarClient {
                     return;
                 }
                 this.onResponseReceived(msg);
-                const isNod = message => message?.metadata?.nod === true;
-                if (msg.type === "accepted"
-                    || ((msg.type === "start" || msg.type === "chunk") && !isNod(msg))) {
-                    this.filterQueue(message => !isNod(message));
-                    // Cancel pending nods; audio that has started may finish.
-                    const hasStarted = this.currentPcmAudio
-                        ? this.currentPcmAudio.startedAt !== null
-                            && this.audioContext.currentTime >= this.currentPcmAudio.startedAt
-                        : !!this.currentAudioSource;
-                    if (isNod(this.currentAudioMessage) && !hasStarted) {
-                        this.stopAudio();
-                    } else if (isNod(this.currentAudioMessage)) {
-                        this.endPcmInput(isNod);
-                    }
-                }
                 if (msg.type === "start" || msg.type === "chunk") {
                     if (msg.type === "start" && msg.context_id) {
                         this.chatContextId = msg.context_id;
@@ -108,11 +93,10 @@ class AIAvatarClient {
                     userId = msg.user_id;   // Update userId (Created on server if not exists)
                     console.log(`Session: sessionId=${msg.session_id}, userId=${msg.user_id}, contextId=${msg.context_id}`);
                 } else if (msg.type === "stop") {
-                    // Response stops keep nods; Stop/disconnect ends all playback.
-                    this.filterQueue(isNod);
-                    const playingNod = isNod(this.currentAudioMessage);
-                    this.endPcmInput(isNod);
-                    if (playingNod) return;
+                    const forceStop = msg.metadata?.force_stop === true;
+                    const keep = message => !forceStop && message?.metadata?.protect_from_barge_in === true;
+                    this.filterQueue(keep);
+                    if (keep(this.currentAudioMessage)) return;
                     this.stopAudio();
                     this.resetFace();
                 } else if (msg.type === "final") {
