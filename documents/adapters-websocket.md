@@ -101,6 +101,9 @@ ID and determines receipt completion from the total frame count. WebSocket
 preserves delivery order; no sequence numbers, acknowledgments, or retransmission
 messages are needed.
 
+`send_response()` frames raw audio supplied as `bytes` in `AIAvatarResponse.audio_data`.
+When passing already encoded audio directly, supply the Base64 as a `str`.
+
 The standard `NodPipelineBridge` uses this same delivery mode. In PCM mode, its
 descriptor carries `metadata.nod=true` and the Nod metadata; its audio messages
 contain PCM, allowing PCM-only clients to play acknowledgments too.
@@ -120,6 +123,29 @@ the descriptor and counts planned chunks, so interruption can reduce the number 
 WAV reports `audio_id=None` and `planned_chunks=1`; its browser playback ID is generated later.
 `debug=False` emits no audio summaries.
 
+### Protect an ACK from barge-in
+
+Set `barge_in_protected_tags` to keep selected voice clips playing during barge-in
+in the maintained browser clients.
+
+```python
+server = AIAvatarWebSocketServer(
+    vad=vad, stt=speech_recognizer, llm=llm, tts=tts,
+    mute_on_barge_in=True,
+    barge_in_protected_tags=["ack"],
+)
+```
+
+The adapter matches the tags against `STSResponse.voice_text_tag` on audio
+chunks. The default protects no tags. Include `"ack"` in the LLM's
+[`voice_text_tag`](llm.md#voice-text-tag-think-before-answering) configuration.
+
+The browser keeps protected WAV and PCM clips on a `stop` with
+`metadata.barge_in=true`. Once the server begins sending protected PCM audio,
+it finishes the clip using the configured chunk size. Muting before a clip
+begins sending still drops it. In this example, the answer remains interruptible,
+and the microphone stays active when BARGE-IN is enabled. Explicit stop and
+disconnect still cancel protected playback.
 
 ## Response transaction IDs
 

@@ -115,7 +115,7 @@ const finalResponse = (overrides = {}) => ({
 });
 const ackAudio = (overrides = {}) => audio("うん。", {
     transaction_id: "ack-transaction",
-    metadata: { nod: true },
+    metadata: { nod: true, protect_from_barge_in: true },
     ...overrides,
 });
 
@@ -167,11 +167,11 @@ test("explicit Stop reports the ACK end as incomplete", async () => {
     } finally { await client.stopListening("session"); }
 });
 
-test("a replaced ACK does not report playback if its decode was canceled", async () => {
+test("a stopped ACK does not report playback if its decode was canceled", async () => {
     const { client, context, sources } = await harness({ autoDecode: false });
     try {
         client.ws.receive(ackAudio());
-        client.ws.receive({ type: "accepted", transaction_id: "replacement" });
+        client.ws.receive({ type: "stop" });
         context.decodes[0].complete();
         await flush();
         assert.equal(sources.length, 0);

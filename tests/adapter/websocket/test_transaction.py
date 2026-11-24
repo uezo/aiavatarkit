@@ -23,6 +23,7 @@ def create_server_with_session(session_id: str, **kwargs):
     server.websockets = {}
     server.debug = kwargs.get("debug", False)
     server.response_audio_chunk_size = kwargs.get("response_audio_chunk_size", 512)
+    server.barge_in_protected_tags = []
     server._on_response_handlers = []
     server.control_tag_pattern = r'\[{tag}:(\w+)\]|<{tag}\s[^>]*{attr}=["\'](\w+)["\']'
 
