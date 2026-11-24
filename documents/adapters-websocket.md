@@ -212,6 +212,15 @@ The browser selects the final non-ACK audio clip for its playback final
 report. An ACK-only response still has a response `final`, and its spoken audio
 remains available as interruption context after playback ends.
 
+When an ordinary `stop` removes voiced audio before it starts, the browser sends
+a `playback` report with `event: "discarded"`, `transaction_id`, and the clip's
+`voice_text` in `text`. The adapter matches the report to an unplayed clip and
+adds its text to the next LLM user message in the same conversation. It consumes
+each confirmed cancellation once and processes requests without waiting for a
+report. The cancellation note is added after the `start` message is sent. It can
+be retained in LLM history without changing the system prompt. Turn-taking gates
+can ignore `discarded` reports.
+
 When there is no spoken prefix and the active response has sent no audio, the
 adapter can capture that response's transaction ID and the last transaction
 that sent audio or an ordinary `final`.

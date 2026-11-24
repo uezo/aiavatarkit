@@ -1,7 +1,8 @@
-// Notify the server at audible chunk boundaries; microphone packets stay unchanged.
+// Report playback boundaries and discarded audio without changing microphone packets.
 export function installPlaybackContext(client) {
     const previousOnPlaybackStart = client.onPlaybackStart;
     const previousOnPlaybackEnd = client.onPlaybackEnd;
+    const previousOnPlaybackDiscarded = client.onPlaybackDiscarded;
     let active = null;
     let latestPlayback = null;
     let finalChunks = new WeakSet();
@@ -124,8 +125,23 @@ export function installPlaybackContext(client) {
             previousOnPlaybackEnd?.call(client, state);
         }
     };
+    const onPlaybackDiscarded = function (message) {
+        try {
+            if (disposed || message?.type !== "chunk"
+                || !(message.audio_data || message.metadata?.audio_frame_count > 0)
+                || typeof message.session_id !== "string" || !message.session_id.trim()
+                || typeof message.transaction_id !== "string" || !message.transaction_id.trim()
+                || typeof message.voice_text !== "string" || !message.voice_text.trim()) return;
+            send(client.ws, message.session_id, {
+                event: "discarded", transaction_id: message.transaction_id, text: message.voice_text,
+            });
+        } finally {
+            previousOnPlaybackDiscarded?.call(client, message);
+        }
+    };
     client.onPlaybackStart = onPlaybackStart;
     client.onPlaybackEnd = onPlaybackEnd;
+    client.onPlaybackDiscarded = onPlaybackDiscarded;
 
     return {
         handleResponse,
@@ -137,6 +153,7 @@ export function installPlaybackContext(client) {
             finalChunks = new WeakSet();
             if (client.onPlaybackStart === onPlaybackStart) client.onPlaybackStart = previousOnPlaybackStart;
             if (client.onPlaybackEnd === onPlaybackEnd) client.onPlaybackEnd = previousOnPlaybackEnd;
+            if (client.onPlaybackDiscarded === onPlaybackDiscarded) client.onPlaybackDiscarded = previousOnPlaybackDiscarded;
         },
     };
 }

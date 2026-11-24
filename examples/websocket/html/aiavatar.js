@@ -29,6 +29,7 @@ class AIAvatarClient {
         this.onMicrophoneDataSend = () => { };
         this.onResponseReceived = () => { };
         this.onPlaybackStart = null;
+        this.onPlaybackDiscarded = null;
         this.onPlaybackAudio = null;
         this.isMicrophoneMuted = () => this.isAudioPlaying;
         this.getStartMetadata = () => null;
@@ -95,10 +96,22 @@ class AIAvatarClient {
                 } else if (msg.type === "stop") {
                     const forceStop = msg.metadata?.force_stop === true;
                     const keep = message => !forceStop && message?.metadata?.protect_from_barge_in === true;
-                    this.filterQueue(keep);
-                    if (keep(this.currentAudioMessage)) return;
-                    this.stopAudio();
-                    this.resetFace();
+                    const discarded = this.filterQueue(keep);
+                    if (!keep(this.currentAudioMessage)) {
+                        const pcm = this.currentPcmAudio;
+                        // The PCM start callback can lag behind the audio clock.
+                        const started = this.currentAudioSource !== null || pcm?.started
+                            || (pcm?.startedAt != null && pcm.startedAt <= this.audioContext.currentTime);
+                        if (this.currentAudioMessage && !started) discarded.unshift(this.currentAudioMessage);
+                        this.stopAudio();
+                        this.resetFace();
+                    }
+                    if (!forceStop) {
+                        for (const message of discarded) {
+                            if (queueGeneration !== this.queueGeneration) break;
+                            this.onPlaybackDiscarded?.(message);
+                        }
+                    }
                 } else if (msg.type === "final") {
                     if (msg.metadata?.interrupted) {
                         this.endPcmInput(message => message.transaction_id === msg.transaction_id);
@@ -223,11 +236,14 @@ class AIAvatarClient {
     }
 
     filterQueue(keep) {
+        const discarded = [];
         this.messageQueue = this.messageQueue.filter(message => {
             if (keep(message)) return true;
             this.pcmAudio.delete(message.metadata?.audio_id);
+            discarded.push(message);
             return false;
         });
+        return discarded;
     }
 
     endPcmInput(matches) {
