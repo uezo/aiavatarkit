@@ -29,7 +29,7 @@ def test_pcm_descriptor_preserves_controls_and_identifies_all_frames(channels):
     pcm_data = b"\x00\x01" * (11 * channels)
     response = AIAvatarResponse(
         type="chunk", session_id="s", user_id="u", context_id="c", transaction_id="t",
-        text="Hello", voice_text="Hello!", language="en",
+        text="Hello", voice_text="Hello!", voice_text_tag="answer", language="en",
         control_tags=[ControlTag(name="face", attributes={"name": "happy"})],
         avatar_control_request=AvatarControlRequest(face_name="happy"),
         structured_content={"example": True}, metadata={"original": True},
@@ -43,7 +43,7 @@ def test_pcm_descriptor_preserves_controls_and_identifies_all_frames(channels):
     assert descriptor.metadata["pcm_format"] == {
         "sample_rate": 24000, "channels": channels, "sample_width": 2,
     }
-    for field in ("text", "voice_text", "language", "control_tags",
+    for field in ("text", "voice_text", "voice_text_tag", "language", "control_tags",
                   "avatar_control_request", "structured_content"):
         assert getattr(descriptor, field) == getattr(response, field)
     assert response.metadata == {"original": True}
@@ -62,11 +62,12 @@ def test_pcm_descriptor_preserves_controls_and_identifies_all_frames(channels):
 
 def test_complete_audio_mode_preserves_wav_and_metadata():
     wav_data = make_wav(b"\x01\x02" * 11)
-    response = AIAvatarResponse(type="chunk", text="hello", metadata={"nod": True})
+    response = AIAvatarResponse(type="chunk", text="hello", voice_text_tag="ack", metadata={"original": True})
     message, = list(iter_audio_responses(response, wav_data, 0))
     assert base64.b64decode(message.audio_data) == wav_data
     assert message.text == "hello"
-    assert message.metadata == {"nod": True}
+    assert message.voice_text_tag == "ack"
+    assert message.metadata == {"original": True}
     assert response.audio_data is None
 
 

@@ -160,7 +160,7 @@ class RealtimeWebSocketServer(AIAvatarWebSocketServer):
             type=response.type, session_id=response.session_id,
             user_id=response.user_id, context_id=response.context_id,
             transaction_id=response.transaction_id, text=response.text,
-            voice_text=response.voice_text, language=response.language,
+            voice_text=response.voice_text, voice_text_tag=response.voice_text_tag, language=response.language,
             audio_data=response.audio_data, metadata=dict(response.metadata),
             structured_content=response.structured_content,
         )

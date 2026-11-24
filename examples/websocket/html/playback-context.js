@@ -61,13 +61,13 @@ export function installPlaybackContext(client) {
             return;
         }
         if (response?.type !== "final" || response.metadata?.interrupted
-            || response.metadata?.error || response.metadata?.nod === true
+            || response.metadata?.error
             || typeof response.session_id !== "string" || !response.session_id
             || typeof response.transaction_id !== "string" || !response.transaction_id) return;
 
         const matches = message => message?.session_id === response.session_id
             && message.transaction_id === response.transaction_id
-            && message.metadata?.nod !== true
+            && message.voice_text_tag !== "ack"
             && Boolean(message.audio_data || message.metadata?.audio_frame_count > 0);
         // Include non-text audio: it must not make an earlier spoken chunk look final.
         const queued = client.messageQueue?.slice().reverse().find(matches);
@@ -90,9 +90,6 @@ export function installPlaybackContext(client) {
             || typeof message?.session_id !== "string" || !message.session_id
             || typeof state?.playbackId !== "string" || !state.playbackId
             || !Number.isFinite(state.durationSeconds) || state.durationSeconds <= 0) return;
-
-        if (message.metadata?.nod === true
-            && (typeof message.transaction_id !== "string" || !message.transaction_id.trim())) return;
 
         active = latestPlayback = {
             socket: client.ws, queueGeneration: client.queueGeneration,

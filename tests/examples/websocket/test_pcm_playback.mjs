@@ -117,6 +117,27 @@ test("PCM starts with the first fragment and reports the original audio only onc
     assert.equal(client.pcmAudio.size, 0);
 });
 
+test("PCM playback reports an ACK and marks only the answer final", async t => {
+    const { receive, sources, advance, controls } = await harness(t);
+    const ack = { ...descriptor("ack", 1600), voice_text_tag: "ack" };
+    const answer = { ...descriptor("answer", 1600), voice_text_tag: "answer" };
+    receive(ack);
+    receive({ ...pcm(ack, Array(1600).fill(1)), voice_text_tag: null });
+    receive(answer);
+    receive({ ...pcm(answer, Array(1600).fill(2)), voice_text_tag: null });
+    receive(final);
+    advance(10.15);
+    sources[0].end();
+    await flush();
+    advance(10.15);
+    sources[1].end();
+
+    assert.deepEqual(controls().map(report => [report.event, report.playback_id]), [
+        ["start", "ack"], ["end", "ack"],
+        ["start", "answer"], ["final", "answer"], ["end", "answer"],
+    ]);
+});
+
 test("stereo PCM deinterleaves and follows the output sample rate", async t => {
     const { receive, sources } = await harness(t);
     const header = descriptor("stereo", 2, { rate: 48000, channels: 2 });
@@ -205,7 +226,7 @@ test("stop cancels active and queued PCM and late fragments cannot restart them"
 
 test("protected PCM completes across barge-in and the next response", async t => {
     const { client, receive, sources, advance, controls } = await harness(t);
-    const ack = descriptor("ack", 3200);
+    const ack = { ...descriptor("ack", 3200), voice_text_tag: "ack" };
     ack.metadata.protect_from_barge_in = true;
     const canceled = descriptor("canceled", 1600);
     const next = { ...descriptor("next", 1600), transaction_id: "next" };

@@ -12,6 +12,7 @@ import wave
 
 import pytest
 
+from aiavatar.adapter.interruption import InterruptionState
 from aiavatar.adapter.models import AIAvatarResponse
 from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer, WebSocketSessionData
 from aiavatar.sts.llm import LLMResponse, LLMServiceDummy
@@ -367,6 +368,7 @@ async def test_protected_audio_finishes_before_response_interruption(make_server
     messages = [AIAvatarResponse.model_validate_json(message) for message in websocket.sent_messages]
     descriptor = messages[2]
     assert (descriptor.type, descriptor.transaction_id, descriptor.voice_text) == ("chunk", "A", "ACK")
+    assert descriptor.voice_text_tag == "ack"
     assert descriptor.audio_data is None
     assert descriptor.metadata["protect_from_barge_in"] is True
     assert descriptor.metadata["audio_frame_count"] == 2048
@@ -408,10 +410,38 @@ async def test_complete_audio_uses_protection_for_configured_tag_only(make_serve
 
     ack_message, answer_message = [AIAvatarResponse.model_validate_json(message) for message in websocket.sent_messages[2:]]
     assert base64.b64decode(ack_message.audio_data) == ack.audio_data
+    assert ack_message.voice_text_tag == "ack"
     assert ack_message.metadata["protect_from_barge_in"] is True
     assert "protect_from_barge_in" not in ack.metadata
     assert base64.b64decode(answer_message.audio_data) == answer.audio_data
+    assert answer_message.voice_text_tag == "answer"
     assert "protect_from_barge_in" not in answer_message.metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunk_size", [0, 512], ids=["wav", "pcm"])
+@pytest.mark.parametrize(("following_type", "answer_tag"), [
+    pytest.param("chunk", None, id="untagged-answer"),
+    pytest.param("chunk", "answer", id="tagged-answer"),
+    pytest.param("final", None, id="final-after-ack"),
+])
+async def test_ack_audio_does_not_mark_transaction_answered(make_server, chunk_size, following_type, answer_tag):
+    server, _, connection, websocket = make_server(response_audio_chunk_size=chunk_size)
+    await begin(server, "A")
+    state = InterruptionState()
+    connection.interruption_state = state
+    state.observe(STSResponse(type="start", transaction_id="A", context_id="context"))
+    audio = wav_audio(bytes(1024))
+
+    await server.handle_response(chunk("A", "ACK", audio, voice_text_tag="ack"))
+    assert any(json.loads(message)["audio_data"] for message in websocket.sent_messages[2:])
+    interruption = state.snapshot("A")
+    assert interruption is not None
+    assert interruption.interrupted_response_transaction_id == "A"
+
+    following = final("A", "ACK") if following_type == "final" else chunk("A", "answer", audio, voice_text_tag=answer_tag)
+    await server.handle_response(following)
+    assert state.snapshot("A") is None
 
 
 @pytest.mark.asyncio

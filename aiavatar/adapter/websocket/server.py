@@ -43,9 +43,9 @@ def iter_audio_responses(response: AIAvatarResponse, wav_data: bytes,
         if debug:
             logger.info(
                 "WebSocket audio: format=wav, session=%s, transaction_id=%s, "
-                "audio_id=None, audio_bytes=%s, chunk_size=0, planned_chunks=1, nod=%s",
+                "audio_id=None, audio_bytes=%s, chunk_size=0, planned_chunks=1, voice_text_tag=%s",
                 response.session_id, response.transaction_id, len(wav_data),
-                (response.metadata or {}).get("nod", False),
+                response.voice_text_tag,
             )
         yield response.model_copy(update={
             "audio_data": base64.b64encode(wav_data).decode("ascii")
@@ -65,11 +65,11 @@ def iter_audio_responses(response: AIAvatarResponse, wav_data: bytes,
         logger.info(
             "WebSocket audio: format=pcm, session=%s, transaction_id=%s, audio_id=%s, "
             "sample_rate=%s, channels=%s, sample_width=%s, audio_bytes=%s, "
-            "chunk_size=%s, planned_chunks=%s, nod=%s",
+            "chunk_size=%s, planned_chunks=%s, voice_text_tag=%s",
             response.session_id, response.transaction_id, audio_id,
             pcm_format["sample_rate"], pcm_format["channels"], pcm_format["sample_width"],
             len(pcm_data), chunk_size, (len(pcm_data) + chunk_size - 1) // chunk_size,
-            (response.metadata or {}).get("nod", False),
+            response.voice_text_tag,
         )
     yield response.model_copy(update={
         "audio_data": None,
@@ -526,7 +526,9 @@ class AIAvatarWebSocketServer(Adapter):
                         return
                     if state is not None:
                         metadata = response.metadata or {}
-                        if ((response.type == "chunk" and response.audio_data and not metadata.get("nod"))
+                        # PCM payloads use the original audio clip's tag.
+                        if ((response.type == "chunk" and response.audio_data
+                             and aiavatar_response.voice_text_tag != "ack")
                                 or (response.type == "final" and not metadata.get("interrupted"))):
                             state.mark_answered(response.transaction_id)
 
@@ -576,6 +578,7 @@ class AIAvatarWebSocketServer(Adapter):
             transaction_id=response.transaction_id,
             text=response.text,
             voice_text=response.voice_text,
+            voice_text_tag=response.voice_text_tag,
             control_tags=(self.parse_control_tags(response.text) or None) if response.type == "chunk" else None,
             audio_data=response.audio_data,
             metadata=response.metadata or {},
@@ -597,7 +600,7 @@ class AIAvatarWebSocketServer(Adapter):
             # Face and Animation
             aiavatar_response.avatar_control_request = self.parse_avatar_control_request(response.text)
 
-            if aiavatar_response.audio_data and response.voice_text_tag in self.barge_in_protected_tags:
+            if aiavatar_response.audio_data and aiavatar_response.voice_text_tag in self.barge_in_protected_tags:
                 aiavatar_response.metadata = {
                     **(aiavatar_response.metadata or {}),
                     "protect_from_barge_in": True,

@@ -36,6 +36,7 @@ class AIAvatarResponse(BaseModel):
     transaction_id: Optional[str] = None
     text: Optional[str] = None
     voice_text: Optional[str] = None
+    voice_text_tag: Optional[str] = None
     language: Optional[str] = None
     control_tags: Optional[List[ControlTag]] = None
     avatar_control_request: Optional[AvatarControlRequest] = None
