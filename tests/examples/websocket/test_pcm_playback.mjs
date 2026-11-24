@@ -229,15 +229,17 @@ test("protected PCM completes across barge-in and the next response", async t =>
     const ack = { ...descriptor("ack", 3200), voice_text_tag: "ack" };
     ack.metadata.protect_from_barge_in = true;
     const canceled = descriptor("canceled", 1600);
-    const next = { ...descriptor("next", 1600), transaction_id: "next" };
+    const next = { ...descriptor("next", 1600), transaction_id: "next", voice_text_tag: "answer" };
     receive(ack);
     receive(pcm(ack, Array(1600).fill(1)));
     receive(pcm(ack, Array(1600).fill(2)));
     receive(canceled);
     receive(pcm(canceled, Array(1600).fill(3)));
-    receive({ type: "stop", metadata: { barge_in: true } });
+    advance(10.06);
+    receive({ type: "stop" });
     receive({ ...final, metadata: { interrupted: true } });
     receive({ type: "accepted", transaction_id: "next" });
+    receive({ type: "stop" });
     receive({ type: "start", transaction_id: "next" });
     receive(next);
     receive(pcm(next, Array(1600).fill(4)));
@@ -245,7 +247,6 @@ test("protected PCM completes across barge-in and the next response", async t =>
     assert.equal(client.pcmAudio.has("canceled"), false);
     assert.equal(sources.length, 2);
     assert.ok(sources.every(source => !source.stopped));
-    advance(10.06);
     sources[0].end();
     assert.equal(client.currentAudioMessage.metadata.audio_id, "ack");
     advance(10.25);
@@ -255,6 +256,11 @@ test("protected PCM completes across barge-in and the next response", async t =>
     assert.deepEqual(controls()[1], { event: "end", playback_id: "ack", completed: true });
     assert.equal(sources.length, 3);
     assert.equal(client.currentAudioMessage.metadata.audio_id, "next");
+    advance(10.40);
+    sources[2].end();
+    assert.deepEqual(controls().slice(2).map(report => [report.event, report.playback_id]), [
+        ["start", "next"], ["end", "next"],
+    ]);
 });
 
 test("an interrupted final closes partial PCM so the next response can play", async t => {

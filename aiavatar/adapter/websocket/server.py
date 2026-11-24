@@ -267,9 +267,7 @@ class AIAvatarWebSocketServer(Adapter):
                         "Mute on barge-in: session=%s, transaction=%s",
                         session_id, session_data.muted_transaction_id
                     )
-                await self.send_response(AIAvatarResponse(
-                    type="stop", session_id=session_id, context_id="", metadata={"barge_in": True},
-                ))
+                await self.stop_response(session_id, "")
 
         # Debug
         self.debug = debug
@@ -592,7 +590,7 @@ class AIAvatarWebSocketServer(Adapter):
         if response.type == "chunk":
             # Stop response if guardrail triggered
             if response.metadata.get("is_guardrail_triggered"):
-                await self.stop_response(response.session_id, response.context_id)
+                await self.stop_response(response.session_id, response.context_id, metadata={"force_stop": True})
 
             # Language
             aiavatar_response.language = response.language
@@ -670,12 +668,13 @@ class AIAvatarWebSocketServer(Adapter):
             metadata={"interrupted": True}
         ))
 
-    async def stop_response(self, session_id: str, context_id: str):
+    async def stop_response(self, session_id: str, context_id: str, *, metadata: Optional[dict] = None):
         # Send stop message to client
         await self.send_response(AIAvatarResponse(
             type="stop",
             session_id=session_id,
-            context_id=context_id
+            context_id=context_id,
+            metadata=metadata,
         ))
 
     def _authenticate_websocket(self, websocket: WebSocket) -> Optional[str]:

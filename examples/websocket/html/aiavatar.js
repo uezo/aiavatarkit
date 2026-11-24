@@ -93,8 +93,8 @@ class AIAvatarClient {
                     userId = msg.user_id;   // Update userId (Created on server if not exists)
                     console.log(`Session: sessionId=${msg.session_id}, userId=${msg.user_id}, contextId=${msg.context_id}`);
                 } else if (msg.type === "stop") {
-                    const isBargeIn = msg.metadata?.barge_in === true;
-                    const keep = message => isBargeIn && message?.metadata?.protect_from_barge_in === true;
+                    const forceStop = msg.metadata?.force_stop === true;
+                    const keep = message => !forceStop && message?.metadata?.protect_from_barge_in === true;
                     this.filterQueue(keep);
                     if (keep(this.currentAudioMessage)) return;
                     this.stopAudio();

@@ -69,7 +69,7 @@ async function harness({ autoDecode = true, socketError = null, getUserMedia = n
 
 const audio = marker => ({ type: "chunk", audio_data: Buffer.from(marker).toString("base64") });
 const stopResponse = { type: "stop" };
-const bargeIn = { type: "stop", metadata: { barge_in: true } };
+const forcedStopResponse = { type: "stop", metadata: { force_stop: true } };
 const protectedAudio = marker => ({
     ...audio(marker), metadata: { protect_from_barge_in: true },
 });
@@ -181,8 +181,9 @@ test("barge-in and response transitions retain decoding and queued protected WAV
         socket.receive(protectedAudio("decoding-ack"));
         socket.receive(audio("canceled-answer"));
         socket.receive(protectedAudio("queued-ack"));
-        socket.receive(bargeIn);
+        socket.receive(stopResponse);
         socket.receive({ type: "accepted" });
+        socket.receive(stopResponse);
         socket.receive({ type: "start" });
         socket.receive(audio("next-answer"));
 
@@ -198,19 +199,22 @@ test("barge-in and response transitions retain decoding and queued protected WAV
     } finally { await client.stopListening("session"); }
 });
 
-test("a non-barge-in stop cancels protected WAV decoding and queued audio", async () => {
-    const { client, socket, context, sources } = await harness({ autoDecode: false });
-    try {
-        socket.receive(protectedAudio("decoding-ack"));
-        socket.receive(protectedAudio("queued-ack"));
-        socket.receive(stopResponse);
-        context.decodes[0]();
-        await flush();
-        assert.equal(client.messageQueue.length, 0);
-        assert.equal(client.isAudioPlaying, false);
-        assert.equal(sources.length, 0);
-    } finally { await client.stopListening("session"); }
-});
+for (const autoDecode of [true, false]) {
+    test(`a forced stop cancels ${autoDecode ? "playing" : "decoding"} and queued protected WAV audio`, async () => {
+        const { client, socket, context, sources } = await harness({ autoDecode });
+        try {
+            socket.receive(protectedAudio("current-ack"));
+            socket.receive(protectedAudio("queued-ack"));
+            socket.receive(forcedStopResponse);
+            if (!autoDecode) context.decodes[0]();
+            await flush();
+            assert.equal(client.messageQueue.length, 0);
+            assert.equal(client.isAudioPlaying, false);
+            assert.equal(sources.length, autoDecode ? 1 : 0);
+            if (autoDecode) assert.equal(sources[0].stopped, true);
+        } finally { await client.stopListening("session"); }
+    });
+}
 
 for (const autoDecode of [true, false]) {
     test(`barge-in stops ${autoDecode ? "playing" : "decoding"} main audio then plays protected audio`, async () => {
@@ -219,7 +223,7 @@ for (const autoDecode of [true, false]) {
             socket.receive(audio("main"));
             socket.receive(audio("queued-main"));
             socket.receive(protectedAudio("queued-ack"));
-            socket.receive(bargeIn);
+            socket.receive(stopResponse);
             assert.equal(client.messageQueue.length, 1);
             assert.equal(client.messageQueue[0].metadata.protect_from_barge_in, true);
             context.autoDecode = true;
@@ -240,7 +244,7 @@ for (const autoDecode of [true, false]) {
         try {
             socket.receive(audio("main"));
             socket.receive(audio("queued-main"));
-            socket.receive(bargeIn);
+            socket.receive(stopResponse);
             await flush();
             assert.equal(client.messageQueue.length, 0);
             assert.equal(client.isAudioPlaying, false);
@@ -258,7 +262,7 @@ for (const autoDecode of [true, false]) {
         test(`${disconnect ? "disconnect" : "explicit Stop"} terminates ${autoDecode ? "playing" : "decoding"} protected audio and releases resources`, async () => {
             const { client, socket, context, sources, microphoneTrack } = await harness({ autoDecode });
             socket.receive(protectedAudio("ack"));
-            socket.receive(audio("queued-main"));
+            socket.receive(protectedAudio("queued-ack"));
             if (disconnect) socket.close();
             else await client.stopListening("session");
             await flush();

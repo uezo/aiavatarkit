@@ -168,11 +168,11 @@ test("explicit Stop reports the ACK end as incomplete", async () => {
     } finally { await client.stopListening("session"); }
 });
 
-test("a stopped ACK does not report playback if its decode was canceled", async () => {
+test("a forced stop cancels ACK decoding before it can report playback", async () => {
     const { client, context, sources } = await harness({ autoDecode: false });
     try {
         client.ws.receive(ackAudio());
-        client.ws.receive({ type: "stop" });
+        client.ws.receive({ type: "stop", metadata: { force_stop: true } });
         context.decodes[0].complete();
         await flush();
         assert.equal(sources.length, 0);

@@ -381,7 +381,7 @@ async def test_protected_audio_finishes_before_response_interruption(make_server
 
     if interruption == "barge-in":
         assert sent(websocket)[11:] == [("stop", None, None, False), ("final", "A", "", True)]
-        assert messages[11].metadata["barge_in"] is True
+        assert messages[11].metadata is None
     else:
         assert sent(websocket)[11:] == [
             ("final", "A", "", True), ("accepted", "B", None, False), ("start", "B", None, False),
@@ -456,15 +456,22 @@ async def test_send_response_preserves_base64_audio(make_server):
 
 
 @pytest.mark.asyncio
-async def test_only_vad_stop_is_marked_as_barge_in(make_server):
+async def test_explicit_force_and_guardrail_stops_use_force_stop(make_server):
     server, vad, _, websocket = make_server()
     await server.stop_response(SESSION_ID, "context")
+    await server.stop_response(SESSION_ID, "context", metadata={"force_stop": True})
+    await begin(server, "A")
+    guarded = chunk("A", "guardrail")
+    guarded.metadata["is_guardrail_triggered"] = True
+    await server.handle_response(guarded)
     await vad.barge_in()
 
-    explicit, detected = [AIAvatarResponse.model_validate_json(message) for message in websocket.sent_messages]
-    assert explicit.type == detected.type == "stop"
-    assert "barge_in" not in (explicit.metadata or {})
-    assert detected.metadata["barge_in"] is True
+    messages = [AIAvatarResponse.model_validate_json(message) for message in websocket.sent_messages]
+    ordinary, forced, guardrail, detected = [message for message in messages if message.type == "stop"]
+    assert ordinary.metadata is None
+    assert forced.metadata == {"force_stop": True}
+    assert guardrail.metadata == {"force_stop": True}
+    assert detected.metadata is None
 
 
 @pytest.mark.asyncio
@@ -571,8 +578,13 @@ async def test_muted_response_is_generated_and_kept_in_the_context(tmp_path):
         ("stop", None, None, None),
         ("final", first_turn, "", True),
     ]
+    assert messages[first_chunk_index + 1]["metadata"] is None
     later = messages[first_chunk_index + 3:]
     assert all(message["transaction_id"] != first_turn for message in later)
+    # Invoking the next VAD turn sends another ordinary stop before its start.
+    stop_index, = [index for index, message in enumerate(later) if message["type"] == "stop"]
+    assert later[stop_index]["metadata"] is None
+    assert stop_index < next(index for index, message in enumerate(later) if message["type"] == "start")
 
     # The first answer is still generated in full, so the next request sees it in the context.
     assert llm.received_messages[-1] == [

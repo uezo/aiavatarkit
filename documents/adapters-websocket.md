@@ -140,12 +140,17 @@ The adapter matches `barge_in_protected_tags` against this tag and defaults to
 protecting no tags. Include `"ack"` in the LLM's
 [`voice_text_tag`](llm.md#voice-text-tag-think-before-answering) configuration.
 
-The browser keeps protected WAV and PCM clips on a `stop` with
-`metadata.barge_in=true`. Once the server begins sending protected PCM audio,
-it finishes the clip using the configured chunk size. Muting before a clip
-begins sending still drops it. In this example, the answer remains interruptible,
-and the microphone stays active when BARGE-IN is enabled. Explicit stop and
-disconnect still cancel protected playback.
+The browser keeps protected WAV and PCM clips on an ordinary `stop`, including
+when `mute_on_barge_in` stops playback or the pipeline starts a new response.
+Once the server begins sending protected PCM audio, it finishes the clip using
+the configured chunk size. Muting before a clip begins sending still drops it.
+In this example, the answer remains interruptible, and the microphone stays
+active when BARGE-IN is enabled.
+
+A `stop` with `metadata.force_stop=true` stops even protected audio. Guardrail
+stops use this flag, and applications can set it through
+`server.stop_response(session_id, context_id, metadata={"force_stop": True})`.
+The browser Stop button and disconnect also stop all audio.
 
 ## Response transaction IDs
 
