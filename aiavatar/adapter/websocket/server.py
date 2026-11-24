@@ -314,6 +314,18 @@ class AIAvatarWebSocketServer(Adapter):
             if session is not None and session.interruption_state is not None:
                 session.interruption_state.observe(response)
 
+        @self.sts.on_before_llm(channels=self.channel)
+        async def include_discarded_audio(request: STSRequest):
+            session = self.sessions.get(request.session_id)
+            if not request.text or session is None or session.interruption_state is None:
+                return
+            discarded_text = "\n".join(session.interruption_state.take_discarded_audio(request.context_id))
+            if discarded_text:
+                request.text = (
+                    "$The following assistant speech was canceled before playback started.\n"
+                    f"{discarded_text}\n\n{request.text}"
+                )
+
         @vad.on_speech_started
         def capture_interruption(session_id: str, metadata: dict) -> None:
             session = self.sessions.get(session_id)

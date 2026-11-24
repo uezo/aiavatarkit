@@ -180,6 +180,29 @@ test("a forced stop cancels ACK decoding before it can report playback", async (
     } finally { await client.stopListening("session"); }
 });
 
+test("an ordinary stop reports the voiced WAV clips discarded while decoding and queued", async () => {
+    const { client, context, sources } = await harness({ autoDecode: false });
+    const socket = client.ws;
+    const source = { transaction_id: "old-transaction" };
+    try {
+        socket.receive(audio("デコード中。", source));
+        socket.receive(audio("再生待ち。", source));
+        socket.receive(audio("   ", source));
+        socket.receive(audio("識別子がない音声。"));
+        socket.receive(audio("セッションがない音声。", { ...source, session_id: null }));
+        socket.receive(audio("音声データがない。", { ...source, audio_data: null }));
+        socket.receive({ type: "stop" });
+        socket.receive({ type: "stop" });
+        context.decodes[0].complete();
+        await flush();
+        assert.equal(sources.length, 0);
+        assert.deepEqual(controls(socket), ["デコード中。", "再生待ち。"].map(text => ({
+            type: "playback", session_id: "session",
+            metadata: { event: "discarded", ...source, text },
+        })));
+    } finally { await client.stopListening("session"); }
+});
+
 test("start control is sent once after decode and before playback, with no microphone progress metadata", async () => {
     const { client, context, sources, animationFrames, sendInput, order, installContext } = await harness({
         autoDecode: false, install: false,
@@ -411,7 +434,7 @@ test("stop and reconnect discard pending and completed final candidates", async 
         oldSocket.receive({ type: "stop" });
         context.decodes[0].complete();
         await flush();
-        assert.equal(controls(oldSocket).length, 0);
+        assert.deepEqual(controls(oldSocket).map(message => message.metadata.event), ["discarded"]);
 
         oldSocket.receive(audio("completed", { transaction_id: "transaction" }));
         context.decodes[1].complete();
@@ -419,7 +442,7 @@ test("stop and reconnect discard pending and completed final candidates", async 
         await flush();
         oldSocket.receive({ type: "stop" });
         oldSocket.receive(finalResponse());
-        assert.deepEqual(controls(oldSocket).map(message => message.metadata.event), ["start", "end"]);
+        assert.deepEqual(controls(oldSocket).map(message => message.metadata.event), ["discarded", "start", "end"]);
 
         await client.stopListening("session");
         await client.startListening("session", "user");

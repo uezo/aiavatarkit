@@ -221,8 +221,27 @@ test("stop cancels active and queued PCM and late fragments cannot restart them"
     assert.equal(sources.length, 1);
     assert.equal(sources[0].stopped, true);
     assert.equal(client.pcmAudio.size, 0);
-    assert.equal(controls().at(-1).completed, false);
+    assert.deepEqual(controls().slice(1), [
+        { event: "end", playback_id: "first", completed: false },
+        { event: "discarded", transaction_id: "transaction", text: "queued" },
+    ]);
 });
+
+for (const playbackReached of [false, true]) {
+    test(`stop discards scheduled PCM only before its audio start (${playbackReached ? "after" : "before"} deadline)`, async t => {
+        const { client, receive, sources, controls } = await harness(t);
+        const scheduled = descriptor("scheduled", 1600);
+        receive(scheduled);
+        receive(pcm(scheduled, Array(1600).fill(1)));
+        if (playbackReached) client.audioContext.currentTime = sources[0].startedAt + 0.01;
+        // Leave the JS start timer pending even when the AudioContext has reached playback.
+        receive({ type: "stop" });
+        assert.equal(sources[0].stopped, true);
+        assert.deepEqual(controls(), playbackReached ? [] : [
+            { event: "discarded", transaction_id: "transaction", text: "scheduled" },
+        ]);
+    });
+}
 
 test("protected PCM completes across barge-in and the next response", async t => {
     const { client, receive, sources, advance, controls } = await harness(t);
@@ -252,13 +271,14 @@ test("protected PCM completes across barge-in and the next response", async t =>
     advance(10.25);
     sources[1].end();
     await flush();
-    assert.deepEqual(controls().slice(0, 2).map(report => report.event), ["start", "end"]);
-    assert.deepEqual(controls()[1], { event: "end", playback_id: "ack", completed: true });
+    assert.deepEqual(controls().slice(0, 3).map(report => report.event), ["start", "discarded", "end"]);
+    assert.deepEqual(controls()[1], { event: "discarded", transaction_id: "transaction", text: "canceled" });
+    assert.deepEqual(controls()[2], { event: "end", playback_id: "ack", completed: true });
     assert.equal(sources.length, 3);
     assert.equal(client.currentAudioMessage.metadata.audio_id, "next");
     advance(10.40);
     sources[2].end();
-    assert.deepEqual(controls().slice(2).map(report => [report.event, report.playback_id]), [
+    assert.deepEqual(controls().slice(3).map(report => [report.event, report.playback_id]), [
         ["start", "next"], ["end", "next"],
     ]);
 });

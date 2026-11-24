@@ -528,6 +528,110 @@ async def test_ack_and_answer_use_same_spoken_template_at_onset(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
+async def test_discarded_answer_is_reported_once_after_later_playback(monkeypatch, tmp_path):
+    clock = fake_playback_clock(monkeypatch)
+
+    async with connected_voice_app(
+        monkeypatch, tmp_path, turn_taking_gate=None, first_ack=True,
+        transcripts=(FIRST_REQUEST, FOLLOW_UP, ADDITIONAL_REQUEST, NORMAL_REQUEST),
+        interruption_spoken_template=SPOKEN_TEMPLATE,
+    ) as (socket, llm, _):
+        async with asyncio.timeout(3):
+            first = await start_first_response(socket, llm)
+            first_id = first["transaction_id"]
+            await report_playback_start(socket, first_id, "first-ack", duration_seconds=8, text=ACK_TEXT)
+            clock.now = 108.0
+            await socket.send("playback", metadata={
+                "event": "end", "transaction_id": first_id,
+                "playback_id": "first-ack", "completed": True,
+            })
+            llm.release_first_response.set()
+            await socket.wait_for(lambda message: (
+                message["transaction_id"] == first_id and message["voice_text"] == FIRST_RESPONSE
+                and bool(message.get("audio_data"))
+            ))
+            await socket.wait_for(lambda message: message["type"] == "final")
+
+            for transaction_id, text in (
+                ("unknown-transaction", FIRST_RESPONSE), (first_id, "Unknown audio"), (first_id, ACK_TEXT),
+            ):
+                await socket.send("playback", metadata={
+                    "event": "discarded", "transaction_id": transaction_id, "text": text,
+                })
+
+            await record_follow_up(socket)
+            expected = SPOKEN_TEMPLATE.format(spoken_text=ACK_TEXT, request_text=FOLLOW_UP)
+            assert await llm.calls.get() == ("Reply to Aki.", expected, {"name": "Aki"})
+            follow_up = await assert_new_start(socket, first_id, FOLLOW_UP, expected)
+            follow_up_id = follow_up["transaction_id"]
+
+            # The browser confirms the older answer was discarded only after accepting the follow-up.
+            discarded_event = {"event": "discarded", "transaction_id": first_id, "text": FIRST_RESPONSE}
+            await socket.send("playback", metadata=discarded_event)
+            await socket.send("playback", metadata=discarded_event)
+
+            await report_completed_playback(socket, follow_up_id, is_final=True)
+            prior_messages = len(socket.sent)
+            await socket.feed(VOICE)
+            await socket.feed(SILENCE)
+            expected = (
+                "$The following assistant speech was canceled before playback started.\n"
+                f"{FIRST_RESPONSE}\n\n{ADDITIONAL_REQUEST}"
+            )
+            assert await llm.calls.get() == ("Reply to Aki.", expected, {"name": "Aki"})
+            next_turn = await assert_new_start(
+                socket, follow_up_id, ADDITIONAL_REQUEST, ADDITIONAL_REQUEST, after=prior_messages,
+            )
+
+            await report_completed_playback(socket, next_turn["transaction_id"], is_final=True)
+            await socket.feed(VOICE)
+            await socket.feed(SILENCE)
+            assert await llm.calls.get() == ("Reply to Aki.", NORMAL_REQUEST, {"name": "Aki"})
+            messages = await llm.context_manager.get_histories(first["context_id"])
+            assert messages.count({"role": "user", "content": expected}) == 1
+            assert {"role": "assistant", "content": ACK_TEXT + FIRST_RESPONSE} in messages
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("same_connection", [True, False], ids=["new-context", "new-connection"])
+async def test_discarded_audio_does_not_cross_context_or_connection(monkeypatch, tmp_path, same_connection):
+    async with connected_voice_app(monkeypatch, tmp_path, turn_taking_gate=None) as (socket, llm, _):
+        async with asyncio.timeout(3):
+            llm.release_first_response.set()
+            first = await start_first_response(socket, llm)
+            await socket.wait_for(lambda message: message["type"] == "final")
+            await socket.send("playback", metadata={
+                "event": "discarded", "transaction_id": first["transaction_id"], "text": FIRST_RESPONSE,
+            })
+
+            session_id = SESSION_ID if same_connection else "other-connection"
+            context_id = "other-context" if same_connection else first["context_id"]
+            other = socket if same_connection else Socket(socket.server)
+            try:
+                if same_connection:
+                    await llm.context_manager.add_histories(context_id, [
+                        {"role": "user", "content": "A separate conversation."},
+                    ])
+                else:
+                    await other.send("start", session_id=session_id, user_id=USER_ID, context_id=context_id)
+                # The recognition snapshot and response tracking are both real for this connection.
+                vad = socket.server.sts.vad
+                vad.set_session_data(session_id, "system_prompt_params", {"name": "Aki"})
+                vad.set_session_data(session_id, "context_id", context_id)
+                for pcm in (VOICE, SILENCE):
+                    await other.send("data", session_id=session_id, audio_data=base64.b64encode(pcm).decode())
+                assert await llm.calls.get() == ("Reply to Aki.", FOLLOW_UP, {"name": "Aki"})
+                follow_up = await assert_new_start(other, first["transaction_id"], FOLLOW_UP, FOLLOW_UP)
+                assert follow_up["context_id"] == context_id
+                await other.wait_for(lambda message: (
+                    message["type"] == "final" and message["transaction_id"] == follow_up["transaction_id"]
+                ))
+            finally:
+                if not same_connection:
+                    await socket.server.sts.finalize(session_id)
+
+
+@pytest.mark.asyncio
 async def test_unverified_playback_preserves_before_audio_context(monkeypatch, tmp_path):
     clock = fake_playback_clock(monkeypatch)
 

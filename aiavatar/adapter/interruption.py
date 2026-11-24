@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 class _Response:
     context_id: Optional[str]
     audio_texts: list[str] = field(default_factory=list)
+    discarded_audio_texts: list[str] = field(default_factory=list)
     answered: bool = False
     finished: bool = False
 
@@ -48,6 +49,7 @@ class InterruptionState:
 
     def __init__(self, *, debug: bool = False):
         self.debug = debug
+        self.max_responses = 8
         self._responses: dict[str, _Response] = {}
         self._last_answered: Optional[tuple[Optional[str], str]] = None
         self._playback: Optional[_Playback] = None
@@ -65,7 +67,7 @@ class InterruptionState:
             return
         if response.type == "start":
             self._responses[transaction_id] = _Response(context_id=response.context_id)
-            if len(self._responses) > 8:
+            while len(self._responses) > max(0, self.max_responses):
                 self._responses.pop(next(iter(self._responses)))
         elif previous := self._responses.get(transaction_id):
             if response.type == "chunk" and response.audio_data and response.voice_text:
@@ -80,6 +82,15 @@ class InterruptionState:
         if event == "start":
             self._start_playback(playback_id, transaction_id, text, duration_seconds)
             return
+        if event == "discarded":
+            if isinstance(transaction_id, str) and isinstance(text, str):
+                response = self._responses.get(transaction_id)
+                if response is not None and text in response.audio_texts:
+                    response.audio_texts.remove(text)
+                    response.discarded_audio_texts.append(text)
+                    if self.debug:
+                        logger.info("Voice playback: event=discarded, transaction=%s, text=%r", transaction_id, text)
+            return
 
         playback = self._playback
         if playback is None or playback.playback_id != playback_id:
@@ -93,6 +104,14 @@ class InterruptionState:
                             playback.transaction_id, playback_id, playback.completed)
         elif event == "final" and transaction_id == playback.transaction_id:
             playback.is_final_chunk = True
+
+    def take_discarded_audio(self, context_id: str) -> list[str]:
+        texts = []
+        for response in self._responses.values():
+            if response.context_id == context_id:
+                texts.extend(response.discarded_audio_texts)
+                response.discarded_audio_texts.clear()
+        return texts
 
     def _start_playback(self, playback_id, transaction_id, text, duration_seconds):
         if (
