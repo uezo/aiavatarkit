@@ -248,6 +248,34 @@ request = STSRequest(
 - **Do not mix modes**: The `use_invoke_queue` setting should remain consistent for a pipeline instance. Changing it at runtime is not supported.
 - **Cancelled responses**: When a queued request is cleared (by a non-waiting request), it receives a response with `type="cancelled"`.
 
+## Deferred answers
+
+Voice applications can enable `DeferredAnswerScheduler` on their pipeline.
+By default, the scheduler looks for `<ack>`, `<think>`, and an empty `<answer>`
+in order. Set `empty_answer_pattern` to match the full response when your
+application uses a different format. Configure the prompt to emit that format
+when it wants to wait for more speech.
+
+```python
+from aiavatar.sts.deferred_answer import DeferredAnswerScheduler
+
+deferred_answer = DeferredAnswerScheduler(aiavatar_app.sts)
+```
+
+The scheduler considers completed VAD turns with an empty tagged answer. It waits
+for silence and, for a spoken ACK, the estimated end of its WAV audio. An accepted
+follow-up supersedes the reservation. When a reservation fires, the pipeline
+submits a follow-up user request in the same conversation and uses its normal
+response handler. The default English instruction asks for a short answer and
+an empty ACK. That request can run only once per reservation.
+Tool calls and guardrail responses do not create reservations.
+
+Use one scheduler per pipeline. The constructor registers the scheduler's hooks.
+Use `is_enabled(session_id)` to limit it to selected sessions. `silence_seconds`
+defaults to 0.8 and `resume_text` can override the instruction.
+`is_resume(request)` identifies the scheduler's follow-up requests. The scheduler
+clears pending work on session finalization and pipeline shutdown.
+
 ## Quick Response
 
 To reduce the first response latency, `QuickResponder` generates a short acknowledgment phrase (e.g. "Sure!" or "なるほど。") and sends it to the user immediately, before the main LLM response is ready. This keeps the conversation feeling responsive while the full answer is being generated.
@@ -432,6 +460,19 @@ async def on_response(aiavatar_response: AIAvatarResponse, sts_response: STSResp
 Branch on `response.type` yourself, since this hook receives everything. Rewriting
 `aiavatar_response` here changes what the client receives — that is how
 [artifact validation](artifacts.md#validating-what-reaches-the-browser) is done.
+
+`STSPipeline` also offers hooks that extensions can register directly.
+
+- `can_accept` registers a synchronous handler that receives the request
+  before the `accepted` event. Return `True` to allow acceptance or `False` to
+  cancel the request. Use `@sts.can_accept(channels="websocket")` to limit a
+  handler to a channel, or omit `channels` to apply it to all requests.
+- `on_response` registers an async callback that receives the request and response
+  when `invoke()` resumes after yielding. Standard adapters deliver that response
+  before advancing the iterator. Channel filters use the channel at the start of
+  `invoke()`.
+- `on_finalize` registers async cleanup that receives a session ID. `on_shutdown`
+  registers async cleanup for the whole pipeline.
 
 ## Request Validation
 
