@@ -8,15 +8,16 @@ import asyncio
 import base64
 import io
 import json
+from types import SimpleNamespace
 import wave
 
 import pytest
 
-from aiavatar.adapter.interruption import InterruptionState
+from aiavatar.adapter.interruption import FirstResponseAudioHold, InterruptionState
 from aiavatar.adapter.models import AIAvatarResponse
 from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer, WebSocketSessionData
 from aiavatar.sts.llm import LLMResponse, LLMServiceDummy
-from aiavatar.sts.models import STSResponse
+from aiavatar.sts.models import STSRequest, STSResponse
 from aiavatar.sts.pipeline import STSPipeline
 from aiavatar.sts.stt import SpeechRecognizerDummy
 from aiavatar.sts.tts import SpeechSynthesizerDummy
@@ -56,14 +57,23 @@ class FakeVAD:
 class FakePipeline:
     def __init__(self, vad):
         self.vad = vad
+        self.accepted_handlers = []
 
     def add_response_handler(self, handler):
         pass
 
     def on_accepted(self, func=None, *, channels=None):
-        if func is not None:
-            return func
-        return lambda callback: callback
+        def register(callback):
+            self.accepted_handlers.append(callback)
+            return callback
+
+        return register if func is None else register(func)
+
+    def on_finalize(self, func):
+        return func
+
+    def on_shutdown(self, func):
+        return func
 
 
 class FakeWebSocket:
@@ -296,6 +306,50 @@ async def test_response_muted_while_handlers_run_is_not_sent(make_server):
     assert sent(websocket) == [
         ("accepted", "A", None, False),
         ("start", "A", None, False),
+        ("stop", None, None, False),
+        ("final", "A", "", True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_first_response_audio_hold_leaves_barge_in_to_websocket(make_server):
+    server, vad, _, websocket = make_server(barge_in_protected_tags=["ack"])
+    vad.on_recording_started_min_duration = 1.5
+    recording = SimpleNamespace(
+        is_recording=True, recording_id="recording", record_duration=0.25,
+        silence_duration=0.0, on_recording_started_triggered=False,
+    )
+    vad.recording_sessions = {SESSION_ID: recording}
+    vad.set_session_data(SESSION_ID, "barge_in_enabled", True)
+    FirstResponseAudioHold(
+        server.sts, server.on_response, applies_to=lambda request: request.audio_duration > 0,
+        channels=server.channel,
+    )
+
+    await begin(server, "A")
+    request = STSRequest(session_id=SESSION_ID, transaction_id="A", audio_duration=0.5, channel=server.channel)
+    for accepted in server.sts.accepted_handlers:
+        await accepted(request)
+
+    await server.handle_response(chunk("A", "ack", voice_text_tag="ack"))
+    assert sent(websocket)[-1] == ("chunk", "A", "ack", False)
+
+    answer = asyncio.create_task(server.handle_response(chunk("A", "unheard", voice_text_tag="answer")))
+    try:
+        async with asyncio.timeout(2):
+            await asyncio.sleep(0)
+            assert not answer.done()
+            recording.record_duration = vad.on_recording_started_min_duration
+            recording.on_recording_started_triggered = True
+            await vad.barge_in()
+            await answer
+    finally:
+        answer.cancel()
+        await asyncio.gather(answer, return_exceptions=True)
+
+    await server.handle_response(final("A", "ackunheard"))
+    assert sent(websocket)[2:] == [
+        ("chunk", "A", "ack", False),
         ("stop", None, None, False),
         ("final", "A", "", True),
     ]

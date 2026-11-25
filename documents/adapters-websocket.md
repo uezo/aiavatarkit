@@ -152,6 +152,26 @@ stops use this flag, and applications can set it through
 `server.stop_response(session_id, context_id, metadata={"force_stop": True})`.
 The browser Stop button and disconnect also stop all audio.
 
+### Hold the first response audio during user speech
+
+`FirstResponseAudioHold` uses the adapter's existing pre-send response hook.
+Install it after creating the adapter and choose which requests to hold.
+
+```python
+from aiavatar.adapter.interruption import FirstResponseAudioHold
+
+FirstResponseAudioHold(
+    server.sts, server.on_response, channels=server.channel,
+    applies_to=lambda request: request.audio_duration > 0,
+)
+```
+
+With BARGE-IN enabled, the helper can delay the first non-ACK audio while the
+VAD is recording. Its wait budget is the VAD's `on_recording_started_min_duration`
+minus the speech already recorded. It releases when the recording ends or a
+new turn supersedes it. Expiring the budget releases the wait, while the
+adapter's existing barge-in and transaction checks still govern delivery.
+
 ## Response transaction IDs
 
 WebSocket responses expose the pipeline's `transaction_id` as an optional
