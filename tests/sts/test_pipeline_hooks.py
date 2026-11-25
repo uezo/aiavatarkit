@@ -16,6 +16,7 @@ def make_pipeline() -> STSPipeline:
     pipeline._on_before_tts_handlers = []
     pipeline._on_accepted_handlers = []
     pipeline._on_finish_handlers = []
+    pipeline._on_response_handlers = []
     return pipeline
 
 
@@ -115,6 +116,32 @@ async def test_hook_channel_is_stable_during_execution():
     )
 
     assert calls == ["sms"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_queue", [False, True], ids=["direct", "queued"])
+async def test_response_hook_uses_original_channel(use_queue):
+    pipeline = make_pipeline()
+    pipeline.use_invoke_queue = use_queue
+    calls = []
+
+    async def respond(request):
+        request.channel = "sms"
+        yield STSResponse(type="start")
+        yield STSResponse(type="final")
+
+    if use_queue:
+        pipeline._invoke_queued = respond
+    else:
+        pipeline._invoke_direct = respond
+
+    @pipeline.on_response(channels="phone")
+    async def phone_hook(request, response):
+        calls.append((response.type, request.channel))
+
+    request = STSRequest(session_id="session", channel="phone")
+    assert [response.type async for response in pipeline.invoke(request)] == ["start", "final"]
+    assert calls == [("start", "sms"), ("final", "sms")]
 
 
 @pytest.mark.parametrize(
@@ -238,9 +265,11 @@ async def test_pipeline_invocation_filters_all_hooks_by_channel(tmp_path):
         voice_recorder_enabled=False,
     )
     calls = []
+    accepted_transactions = []
 
     async def handle_response(response):
-        pass
+        if response.type == "accepted":
+            accepted_transactions.append(response.transaction_id)
 
     async def stop_response(session_id, context_id):
         pass
@@ -250,6 +279,22 @@ async def test_pipeline_invocation_filters_all_hooks_by_channel(tmp_path):
         handle_response=handle_response,
         stop_response=stop_response,
     ))
+
+    @pipeline.can_accept
+    def accept_globally(request):
+        calls.append("global:can_accept")
+        request.channel = "web"
+        return True
+
+    @pipeline.can_accept(channels="phone")
+    def accept_phone(request):
+        calls.append("matched:can_accept")
+        return True
+
+    @pipeline.can_accept(channels=["sms", "linebot"])
+    def reject_text_channels(request):
+        calls.append("text:can_accept")
+        return False
 
     def register_hooks(channels, prefix):
         for name in ("on_accepted", "on_before_llm", "on_before_tts", "on_finish"):
@@ -272,11 +317,25 @@ async def test_pipeline_invocation_filters_all_hooks_by_channel(tmp_path):
 
         assert responses[-1].type == "final"
         assert calls == [
+            "global:can_accept",
+            "matched:can_accept",
             "matched:on_accepted",
             "matched:on_before_llm",
             "matched:on_before_tts",
             "matched:on_finish",
         ]
+        assert accepted_transactions == [responses[-1].transaction_id]
+
+        calls.clear()
+        rejected = STSRequest(session_id="session", user_id="user", text="request", channel="sms")
+        rejected_responses = [response async for response in pipeline.invoke(rejected)]
+        await asyncio.sleep(0)
+
+        assert [(response.type, response.transaction_id) for response in rejected_responses] == [
+            ("canceled", rejected.transaction_id),
+        ]
+        assert calls == ["global:can_accept", "text:can_accept"]
+        assert accepted_transactions == [responses[-1].transaction_id]
     finally:
         await pipeline.shutdown()
         await pipeline.stt.close()

@@ -3,13 +3,16 @@
 import asyncio
 import base64
 from contextlib import asynccontextmanager
+from io import BytesIO
 import json
 from types import SimpleNamespace
+import wave
 
 import pytest
 
 from aiavatar.adapter import interruption as adapter_interruption
 from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer, WebSocketSessionData
+from aiavatar.sts.deferred_answer import DEFAULT_RESUME_TEXT, DeferredAnswerScheduler
 from aiavatar.sts.llm import LLMResponse, LLMServiceDummy
 from aiavatar.sts.models import STSResponse
 from aiavatar.sts.stt.base import SpeechRecognitionResult
@@ -525,6 +528,69 @@ async def test_ack_and_answer_use_same_spoken_template_at_onset(monkeypatch, tmp
             # The follow-up response has not played, so the unfinished audio still supplies context.
             next_request = SPOKEN_TEMPLATE.format(spoken_text=heard_next, request_text=NORMAL_REQUEST)
             assert await llm.calls.get() == ("Reply to Aki.", next_request, {"name": "Aki"})
+
+
+@pytest.mark.asyncio
+async def test_websocket_voice_turn_resumes_deferred_answer_in_same_context(monkeypatch, tmp_path):
+    resume_text = DEFAULT_RESUME_TEXT
+    deferred = f"<ack>{ACK_TEXT}</ack>\n<think>Wait for more detail.</think>\n<answer></answer>"
+    resumed = "<ack></ack>\n<think>Give the answer.</think>\n<answer>Visit Kyoto.</answer>"
+    with BytesIO() as buffer:
+        with wave.open(buffer, "wb") as wav:
+            wav.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+            wav.writeframes(VOICE)
+        audio = buffer.getvalue()
+
+    async with connected_voice_app(
+        monkeypatch, tmp_path, turn_taking_gate=None, transcripts=(FIRST_REQUEST,),
+        barge_in_protected_tags=["ack"],
+    ) as (socket, llm, shared_params):
+        llm.voice_text_tag = ["ack", "answer"]
+        socket.server.sts.tts.synthesized_bytes = audio
+        calls = []
+
+        async def respond(context_id, user_id, messages, system_prompt_params=None, **kwargs):
+            calls.append((context_id, user_id, list(messages), system_prompt_params))
+            text = deferred if messages[-1]["content"] == FIRST_REQUEST else resumed
+            yield LLMResponse(context_id=context_id, text=text)
+
+        monkeypatch.setattr(llm, "get_llm_stream_response", respond)
+        DeferredAnswerScheduler(socket.server.sts, silence_seconds=0.01)
+
+        async with asyncio.timeout(3):
+            await socket.feed(VOICE)
+            await socket.feed(SILENCE)
+            start = await socket.wait_for(lambda message: message["type"] == "start")
+            first_id = start["transaction_id"]
+            ack = await socket.wait_for(lambda message: message.get("voice_text_tag") == "ack")
+            assert ack["transaction_id"] == first_id
+            assert ack["voice_text"] == ACK_TEXT
+            assert ack["metadata"]["protect_from_barge_in"] is True
+            assert ack["audio_data"]
+            final = await socket.wait_for(lambda message: message["type"] == "final")
+            assert final["transaction_id"] == first_id
+
+            retry = await assert_new_start(socket, first_id, resume_text, resume_text)
+            assert retry["context_id"] == start["context_id"]
+            answer = await socket.wait_for(lambda message: message.get("voice_text_tag") == "answer")
+            assert answer["transaction_id"] == retry["transaction_id"]
+            assert answer["voice_text"] == "Visit Kyoto."
+            assert answer["audio_data"]
+            await socket.wait_for(lambda message: (
+                message["type"] == "final" and message["transaction_id"] == retry["transaction_id"]
+            ))
+
+            assert len(calls) == 2
+            assert all((context_id, user_id, params) == (start["context_id"], USER_ID, shared_params)
+                       for context_id, user_id, _, params in calls)
+            assert calls[1][2][-3:] == [
+                {"role": "user", "content": FIRST_REQUEST},
+                {"role": "assistant", "content": deferred},
+                {"role": "user", "content": resume_text},
+            ]
+            assert [message["transaction_id"] for message in socket.sent if message["type"] == "accepted"] == [
+                first_id, retry["transaction_id"],
+            ]
 
 
 @pytest.mark.asyncio

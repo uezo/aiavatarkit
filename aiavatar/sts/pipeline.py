@@ -8,7 +8,7 @@ import logging
 import re
 from time import time
 import traceback
-from typing import AsyncGenerator, Collection, Dict, FrozenSet, Tuple, List, Optional, Union
+from typing import AsyncGenerator, Callable, Collection, Dict, FrozenSet, Tuple, List, Optional, Union
 from uuid import uuid4
 from ..database import PoolProvider
 from .models import RequestContext, STSRequest, STSResponse
@@ -294,10 +294,13 @@ class STSPipeline:
         self.voice_recorder_response_audio_format = "wav"
 
         # User custom logic
+        self._can_accept_handlers = []
+        self._on_accepted_handlers = []
         self._on_before_llm_handlers = []
         self._on_before_tts_handlers = []
-        self._on_accepted_handlers = []
         self._on_finish_handlers = []
+        self._on_response_handlers = []
+        self._on_finalize_handlers = []
 
         # Queue management for invoke_queued
         self._request_queues: dict[str, asyncio.Queue] = {}
@@ -423,17 +426,30 @@ class STSPipeline:
             if channels is None or channel in channels:
                 await handler(*args)
 
+    def can_accept(self, handler: Optional[Callable[[STSRequest], bool]] = None, *, channels=None):
+        return self._register_hook(self._can_accept_handlers, handler, channels=channels)
+
+    def on_accepted(self, func=None, *, channels=None):
+        return self._register_hook(self._on_accepted_handlers, func, channels=channels)
+
     def on_before_llm(self, func=None, *, channels=None):
         return self._register_hook(self._on_before_llm_handlers, func, channels=channels)
 
     def on_before_tts(self, func=None, *, channels=None):
         return self._register_hook(self._on_before_tts_handlers, func, channels=channels)
 
-    def on_accepted(self, func=None, *, channels=None):
-        return self._register_hook(self._on_accepted_handlers, func, channels=channels)
-
     def on_finish(self, func=None, *, channels=None):
         return self._register_hook(self._on_finish_handlers, func, channels=channels)
+
+    def on_response(self, func=None, *, channels=None):
+        return self._register_hook(self._on_response_handlers, func, channels=channels)
+
+    def on_finalize(self, func):
+        self._on_finalize_handlers.append(func)
+        return func
+
+    def on_shutdown(self, func):
+        return self._lifecycle.push_async_callback(func)
 
     def add_response_handler(self, handler: ResponseHandler):
         self.response_handlers.append(handler)
@@ -531,12 +547,11 @@ class STSPipeline:
         return state.active_transaction_id == transaction_id, state.active_transaction_id
 
     async def invoke(self, request: STSRequest) -> AsyncGenerator[STSResponse, None]:
-        if self.use_invoke_queue:
-            async for response in self._invoke_queued(request):
-                yield response
-        else:
-            async for response in self._invoke_direct(request):
-                yield response
+        hook_channel = request.channel
+        invoke = self._invoke_queued if self.use_invoke_queue else self._invoke_direct
+        async for response in invoke(request):
+            yield response
+            await self._execute_hooks(self._on_response_handlers, hook_channel, request, response)
 
     async def _invoke_direct(self, request: STSRequest) -> AsyncGenerator[STSResponse, None]:
         performance = None
@@ -546,6 +561,22 @@ class STSPipeline:
 
             start_time = time()
             hook_channel = request.channel
+
+            # Check whether the request can be accepted.
+            if any(
+                handler(request) is False
+                for channels, handler in self._can_accept_handlers
+                if channels is None or hook_channel in channels
+            ):
+                yield STSResponse(
+                    type="canceled",
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    context_id=request.context_id,
+                    transaction_id=request.transaction_id,
+                )
+                return
+
             # Notify client that request is accepted (fire and forget to avoid blocking pipeline latency)
             asyncio.create_task(self.handle_response(STSResponse(
                 type="accepted",
@@ -1006,8 +1037,12 @@ class STSPipeline:
             yield response
 
     async def finalize(self, context_id: str):
-        self._interruption_chains.pop(context_id, None)
-        await self.vad.finalize_session(context_id)
+        try:
+            for handler in self._on_finalize_handlers:
+                await handler(context_id)
+        finally:
+            self._interruption_chains.pop(context_id, None)
+            await self.vad.finalize_session(context_id)
 
     async def shutdown(self):
         """Close resources constructed and owned by this pipeline."""
