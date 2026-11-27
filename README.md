@@ -146,7 +146,7 @@ from aiavatar.sts.llm.claude import ClaudeService
 
 llm = ClaudeService(
     anthropic_api_key=ANTHROPIC_API_KEY,
-    model="claude-sonnet-4-5",
+    model="claude-sonnet-4-6",
     system_prompt="You are my cat.",
 )
 
