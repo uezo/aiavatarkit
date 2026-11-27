@@ -7,14 +7,14 @@ Claude's own behaviour rather than an OpenAI-shaped approximation of it.
 pip install anthropic
 ```
 
-Create instance of `ClaudeService` with custom parameters and set it to `AIAvatar`. The default model is `claude-sonnet-4-5`.
+Create instance of `ClaudeService` with custom parameters and set it to `AIAvatar`. The default model is `claude-haiku-4-5`.
 
 ```python
 # Create ClaudeService
 from aiavatar.sts.llm.claude import ClaudeService
 llm = ClaudeService(
     anthropic_api_key=ANTHROPIC_API_KEY,
-    model="claude-sonnet-4-5",
+    model="claude-sonnet-4-6",
     temperature=0.0,
     system_prompt="You are my cat."
 )
