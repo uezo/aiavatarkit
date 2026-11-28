@@ -13,7 +13,7 @@ import wave
 
 import pytest
 
-from aiavatar.adapter.interruption import FirstResponseAudioHold, InterruptionState
+from aiavatar.adapter.barge_in import FirstResponseAudioHold
 from aiavatar.adapter.models import AIAvatarResponse
 from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer, WebSocketSessionData
 from aiavatar.sts.llm import LLMResponse, LLMServiceDummy
@@ -38,6 +38,9 @@ class FakeVAD:
         return func
 
     def on_voiced(self, func):
+        return func
+
+    def on_speech_started(self, func):
         return func
 
     async def process_samples(self, samples, session_id):
@@ -68,6 +71,12 @@ class FakePipeline:
             return callback
 
         return register if func is None else register(func)
+
+    def on_before_start(self, func=None, *, channels=None):
+        return func
+
+    def on_before_llm(self, func=None, *, channels=None):
+        return func
 
     def on_finalize(self, func):
         return func
@@ -321,10 +330,7 @@ async def test_first_response_audio_hold_leaves_barge_in_to_websocket(make_serve
     )
     vad.recording_sessions = {SESSION_ID: recording}
     vad.set_session_data(SESSION_ID, "barge_in_enabled", True)
-    FirstResponseAudioHold(
-        server.sts, server.on_response, applies_to=lambda request: request.audio_duration > 0,
-        channels=server.channel,
-    )
+    FirstResponseAudioHold(applies_to=lambda request: request.audio_duration > 0).bind(server)
 
     await begin(server, "A")
     request = STSRequest(session_id=SESSION_ID, transaction_id="A", audio_duration=0.5, channel=server.channel)
@@ -480,11 +486,11 @@ async def test_complete_audio_uses_protection_for_configured_tag_only(make_serve
     pytest.param("final", None, id="final-after-ack"),
 ])
 async def test_ack_audio_does_not_mark_transaction_answered(make_server, chunk_size, following_type, answer_tag):
-    server, _, connection, websocket = make_server(response_audio_chunk_size=chunk_size)
+    server, _, _, websocket = make_server(response_audio_chunk_size=chunk_size, include_interruption_context=True)
+    server.interruption_context.open_session(SESSION_ID)
+    # The adapter reports the start it delivers, so the ledger tracks this transaction.
     await begin(server, "A")
-    state = InterruptionState()
-    connection.interruption_state = state
-    state.observe(STSResponse(type="start", transaction_id="A", context_id="context"))
+    state = server.interruption_context.get_ledger(SESSION_ID)
     audio = wav_audio(bytes(1024))
 
     await server.handle_response(chunk("A", "ACK", audio, voice_text_tag="ack"))

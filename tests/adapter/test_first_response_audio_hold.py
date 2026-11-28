@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from aiavatar.adapter.interruption import FirstResponseAudioHold
+from aiavatar.adapter.barge_in import FirstResponseAudioHold
 from aiavatar.adapter.models import AIAvatarResponse
 from aiavatar.sts.models import STSRequest, STSResponse
 
@@ -45,6 +45,10 @@ class FakePipeline:
 
 
 class FakeAdapter:
+    def __init__(self, sts):
+        self.sts = sts
+        self.channel = CHANNEL
+
     def on_response(self, handler):
         self.prepare_response = handler
         return handler
@@ -61,10 +65,8 @@ class FakeAdapter:
 @pytest.fixture
 def hold():
     sts = FakePipeline()
-    adapter = FakeAdapter()
-    FirstResponseAudioHold(
-        sts, adapter.on_response, applies_to=lambda request: bool(request.audio_data), channels=CHANNEL,
-    )
+    adapter = FakeAdapter(sts)
+    FirstResponseAudioHold(applies_to=lambda request: bool(request.audio_data)).bind(adapter)
     return sts, adapter
 
 
@@ -143,3 +145,14 @@ async def test_an_early_boundary_releases_held_audio(hold, release):
             first_answer.cancel()
             await asyncio.gather(first_answer, return_exceptions=True)
         await sts.shutdown()
+
+
+def test_hold_registers_hooks_only_when_bound_once():
+    sts = FakePipeline()
+    audio_hold = FirstResponseAudioHold(applies_to=lambda request: True)
+    assert not hasattr(sts, "accepted")
+
+    audio_hold.bind(FakeAdapter(sts))
+    assert sts.channels == CHANNEL
+    with pytest.raises(RuntimeError, match="already bound"):
+        audio_hold.bind(FakeAdapter(FakePipeline()))

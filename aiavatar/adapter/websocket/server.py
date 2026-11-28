@@ -10,11 +10,11 @@ from typing import List, Dict, Callable, Awaitable, Optional, Iterator
 from uuid import uuid4
 from fastapi import APIRouter, Header, HTTPException, WebSocket, WebSocketException, status
 from ...database import PoolProvider
-from ...sts.models import RequestContext, STSRequest, STSResponse
-from ...sts.pipeline import (
-    DEFAULT_INTERRUPTION_BEFORE_AUDIO_TEMPLATE, DEFAULT_INTERRUPTION_SPOKEN_TEMPLATE,
-    InsertChannelTagConfig, STSPipeline,
+from ...sts.interruption import (
+    DEFAULT_BEFORE_AUDIO_TEMPLATE, DEFAULT_DISCARDED_TEMPLATE, DEFAULT_SPOKEN_TEMPLATE, InterruptionContext,
 )
+from ...sts.models import STSRequest, STSResponse
+from ...sts.pipeline import STSPipeline, InsertChannelTagConfig
 from ...sts.vad import SpeechDetector
 from ...sts.stt import SpeechRecognizer
 from ...sts.stt.openai import OpenAISpeechRecognizer
@@ -26,7 +26,6 @@ from ...sts.performance_recorder import PerformanceRecorder
 from ...sts.voice_recorder import VoiceRecorder
 from ..models import AvatarControlRequest, AIAvatarRequest, AIAvatarResponse
 from ..base import Adapter
-from ..interruption import InterruptionState
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +103,6 @@ class WebSocketSessionData:
         # and the transaction whose remaining output is dropped.
         self.barge_in_active = False
         self.muted_transaction_id: Optional[str] = None
-        self.interruption_state: Optional[InterruptionState] = None
 
 
 class AIAvatarWebSocketServer(Adapter):
@@ -147,14 +145,15 @@ class AIAvatarWebSocketServer(Adapter):
         wakeword_timeout: float = 60.0,
         merge_request_threshold: float = 0.0,
         merge_request_prefix: str = "$Previous user's request and your response have been canceled. Please respond again to the following request:\n\n",
-        interruption_spoken_template: str = DEFAULT_INTERRUPTION_SPOKEN_TEMPLATE,
-        interruption_before_audio_template: str = DEFAULT_INTERRUPTION_BEFORE_AUDIO_TEMPLATE,
         timestamp_interval_seconds: float = 0.0,
         timestamp_prefix: str = "$Current date and time: ",
         timestamp_timezone: str = "UTC",
         mute_on_barge_in: bool = False,
         barge_in_protected_tags: Optional[List[str]] = None,
         include_interruption_context: bool = False,
+        interruption_spoken_template: str = DEFAULT_SPOKEN_TEMPLATE,
+        interruption_before_audio_template: str = DEFAULT_BEFORE_AUDIO_TEMPLATE,
+        interruption_discarded_template: str = DEFAULT_DISCARDED_TEMPLATE,
         db_pool_provider: PoolProvider = None,
         db_connection_str: str = "aiavatar.db",
         session_state_manager: SessionStateManager = None,
@@ -212,8 +211,6 @@ class AIAvatarWebSocketServer(Adapter):
             wakeword_timeout=wakeword_timeout,
             merge_request_threshold=merge_request_threshold,
             merge_request_prefix=merge_request_prefix,
-            interruption_spoken_template=interruption_spoken_template,
-            interruption_before_audio_template=interruption_before_audio_template,
             timestamp_interval_seconds=timestamp_interval_seconds,
             timestamp_prefix=timestamp_prefix,
             timestamp_timezone=timestamp_timezone,
@@ -298,41 +295,22 @@ class AIAvatarWebSocketServer(Adapter):
                     session_id=session_id
                 ))
 
+        # This adapter only reports what it delivered and what the client played.
+        # The plugin decides what to tell the LLM.
+        self.interruption_context: Optional[InterruptionContext] = None
         if include_interruption_context:
-            self._register_interruption_context()
+            self.interruption_context = InterruptionContext(
+                get_active_transaction_id=self._get_active_transaction_id,
+                spoken_template=interruption_spoken_template,
+                before_audio_template=interruption_before_audio_template,
+                discarded_template=interruption_discarded_template,
+                debug=debug,
+            )
+            self.interruption_context.bind(self.sts, channels=self.channel)
 
-    def _register_interruption_context(self):
-        vad = self.sts.vad
-
-        @self.on_session_start
-        async def initialize_interruption_state(_request, session):
-            session.interruption_state = InterruptionState(debug=self.debug)
-
-        @self.on_response
-        async def remember_response(_response, response):
-            session = self.sessions.get(response.session_id)
-            if session is not None and session.interruption_state is not None:
-                session.interruption_state.observe(response)
-
-        @self.sts.on_before_llm(channels=self.channel)
-        async def include_discarded_audio(request: STSRequest):
-            session = self.sessions.get(request.session_id)
-            if not request.text or session is None or session.interruption_state is None:
-                return
-            discarded_text = "\n".join(session.interruption_state.take_discarded_audio(request.context_id))
-            if discarded_text:
-                request.text = (
-                    "$The following assistant speech was canceled before playback started.\n"
-                    f"{discarded_text}\n\n{request.text}"
-                )
-
-        @vad.on_speech_started
-        def capture_interruption(session_id: str, metadata: dict) -> None:
-            session = self.sessions.get(session_id)
-            if session is None or session.interruption_state is None:
-                return
-            interruption = session.interruption_state.snapshot(session.active_transaction_id)
-            metadata["request_context"] = RequestContext(interruption=interruption, track_interruption=True)
+    def _get_active_transaction_id(self, session_id: str) -> Optional[str]:
+        session_data = self.sessions.get(session_id)
+        return session_data.active_transaction_id if session_data is not None else None
 
     def set_context_resolver(
         self,
@@ -413,8 +391,8 @@ class AIAvatarWebSocketServer(Adapter):
                 self._apply_session_config(request.session_id, request.metadata, create_session=True)
             session_data.data["metadata"] = request.metadata
             self.sessions[session_data.id] = session_data
-            if session_data.interruption_state is not None:
-                self.sts.start_interruption_tracking(session_data.id)
+            if self.interruption_context is not None:
+                self.interruption_context.open_session(session_data.id)
 
             await self.handle_response(STSResponse(
                 type="connected",
@@ -440,12 +418,7 @@ class AIAvatarWebSocketServer(Adapter):
                     True
                 )
 
-            request_context = None
-            if (request.text and session_data.interruption_state is not None
-                    and self.sessions.get(request.session_id) is session_data):
-                request_context = RequestContext(track_interruption=True)
-
-            async for r in self.sts.invoke(STSRequest(
+            sts_request = STSRequest(
                 type=request.type,
                 session_id=request.session_id,
                 user_id=request.user_id,
@@ -458,8 +431,13 @@ class AIAvatarWebSocketServer(Adapter):
                 wait_in_queue=request.wait_in_queue,
                 channel=self.channel,
                 metadata=request.metadata,
-                request_context=request_context,
-            )):
+            )
+            if (request.text and self.interruption_context is not None
+                    and self.sessions.get(request.session_id) is session_data):
+                # Typed text is the user's turn too, so later interruptions can refer to it.
+                self.interruption_context.track(sts_request)
+
+            async for r in self.sts.invoke(sts_request):
                 if r.type == "start":
                     self.sts.vad.set_session_data(request.session_id, "context_id", r.context_id)
                 await self.sts.handle_response(r)
@@ -474,11 +452,11 @@ class AIAvatarWebSocketServer(Adapter):
 
         elif request.type == "playback":
             if (
-                session_data.interruption_state is not None
+                self.interruption_context is not None
                 and self.sessions.get(request.session_id) is session_data
                 and self.websockets.get(request.session_id) is websocket
             ):
-                session_data.interruption_state.handle_playback_event(**(request.metadata or {}))
+                self.interruption_context.handle_playback_event(request.session_id, **(request.metadata or {}))
 
         elif request.type == "config":
             metadata = request.metadata or {}
@@ -529,18 +507,17 @@ class AIAvatarWebSocketServer(Adapter):
                     return
 
                 for response in batch:
-                    state = session_data.interruption_state
                     await websocket.send_text(response.model_dump_json())
                     if (self.sessions.get(session_id) is not session_data
                             or self.websockets.get(session_id) is not websocket):
                         return
-                    if state is not None:
+                    if self.interruption_context is not None:
                         metadata = response.metadata or {}
                         # PCM payloads use the original audio clip's tag.
                         if ((response.type == "chunk" and response.audio_data
                              and aiavatar_response.voice_text_tag != "ack")
                                 or (response.type == "final" and not metadata.get("interrupted"))):
-                            state.mark_answered(response.transaction_id)
+                            self.interruption_context.mark_answered(session_id, response.transaction_id)
 
     def can_handle(self, session_id: str) -> bool:
         return self.sessions.get(session_id) is not None
@@ -594,6 +571,11 @@ class AIAvatarWebSocketServer(Adapter):
             metadata=response.metadata or {},
             structured_content=response.structured_content
         )
+
+        # Report the response before any response hook, which may wait, so playback
+        # reports and the user's next speech never refer to a response the plugin has not seen.
+        if self.interruption_context is not None:
+            self.interruption_context.observe(response)
 
         # Callback for each response chunk
         for on_resp in self._on_response_handlers:

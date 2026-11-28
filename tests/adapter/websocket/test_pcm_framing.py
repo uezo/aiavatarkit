@@ -94,6 +94,7 @@ async def test_server_streams_frames_and_stops_after_interruption(interrupt):
     server.websockets = {"s": Socket()}
     server.response_audio_chunk_size = 8
     server.barge_in_protected_tags = []
+    server.interruption_context = None
     server._on_response_handlers = []
     server.control_tag_pattern = r'\[{tag}:(\w+)\]|<{tag}\s[^>]*{attr}=["\'](\w+)["\']'
     server.debug = False

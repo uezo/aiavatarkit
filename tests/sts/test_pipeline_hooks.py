@@ -12,6 +12,7 @@ from aiavatar.sts.vad import SpeechDetectorDummy
 
 def make_pipeline() -> STSPipeline:
     pipeline = STSPipeline.__new__(STSPipeline)
+    pipeline._on_before_start_handlers = []
     pipeline._on_before_llm_handlers = []
     pipeline._on_before_tts_handlers = []
     pipeline._on_accepted_handlers = []
@@ -58,6 +59,7 @@ async def test_hook_channels_support_global_single_and_multiple_channels():
     ("register_name", "handlers_name", "include_response"),
     (
         ("on_accepted", "_on_accepted_handlers", False),
+        ("on_before_start", "_on_before_start_handlers", False),
         ("on_before_llm", "_on_before_llm_handlers", False),
         ("on_before_tts", "_on_before_tts_handlers", False),
         ("on_finish", "_on_finish_handlers", True),
@@ -245,10 +247,83 @@ async def test_pipeline_invocation_inserts_only_selected_mapped_channel_tag(tmp_
 
         assert mapped_request.text == "<channel name='desktop_robot' />Hello"
         assert unmatched_request.text == "Hello"
+        # Hooks can still read the user's words without the channel tag.
+        assert mapped_request.recognized_text == "Hello"
+        assert unmatched_request.recognized_text == "Hello"
     finally:
         await pipeline.shutdown()
         await pipeline.stt.close()
         await pipeline.tts.close()
+
+
+@pytest.mark.asyncio
+async def test_before_start_text_reaches_start_and_earlier_registered_before_llm_hooks(tmp_path):
+    pipeline = STSPipeline(
+        vad=SpeechDetectorDummy(),
+        stt=SpeechRecognizerDummy(),
+        llm=LLMServiceDummy(
+            response_text="response",
+            db_connection_str=str(tmp_path / "context.db"),
+        ),
+        tts=SpeechSynthesizerDummy(synthesized_bytes=b"voice"),
+        db_connection_str=str(tmp_path / "pipeline.db"),
+        voice_recorder_enabled=False,
+    )
+
+    async def ignore(*args):
+        pass
+
+    pipeline.add_response_handler(ResponseHandler(
+        can_handle=lambda session_id: True, handle_response=ignore, stop_response=ignore,
+    ))
+    seen_before_llm = []
+
+    @pipeline.on_before_llm
+    async def registered_first(request):
+        seen_before_llm.append(request.text)
+
+    @pipeline.on_before_start
+    async def add_note(request):
+        request.text = f"$Note\n\n{request.text}"
+
+    try:
+        responses = [response async for response in pipeline.invoke(STSRequest(
+            session_id="session", user_id="user", text="Hello",
+        ))]
+        start = next(response for response in responses if response.type == "start")
+
+        assert start.metadata["request_text"] == "$Note\n\nHello"
+        assert start.metadata["recognized_text"] == "Hello"
+        assert seen_before_llm == ["$Note\n\nHello"]
+    finally:
+        await pipeline.shutdown()
+        await pipeline.stt.close()
+        await pipeline.tts.close()
+
+
+@pytest.mark.asyncio
+async def test_finalize_runs_every_handler_when_one_fails():
+    finalized = []
+
+    class FakeVAD:
+        async def finalize_session(self, session_id):
+            finalized.append(("vad", session_id))
+
+    pipeline = STSPipeline.__new__(STSPipeline)
+    pipeline._on_finalize_handlers = []
+    pipeline.vad = FakeVAD()
+
+    @pipeline.on_finalize
+    async def failing(session_id):
+        raise RuntimeError("cleanup failed")
+
+    @pipeline.on_finalize
+    async def registered_later(session_id):
+        finalized.append(("later", session_id))
+
+    await pipeline.finalize("session")
+
+    assert finalized == [("later", "session"), ("vad", "session")]
 
 
 @pytest.mark.asyncio
@@ -297,7 +372,7 @@ async def test_pipeline_invocation_filters_all_hooks_by_channel(tmp_path):
         return False
 
     def register_hooks(channels, prefix):
-        for name in ("on_accepted", "on_before_llm", "on_before_tts", "on_finish"):
+        for name in ("on_accepted", "on_before_start", "on_before_llm", "on_before_tts", "on_finish"):
             async def hook(*args, name=name):
                 calls.append(f"{prefix}:{name}")
 
@@ -320,6 +395,7 @@ async def test_pipeline_invocation_filters_all_hooks_by_channel(tmp_path):
             "global:can_accept",
             "matched:can_accept",
             "matched:on_accepted",
+            "matched:on_before_start",
             "matched:on_before_llm",
             "matched:on_before_tts",
             "matched:on_finish",

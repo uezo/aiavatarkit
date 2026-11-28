@@ -1,19 +1,24 @@
-"""Track playback and coordinate the start of audio around interruptions."""
+"""Record what one connection delivered and played, as reported by its adapter."""
 
-import asyncio
-from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 import logging
-from math import isfinite
 from sys import float_info
 from time import monotonic
 from typing import Optional
 
-from ..sts.models import Interruption, STSRequest, STSResponse
-from ..sts.pipeline import STSPipeline
-from .models import AIAvatarResponse
+from .models import STSResponse
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, kw_only=True)
+class Interruption:
+    """Interruption facts scoped to the conversation of the interrupted response."""
+
+    interrupted_response_context_id: Optional[str]
+    interrupted_response_transaction_id: str
+    spoken_text: Optional[str] = None
+    answered_through_transaction_id: Optional[str] = None
 
 
 @dataclass
@@ -49,7 +54,7 @@ class _Playback:
         return self.preceding_text + self.text[:int(len(self.text) * progress)]
 
 
-class InterruptionState:
+class PlaybackLedger:
     """Track delivery and playback of recent responses on one connection."""
 
     def __init__(self, *, debug: bool = False):
@@ -186,85 +191,3 @@ class InterruptionState:
                 ),
             )
         return None
-
-
-@dataclass
-class _FirstAudio:
-    transaction_id: str
-    seen: bool = False
-
-
-class FirstResponseAudioHold:
-    """Briefly hold the first non-ACK audio in an adapter's pre-send hook."""
-
-    def __init__(
-        self, sts: STSPipeline, on_response: Callable, *,
-        applies_to: Callable[[STSRequest], bool], channels: str | Collection[str] | None = None,
-    ):
-        self._vad = sts.vad
-        self._applies_to = applies_to
-        self._debug = getattr(sts, "debug", False)
-        self._first_audio: dict[str, _FirstAudio] = {}
-        sts.on_accepted(self._on_accepted, channels=channels)
-        on_response(self._on_response)
-        sts.on_finalize(self._on_finalize)
-        sts.on_shutdown(self._on_shutdown)
-
-    async def _on_accepted(self, request: STSRequest) -> None:
-        if self._applies_to(request):
-            self._first_audio[request.session_id] = _FirstAudio(request.transaction_id)
-        else:
-            self._first_audio.pop(request.session_id, None)
-
-    async def _on_finalize(self, session_id: str) -> None:
-        self._first_audio.pop(session_id, None)
-
-    async def _on_shutdown(self) -> None:
-        self._first_audio.clear()
-
-    async def _on_response(self, message: AIAvatarResponse, response: STSResponse) -> None:
-        session_id = response.session_id
-        first_audio = self._first_audio.get(session_id)
-        if first_audio is None or first_audio.transaction_id != response.transaction_id:
-            return
-        if response.type in ("final", "canceled", "cancelled", "error"):
-            self._first_audio.pop(session_id, None)
-            return
-        if (
-            first_audio.seen or response.type != "chunk" or not message.audio_data
-            or (message.voice_text_tag or response.voice_text_tag) == "ack"
-            or (response.metadata or {}).get("is_guardrail_triggered")
-        ):
-            return
-        first_audio.seen = True
-
-        recordings = getattr(self._vad, "recording_sessions", {})
-        recording = recordings.get(session_id)
-        if recording is None or not recording.is_recording:
-            return
-        threshold = self._vad.on_recording_started_min_duration
-        if not isfinite(threshold) or threshold <= 0:
-            return
-        recorded = recording.record_duration - getattr(recording, "silence_duration", 0.0)
-        budget = max(0.0, threshold - recorded)
-        deadline = monotonic() + budget
-        recording_id = getattr(recording, "recording_id", None)
-        logged = False
-        while (
-            self._first_audio.get(session_id) is first_audio
-            and recordings.get(session_id) is recording and recording.is_recording
-            and getattr(recording, "recording_id", None) == recording_id
-            and self._vad.get_session_data(session_id, "barge_in_enabled") is True
-        ):
-            if getattr(recording, "on_recording_started_triggered", False):
-                # Let the existing VAD mute callback run before delivery resumes.
-                await asyncio.sleep(0)
-                return
-            remaining = deadline - monotonic()
-            if remaining <= 0:
-                return
-            if self._debug and not logged:
-                logger.info("Holding first response audio: transaction=%s, budget_seconds=%.3f",
-                            response.transaction_id, budget)
-                logged = True
-            await asyncio.sleep(min(0.02, remaining))

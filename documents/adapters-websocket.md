@@ -155,15 +155,16 @@ The browser Stop button and disconnect also stop all audio.
 ### Hold the first response audio during user speech
 
 `FirstResponseAudioHold` uses the adapter's existing pre-send response hook.
-Install it after creating the adapter and choose which requests to hold.
+Choose which requests to hold, then bind it to the adapter. `bind(server)` uses
+the adapter's pipeline and holds only requests from the adapter's channel.
+Binding it twice raises `RuntimeError`.
 
 ```python
-from aiavatar.adapter.interruption import FirstResponseAudioHold
+from aiavatar.adapter.barge_in import FirstResponseAudioHold
 
 FirstResponseAudioHold(
-    server.sts, server.on_response, channels=server.channel,
     applies_to=lambda request: request.audio_duration > 0,
-)
+).bind(server)
 ```
 
 With BARGE-IN enabled, the helper can delay the first non-ACK audio while the
@@ -191,10 +192,13 @@ the transaction ID in [playback start notifications](../examples/websocket/READM
 ## Context for interruptions
 
 The LLM can use the part of the assistant response that had already played when
-the user started speaking. This option uses playback reports from the client and
-requires a VAD that calls `on_speech_started` callbacks with `(session_id, metadata)`,
-such as `SileroStreamSpeechDetector`. The adapter updates the recording's metadata
-in place. Enable it when constructing the adapter.
+the user started speaking. With this option, the adapter creates an
+[`InterruptionContext`](pipeline.md#interruption-context), available as
+`aiavatar_app.interruption_context`. The adapter reports what it delivered and
+the client's playback reports to it, and the plugin decides what to tell the
+LLM. It requires a VAD that calls `on_speech_started` callbacks with
+`(session_id, metadata)`, such as `SileroStreamSpeechDetector`, and updates the
+recording's metadata in place. Enable it when constructing the adapter.
 
 ```python
 aiavatar_app = AIAvatarWebSocketServer(
@@ -213,8 +217,8 @@ any history. If the pipeline creates a new conversation ID in that case, it
 processes the follow-up as an ordinary request without the interruption
 supplement.
 
-The adapter reads the browser's playback reports directly for interruption
-context, with or without a turn-taking gate. If you use
+The adapter forwards the browser's playback reports to the plugin, with or
+without a turn-taking gate. If you use
 [playback-aware turn taking](vad-turn-taking.md#quick-start-with-jev), keep
 forwarding the same reports to the gate in your `on_request` hook.
 
@@ -225,7 +229,7 @@ The spoken text remains available for follow-up utterances until the browser
 reports that the reply's last audio clip has played in full.
 Successive chunks in the same streamed reply retain the earlier spoken text.
 
-The adapter matches reported playback to the response's audio chunks by
+The plugin matches reported playback to the delivered audio chunks by
 transaction ID and `voice_text`. Unplayed chunks do not contribute to the
 spoken text. ACKs use the same playback start and end reports as answers.
 The browser selects the final non-ACK audio clip for its playback final
@@ -234,33 +238,34 @@ remains available as interruption context after playback ends.
 
 When an ordinary `stop` removes voiced audio before it starts, the browser sends
 a `playback` report with `event: "discarded"`, `transaction_id`, and the clip's
-`voice_text` in `text`. The adapter matches the report to an unplayed clip and
+`voice_text` in `text`. The plugin matches the report to an unplayed clip and
 adds its text to the next LLM user message in the same conversation. It consumes
 each confirmed cancellation once and processes requests without waiting for a
-report. The cancellation note is added after the `start` message is sent. It can
-be retained in LLM history without changing the system prompt. Turn-taking gates
-can ignore `discarded` reports.
+report. The note can be retained in LLM history without changing the system
+prompt. Turn-taking gates can ignore `discarded` reports.
 
 When there is no spoken prefix and the active response has sent no audio, the
-adapter can capture that response's transaction ID and the last transaction
-that sent audio or an ordinary `final`.
-The pipeline uses those IDs to recover the unanswered text of earlier requests
-that reached processing. A request replaced while waiting in the queue is
-discarded. A normal new turn starts a fresh chain.
+plugin captures that response's transaction ID and the last transaction that
+sent audio or an ordinary `final`. It uses those IDs to recover the unanswered
+text of earlier requests that reached processing. A request replaced while
+waiting in the queue is discarded. A normal new turn starts a fresh chain.
 
-The supplement applies to the accepted recording in the same connection and
+The notes apply to the accepted recording in the same connection and
 conversation. Use a fresh `session_id` for every WebSocket session, including
-reconnects. Pass an existing `context_id` to resume a conversation. When processing
-begins, the adapter finds the session by `session_id` and passes the captured
-facts to the pipeline. The pipeline creates tracking state at session start
-and removes it when the session closes. Requests can only update existing state.
-`start.metadata.request_text`,
-the QuickResponder when used, and the main LLM receive the augmented text.
+reconnects. Pass an existing `context_id` to resume a conversation. The plugin
+creates tracking state when the session starts and removes it when the session
+closes. Requests cannot create that state. The interruption note is added before
+the `start` message, so `start.metadata.request_text`, the QuickResponder when
+used, and the main LLM receive the annotated text, while
 `start.metadata.recognized_text` still contains the original transcript. The
-system prompt stays the same, and the LLM's conversation history can retain the
-augmented user message.
+note about discarded speech is added after `start`. The system prompt stays the
+same, and the LLM's conversation history can retain the annotated user message.
 
-Override the wording with the [pipeline's interruption templates](pipeline.md#interruption-context).
+Override the wording with the
+[plugin's templates](pipeline.md#interruption-context). Pass them to the adapter
+as `interruption_spoken_template`, `interruption_before_audio_template`, and
+`interruption_discarded_template`, or set them later on
+`aiavatar_app.interruption_context`.
 
 ## Connection and disconnection handling
 

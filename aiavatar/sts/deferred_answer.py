@@ -58,7 +58,7 @@ class DeferredAnswerScheduler:
     """Schedule one follow-up for an empty tagged answer to a VAD turn."""
 
     def __init__(
-        self, sts: STSPipeline, *, resume_text: str = DEFAULT_RESUME_TEXT, silence_seconds: float = 0.8,
+        self, *, resume_text: str = DEFAULT_RESUME_TEXT, silence_seconds: float = 0.8,
         empty_answer_pattern: str | re.Pattern[str] = DEFAULT_EMPTY_ANSWER_PATTERN,
         is_enabled: Callable[[str], bool] | None = None,
     ):
@@ -66,7 +66,7 @@ class DeferredAnswerScheduler:
             raise ValueError("resume_text must not be empty")
         if not isfinite(silence_seconds) or silence_seconds < 0:
             raise ValueError("silence_seconds must be finite and nonnegative")
-        self.sts = sts
+        self.sts: STSPipeline | None = None
         self.resume_text = resume_text
         self.silence_seconds = silence_seconds
         self.empty_answer_pattern = re.compile(empty_answer_pattern)
@@ -74,6 +74,11 @@ class DeferredAnswerScheduler:
         self._sessions: dict[str, _Session] = {}
         self._closed = False
 
+    def bind(self, sts: STSPipeline) -> None:
+        """Register the scheduler's hooks on the pipeline. A scheduler binds to one pipeline, once."""
+        if self.sts is not None:
+            raise RuntimeError("DeferredAnswerScheduler is already bound to a pipeline")
+        self.sts = sts
         sts.vad.on_voiced(self._remember_voice)
         sts.can_accept(self._accept_request)
         sts.on_before_llm(self._validate_resume)

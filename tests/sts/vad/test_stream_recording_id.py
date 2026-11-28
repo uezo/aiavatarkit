@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from aiavatar.sts.vad.stream import SileroStreamSpeechDetector
-from aiavatar.sts.models import RequestContext, STSResponse
+from aiavatar.sts.models import STSResponse
 from aiavatar.sts.pipeline import STSPipeline, ResponseHandler
 
 
@@ -150,11 +150,7 @@ async def test_older_partial_result_does_not_replace_newer_result(detector):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "captured_context", [None, RequestContext(track_interruption=True), {"track_interruption": True}],
-    ids=["missing", "typed", "plain-dict"],
-)
-async def test_recording_metadata_reaches_existing_request_path(captured_context):
+async def test_recording_metadata_reaches_existing_request_path():
     pipeline = STSPipeline.__new__(STSPipeline)
     pipeline.vad = SimpleNamespace(get_session_data=lambda *args: None)
     received = []
@@ -165,13 +161,12 @@ async def test_recording_metadata_reaches_existing_request_path(captured_context
         yield STSResponse(type="final", session_id=request.session_id)
     pipeline.response_handlers = [ResponseHandler(can_handle=lambda _: True, handle_response=handle, stop_response=handle)]
     pipeline.invoke = invoke
-    metadata = {"recording_id": "a"}
-    if captured_context is not None:
-        metadata["request_context"] = captured_context
+    # A speech-start callback may leave objects in the metadata for later hooks.
+    captured = object()
+    metadata = {"recording_id": "a", "captured": captured}
     await pipeline.on_speech_detected(b"audio", "text", metadata, 1.0, "s")
     assert received[0].metadata["recording_id"] == "a"
-    expected_context = captured_context if isinstance(captured_context, RequestContext) else None
-    assert received[0].request_context is expected_context
+    assert received[0].metadata["captured"] is captured
 
 
 @pytest.mark.asyncio

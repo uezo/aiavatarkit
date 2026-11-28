@@ -87,7 +87,8 @@ def accept_speech(sts, session_id="session", context_id="context"):
 @pytest.mark.asyncio
 async def test_empty_answer_resumes_once_in_the_same_conversation():
     sts = FakePipeline()
-    scheduler = DeferredAnswerScheduler(sts, silence_seconds=0)
+    scheduler = DeferredAnswerScheduler(silence_seconds=0)
+    scheduler.bind(sts)
     try:
         source = accept_speech(sts)
         assert not scheduler.is_resume(source)
@@ -116,9 +117,10 @@ async def test_empty_answer_resumes_once_in_the_same_conversation():
 async def test_custom_empty_answer_pattern_resumes_an_alternate_format():
     sts = FakePipeline()
     scheduler = DeferredAnswerScheduler(
-        sts, resume_text=RESUME_TEXT, silence_seconds=0,
+        resume_text=RESUME_TEXT, silence_seconds=0,
         empty_answer_pattern=r"<reply>\s*</reply>",
     )
+    scheduler.bind(sts)
     try:
         source = accept_speech(sts)
         await sts.observe_response(source, response_for(source, text="<reply>\n</reply>"))
@@ -140,8 +142,8 @@ async def test_custom_empty_answer_pattern_resumes_an_alternate_format():
 async def test_only_enabled_deferred_answers_schedule_a_resume(text, before_final, enabled):
     sts = FakePipeline()
     DeferredAnswerScheduler(
-        sts, resume_text=RESUME_TEXT, silence_seconds=0, is_enabled=lambda _session_id: enabled,
-    )
+        resume_text=RESUME_TEXT, silence_seconds=0, is_enabled=lambda _session_id: enabled,
+    ).bind(sts)
     try:
         source = accept_speech(sts)
         if before_final:
@@ -158,7 +160,7 @@ async def test_only_enabled_deferred_answers_schedule_a_resume(text, before_fina
 @pytest.mark.parametrize("replacement", ["speech", "accepted", "disconnect", "shutdown"])
 async def test_pending_resume_yields_to_new_input_or_disconnect(replacement):
     sts = FakePipeline()
-    DeferredAnswerScheduler(sts, resume_text=RESUME_TEXT, silence_seconds=0)
+    DeferredAnswerScheduler(resume_text=RESUME_TEXT, silence_seconds=0).bind(sts)
     try:
         source = accept_speech(sts)
         await sts.observe_response(source, response_for(source))
@@ -188,7 +190,7 @@ async def test_pending_resume_yields_to_new_input_or_disconnect(replacement):
 @pytest.mark.asyncio
 async def test_recording_delays_resume_until_recording_ends():
     sts = FakePipeline()
-    DeferredAnswerScheduler(sts, resume_text=RESUME_TEXT, silence_seconds=0)
+    DeferredAnswerScheduler(resume_text=RESUME_TEXT, silence_seconds=0).bind(sts)
     try:
         source = accept_speech(sts)
         recording = SimpleNamespace(is_recording=True)
@@ -210,7 +212,7 @@ async def test_recording_delays_resume_until_recording_ends():
 @pytest.mark.asyncio
 async def test_silence_delay_applies_to_each_turn_without_voiced_notices():
     sts = FakePipeline()
-    DeferredAnswerScheduler(sts, resume_text=RESUME_TEXT, silence_seconds=0.02)
+    DeferredAnswerScheduler(resume_text=RESUME_TEXT, silence_seconds=0.02).bind(sts)
     loop = asyncio.get_running_loop()
     try:
         for _ in range(2):
@@ -238,7 +240,7 @@ async def test_new_speech_invalidates_a_resume_before_queue_acceptance():
             finished.set()
 
     sts = QueuedPipeline()
-    DeferredAnswerScheduler(sts, resume_text=RESUME_TEXT, silence_seconds=0)
+    DeferredAnswerScheduler(resume_text=RESUME_TEXT, silence_seconds=0).bind(sts)
     try:
         source = accept_speech(sts)
         await sts.observe_response(source, response_for(source))
@@ -254,7 +256,7 @@ async def test_new_speech_invalidates_a_resume_before_queue_acceptance():
 @pytest.mark.asyncio
 async def test_ack_delay_uses_available_wav_frames_even_with_placeholder_size():
     sts = FakePipeline()
-    DeferredAnswerScheduler(sts, resume_text=RESUME_TEXT, silence_seconds=0)
+    DeferredAnswerScheduler(resume_text=RESUME_TEXT, silence_seconds=0).bind(sts)
     try:
         source = accept_speech(sts)
         wav_file = BytesIO()
@@ -275,3 +277,15 @@ async def test_ack_delay_uses_available_wav_frames_even_with_placeholder_size():
         assert loop.time() - started_at >= 0.125
     finally:
         await sts.shutdown()
+
+
+def test_scheduler_registers_hooks_only_when_bound_once():
+    sts = FakePipeline()
+    scheduler = DeferredAnswerScheduler()
+    assert not hasattr(sts, "before_accept")
+
+    scheduler.bind(sts)
+    assert scheduler.sts is sts
+    assert hasattr(sts, "before_accept")
+    with pytest.raises(RuntimeError, match="already bound"):
+        scheduler.bind(FakePipeline())

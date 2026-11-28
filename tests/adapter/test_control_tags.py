@@ -224,6 +224,7 @@ async def test_websocket_attaches_control_tags_to_chunks_only():
     server.sessions = {"session": WebSocketSessionData()}
     server.response_audio_chunk_size = 0
     server.debug = False
+    server.interruption_context = None
     server.send_response = AsyncMock()
     server.set_artifacts({
         "about_company": {
@@ -271,6 +272,7 @@ async def test_websocket_on_response_receives_resolved_control_tags():
     server.sessions = {"session": WebSocketSessionData()}
     server.response_audio_chunk_size = 0
     server.debug = False
+    server.interruption_context = None
     server.send_response = AsyncMock()
     server.set_artifacts({
         "about_company": {

@@ -136,43 +136,67 @@ NOTE: Files from the previous request are preserved in the merged request
 
 ## Interruption context
 
-An adapter can pass a `RequestContext` from `aiavatar.sts.models` in
-`STSRequest.request_context`. Its optional `interruption` holds an
-`Interruption` with the interrupted response's conversation and transaction IDs.
-`spoken_text` is the estimated transcript of the audio already played. An
-interruption with empty `spoken_text` signals that the response had sent no
-audio when the user began speaking. The adapter can also provide
-`answered_through_transaction_id` to identify the last request that received
-audio or completed delivery.
+`InterruptionContext` from `aiavatar.sts.interruption` tells the LLM what the user had
+heard when they spoke over the assistant. It is a plugin, and `bind(sts)`
+registers its hooks on the pipeline:
 
-For requests created from VAD recordings, an adapter can put a `RequestContext`
-into `metadata["request_context"]` in an `on_speech_started` callback. The pipeline
-copies that value into `STSRequest.request_context` when creating the request.
+- When the VAD reports the start of speech (`on_speech_started`), it captures
+  what that speech interrupts.
+- In an `on_before_start` hook, it records the user's turn and adds the
+  interruption note. The note appears in `start.metadata.request_text`, and every
+  `on_before_llm` hook, such as a QuickResponder, receives the annotated text
+  regardless of registration order.
+- In an `on_before_llm` hook, it adds the note about discarded speech. The
+  client reports discarded speech after the pipeline sends `stop`, so reading it
+  later catches more reports. Hooks registered before `bind()` do not see this
+  note.
 
-Adapters can call `start_interruption_tracking(session_id)` at session start
-and set `RequestContext.track_interruption` on requests whose original text
-should be available to later interruptions. Use a fresh `session_id` for each
-session. The pipeline updates only the tracking state registered for that ID.
-`finalize(session_id)` removes the registration. Before audio has been sent,
-the pipeline looks up the source transaction in the latest chain for that
-session and builds the previous request text from its unanswered turns.
-Requests replaced while waiting in the queue never enter that chain. The
-pipeline checks the resolved conversation ID before applying either template.
-It formats the request before the `start` event and assumes each conversation
-ID belongs to one user.
+The facts come from the adapter, which calls these methods:
 
-The default templates start with `$` to mark application guidance, followed by
-the earlier text and the current request under separate labels. Set
-these options on `STSPipeline`, or pass them to `AIAvatarWebSocketServer` when
-it constructs the pipeline:
+- `open_session(session_id)` when a session starts. `finalize(session_id)`
+  removes the session. Use a fresh `session_id` for each session.
+- `observe(response)` for each response it is about to deliver. Call it before
+  response hooks, which may wait, so that playback reports and the user's next
+  speech never refer to a response the plugin has not seen.
+- `mark_answered(session_id, transaction_id)` after it sends answer audio or an
+  ordinary `final`.
+- `handle_playback_event(session_id, **metadata)` for each playback report from
+  the client.
+- `track(request)` for user requests that do not come from the VAD, such as
+  typed text, so that later interruptions can refer to them.
 
-- `interruption_spoken_template` uses `{spoken_text}` and `{request_text}`.
-- `interruption_before_audio_template` uses `{previous_request}` and
-  `{request_text}`. The pipeline joins the earlier unanswered utterances in
-  `{previous_request}` with newlines.
+The constructor takes `get_active_transaction_id`, a function that returns the
+transaction the client has open for a session. Pass `channels` to `bind()` to
+add notes only to requests from those channels. A plugin binds to one pipeline,
+once. The [WebSocket adapter](adapters-websocket.md#context-for-interruptions)
+sets all of this up with `include_interruption_context=True`.
 
-The templates use Python string formatting. An app can provide templates with
-or without `$`, in any language.
+Three templates control the wording. Set them as constructor arguments or as
+attributes of the plugin. The WebSocket adapter also accepts them as
+`interruption_spoken_template`, `interruption_before_audio_template`, and
+`interruption_discarded_template`:
+
+- `spoken_template` applies when part of the response had played. It uses
+  `{spoken_text}`, the estimated transcript of that audio, and `{request_text}`.
+- `before_audio_template` applies when the response had sent no audio. It uses
+  `{previous_request}`, the unanswered user turns joined by newlines, and
+  `{request_text}`.
+- `discarded_template` applies when the client discarded queued speech before
+  playing it. It uses `{discarded_text}` and `{request_text}`.
+
+The default templates start with `$` to mark application guidance. They use
+Python string formatting, and an app can provide them with or without `$`, in
+any language. The discarded note wraps the others.
+
+A note applies only within the conversation of the interrupted response, and
+the plugin compares conversation IDs after the pipeline resolves them. It
+assumes each conversation ID belongs to one user. For `{previous_request}`, the
+plugin keeps the unanswered turns of each session. Requests replaced while
+waiting in the queue never join them. It quotes `STSRequest.recognized_text`,
+which the pipeline sets to the user's words before tags, prefixes, and notes
+are added. `InterruptionContext.get_interruption(request)` returns the captured
+`Interruption`, with the interrupted response's conversation and transaction
+IDs and its `spoken_text`.
 
 ## Invoke Queue
 
@@ -259,7 +283,8 @@ when it wants to wait for more speech.
 ```python
 from aiavatar.sts.deferred_answer import DeferredAnswerScheduler
 
-deferred_answer = DeferredAnswerScheduler(aiavatar_app.sts)
+deferred_answer = DeferredAnswerScheduler()
+deferred_answer.bind(aiavatar_app.sts)
 ```
 
 The scheduler considers completed VAD turns with an empty tagged answer. It waits
@@ -270,7 +295,8 @@ response handler. The default English instruction asks for a short answer and
 an empty ACK. That request can run only once per reservation.
 Tool calls and guardrail responses do not create reservations.
 
-Use one scheduler per pipeline. The constructor registers the scheduler's hooks.
+Use one scheduler per pipeline. `bind(sts)` registers the scheduler's hooks, and
+binding a scheduler twice raises `RuntimeError`.
 Use `is_enabled(session_id)` to limit it to selected sessions. `silence_seconds`
 defaults to 0.8 and `resume_text` can override the instruction.
 `is_resume(request)` identifies the scheduler's follow-up requests. The scheduler
@@ -471,8 +497,15 @@ Branch on `response.type` yourself, since this hook receives everything. Rewriti
   when `invoke()` resumes after yielding. Standard adapters deliver that response
   before advancing the iterator. Channel filters use the channel at the start of
   `invoke()`.
-- `on_finalize` registers async cleanup that receives a session ID. `on_shutdown`
-  registers async cleanup for the whole pipeline.
+- `on_before_start` registers an async callback that receives the request once
+  the wakeword check has passed and the conversation ID is resolved. It runs
+  before the transaction becomes active, before `start`, and before every
+  `on_before_llm` hook, so text it adds appears in `start.metadata.request_text`.
+  `request.recognized_text` holds the user's words before the pipeline adds
+  tags or prefixes.
+- `on_finalize` registers async cleanup that receives a session ID. A failing
+  handler is logged and does not stop the others. `on_shutdown` registers async
+  cleanup for the whole pipeline.
 
 ## Request Validation
 

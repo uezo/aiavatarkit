@@ -1,6 +1,5 @@
 import asyncio
 from contextlib import AsyncExitStack
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import json
@@ -11,7 +10,7 @@ import traceback
 from typing import AsyncGenerator, Callable, Collection, Dict, FrozenSet, Tuple, List, Optional, Union
 from uuid import uuid4
 from ..database import PoolProvider
-from .models import RequestContext, STSRequest, STSResponse
+from .models import STSRequest, STSResponse
 from .vad import SpeechDetector
 from .vad.silero import SileroSpeechDetector
 from .stt import SpeechRecognizer
@@ -33,27 +32,6 @@ LANGUAGE_PATTERN = re.compile(r"""\[(?:lang|language):([a-zA-Z-]+)\]|<(?:lang|la
 
 ChannelTagRule = Union[str, Tuple[str, str]]
 InsertChannelTagConfig = Union[bool, List[ChannelTagRule]]
-
-DEFAULT_INTERRUPTION_SPOKEN_TEMPLATE = (
-    "$The user started speaking during the previous response. Use the played audio "
-    "to interpret references or corrections. The full response in history may "
-    "contain details that had not played when the user started speaking.\n\n"
-    "Assistant audio played so far (estimated):\n{spoken_text}\n\n"
-    "Current user message:\n{request_text}"
-)
-DEFAULT_INTERRUPTION_BEFORE_AUDIO_TEMPLATE = (
-    "$The user spoke again before audio for the previous request began. "
-    "Interpret the current message as a possible addition or correction "
-    "to that request, whose answer had not played when they started speaking.\n\n"
-    "Previous user request:\n{previous_request}\n\n"
-    "Current user message:\n{request_text}"
-)
-
-
-@dataclass
-class _InterruptionChain:
-    context_id: Optional[str] = None
-    requests: list[tuple[str, str]] = field(default_factory=list)
 
 
 class ResponseHandler:
@@ -145,8 +123,6 @@ class STSPipeline:
         merge_request_prefix: str = "$Previous user's request and your response have been canceled. Please respond again to the following request:\n\n",
         # Japanese version
         # merge_request_prefix: str = "$直前のユーザーの要求とあなたの応答はキャンセルされました。以下の要求に対して、あらためて応答しなおしてください:\n\n"
-        interruption_spoken_template: str = DEFAULT_INTERRUPTION_SPOKEN_TEMPLATE,
-        interruption_before_audio_template: str = DEFAULT_INTERRUPTION_BEFORE_AUDIO_TEMPLATE,
         timestamp_interval_seconds: float = 0.0,
         timestamp_prefix: str = "$Current date and time: ",
         timestamp_timezone: str = "UTC",
@@ -250,11 +226,6 @@ class STSPipeline:
         self.merge_request_threshold = merge_request_threshold
         self.merge_request_prefix = merge_request_prefix
 
-        self.interruption_spoken_template = interruption_spoken_template
-        self.interruption_before_audio_template = interruption_before_audio_template
-        # Latest chain of raw request text per session, scoped to its resolved context.
-        self._interruption_chains: dict[str, _InterruptionChain] = {}
-
         # Validate request (ex: text too short, invalid files)
         self._validate_request = None
 
@@ -296,6 +267,7 @@ class STSPipeline:
         # User custom logic
         self._can_accept_handlers = []
         self._on_accepted_handlers = []
+        self._on_before_start_handlers = []
         self._on_before_llm_handlers = []
         self._on_before_tts_handlers = []
         self._on_finish_handlers = []
@@ -315,8 +287,6 @@ class STSPipeline:
             "wakeword_timeout": self.wakeword_timeout,
             "merge_request_threshold": self.merge_request_threshold,
             "merge_request_prefix": self.merge_request_prefix,
-            "interruption_spoken_template": self.interruption_spoken_template,
-            "interruption_before_audio_template": self.interruption_before_audio_template,
             "timestamp_interval_seconds": self.timestamp_interval_seconds,
             "timestamp_prefix": self.timestamp_prefix,
             "timestamp_timezone": self.timestamp_timezone,
@@ -345,54 +315,6 @@ class STSPipeline:
     def validate_request(self, func):
         self._validate_request = func
         return func
-
-    def start_interruption_tracking(self, session_id: str) -> None:
-        """Open a fresh interruption chain when a session starts."""
-        self._interruption_chains[session_id] = _InterruptionChain()
-
-    def _apply_interruption_context(self, request: STSRequest, recognized_text: str) -> None:
-        request_context = request.request_context
-        if request_context is None:
-            return
-
-        tracking = None
-        chain = []
-        if request_context.track_interruption:
-            tracking = self._interruption_chains.get(request.session_id)
-            if tracking is None:
-                return
-            if tracking.context_id == request.context_id:
-                chain = tracking.requests
-            tracking.context_id = request.context_id
-            tracking.requests = []
-
-        if not recognized_text:
-            return
-
-        preceding_requests = []
-        interruption = request_context.interruption
-        if interruption is not None and interruption.interrupted_response_context_id == request.context_id:
-            if interruption.spoken_text:
-                request.text = self.interruption_spoken_template.format(
-                    spoken_text=interruption.spoken_text, request_text=request.text,
-                )
-            elif chain:
-                start = 0
-                for index, (transaction_id, _) in enumerate(chain):
-                    if transaction_id == interruption.answered_through_transaction_id:
-                        start = index + 1
-                    if transaction_id == interruption.interrupted_response_transaction_id:
-                        preceding_requests = chain[start:index + 1]
-                        break
-                if preceding_requests:
-                    request.text = self.interruption_before_audio_template.format(
-                        previous_request="\n".join(text for _, text in preceding_requests),
-                        request_text=request.text,
-                    )
-
-        if tracking is not None:
-            preceding_requests.append((request.transaction_id, recognized_text))
-            tracking.requests = preceding_requests
 
     @staticmethod
     def _normalize_hook_channels(
@@ -432,6 +354,15 @@ class STSPipeline:
     def on_accepted(self, func=None, *, channels=None):
         return self._register_hook(self._on_accepted_handlers, func, channels=channels)
 
+    def on_before_start(self, func=None, *, channels=None):
+        """Register a hook that runs once the conversation is resolved, before `start`.
+
+        Only requests that pass the wakeword check reach it. It runs before the
+        transaction becomes active and before any `on_before_llm` hook, so text
+        it adds appears in `start.metadata.request_text`.
+        """
+        return self._register_hook(self._on_before_start_handlers, func, channels=channels)
+
     def on_before_llm(self, func=None, *, channels=None):
         return self._register_hook(self._on_before_llm_handlers, func, channels=channels)
 
@@ -464,7 +395,6 @@ class STSPipeline:
             logger.warning(f"No response handler found for invoke: session_id={session_id}")
             return
 
-        request_context = (metadata or {}).get("request_context")
         async for response in self.invoke(STSRequest(
             session_id=session_id,
             user_id=self.vad.get_session_data(session_id, "user_id"),
@@ -474,7 +404,6 @@ class STSPipeline:
             audio_data=data,
             audio_duration=recorded_duration,
             system_prompt_params=self.vad.get_session_data(session_id, "system_prompt_params"),
-            request_context=request_context if isinstance(request_context, RequestContext) else None,
             metadata=metadata,
         )):
             if response.type == "start":
@@ -641,6 +570,7 @@ class STSPipeline:
                     logger.info(f"Recognized text from request: {recognized_text}")
             else:
                 recognized_text = ""    # Request without both text and audio (e.g. image only)
+            request.recognized_text = recognized_text
 
             # Insert channel tag
             if channel_tag_name := self._resolve_channel_tag_name(request.channel):
@@ -706,8 +636,7 @@ class STSPipeline:
                 else:
                     timestamp_inserted_at = state.timestamp_inserted_at
 
-                # Add interruption context after the wakeword check and context resolution.
-                self._apply_interruption_context(request, recognized_text)
+                await self._execute_hooks(self._on_before_start_handlers, hook_channel, request)
 
                 # Overwrite active transaction
                 if self.debug:
@@ -1038,13 +967,15 @@ class STSPipeline:
 
     async def finalize(self, context_id: str):
         try:
+            # A failing handler must not skip cleanup registered after it.
             for handler in self._on_finalize_handlers:
-                await handler(context_id)
+                try:
+                    await handler(context_id)
+                except Exception:
+                    logger.exception("Error in on_finalize handler for session %s", context_id)
         finally:
-            self._interruption_chains.pop(context_id, None)
             await self.vad.finalize_session(context_id)
 
     async def shutdown(self):
         """Close resources constructed and owned by this pipeline."""
-        self._interruption_chains.clear()
         await self._lifecycle.aclose()

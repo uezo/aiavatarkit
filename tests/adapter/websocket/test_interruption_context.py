@@ -10,9 +10,11 @@ import wave
 
 import pytest
 
-from aiavatar.adapter import interruption as adapter_interruption
 from aiavatar.adapter.websocket.server import AIAvatarWebSocketServer, WebSocketSessionData
+from aiavatar.sts import interruption as sts_interruption
+from aiavatar.sts import playback as sts_playback
 from aiavatar.sts.deferred_answer import DEFAULT_RESUME_TEXT, DeferredAnswerScheduler
+from aiavatar.sts.interruption import InterruptionContext
 from aiavatar.sts.llm import LLMResponse, LLMServiceDummy
 from aiavatar.sts.models import STSResponse
 from aiavatar.sts.stt.base import SpeechRecognitionResult
@@ -98,7 +100,8 @@ class Socket:
 @asynccontextmanager
 async def connected_voice_app(
     monkeypatch, tmp_path, *, wakewords=None, turn_taking_gate=DEFAULT_GATE,
-    transcripts=(FIRST_REQUEST, FOLLOW_UP, NORMAL_REQUEST), first_ack=False, **server_options,
+    transcripts=(FIRST_REQUEST, FOLLOW_UP, NORMAL_REQUEST), first_ack=False, use_invoke_queue=True,
+    **server_options,
 ):
     transcripts = iter(transcripts)
     if turn_taking_gate is DEFAULT_GATE:
@@ -135,7 +138,7 @@ async def connected_voice_app(
         db_connection_str=str(tmp_path / "pipeline.db"),
         voice_recorder=SimpleNamespace(),
         voice_recorder_enabled=False,
-        use_invoke_queue=True,
+        use_invoke_queue=use_invoke_queue,
         merge_request_threshold=0,
         mute_on_barge_in=True,
         include_interruption_context=True,
@@ -169,7 +172,7 @@ async def connected_voice_app(
 def fake_playback_clock(monkeypatch):
     clock = SimpleNamespace(now=100.0)
     monkeypatch.setattr(playback_session, "time", SimpleNamespace(monotonic=lambda: clock.now))
-    monkeypatch.setattr(adapter_interruption, "monotonic", lambda: clock.now)
+    monkeypatch.setattr(sts_playback, "monotonic", lambda: clock.now)
     return clock
 
 
@@ -256,7 +259,7 @@ async def interrupt_during_playback(socket, llm, clock):
 
 def test_playback_prefix_accumulates_across_chunks_when_previous_end_arrives_late(monkeypatch):
     clock = fake_playback_clock(monkeypatch)
-    state = adapter_interruption.InterruptionState()
+    state = sts_playback.PlaybackLedger()
     transaction_id = "response"
     state.observe(STSResponse(type="start", context_id="conversation", transaction_id=transaction_id))
     for text in ("ABCD", "EFGH"):
@@ -279,7 +282,7 @@ def test_playback_prefix_accumulates_across_chunks_when_previous_end_arrives_lat
 
 def test_unplayed_ack_is_excluded_when_answer_starts(monkeypatch):
     clock = fake_playback_clock(monkeypatch)
-    state = adapter_interruption.InterruptionState()
+    state = sts_playback.PlaybackLedger()
     state.observe(STSResponse(type="start", context_id="conversation", transaction_id="response"))
     for text in (ACK_TEXT, FIRST_RESPONSE):
         state.observe(STSResponse(type="chunk", transaction_id="response", voice_text=text, audio_data=b"voice"))
@@ -295,7 +298,7 @@ def test_unplayed_ack_is_excluded_when_answer_starts(monkeypatch):
 @pytest.mark.parametrize("replace_answer", [False, True], ids=["answer-prefix", "answer-replaced"])
 def test_ack_playback_from_previous_transaction_is_attributed_to_its_audio(monkeypatch, replace_answer):
     clock = fake_playback_clock(monkeypatch)
-    state = adapter_interruption.InterruptionState()
+    state = sts_playback.PlaybackLedger()
     context_id = "conversation"
     state.observe(STSResponse(type="start", context_id=context_id, transaction_id="earlier-response"))
     state.observe(STSResponse(
@@ -347,7 +350,7 @@ def test_ack_playback_from_previous_transaction_is_attributed_to_its_audio(monke
 
 def test_playback_from_another_context_does_not_hide_pending_request(monkeypatch):
     clock = fake_playback_clock(monkeypatch)
-    state = adapter_interruption.InterruptionState()
+    state = sts_playback.PlaybackLedger()
     state.observe(STSResponse(type="start", context_id="earlier-context", transaction_id="earlier-response"))
     state.observe(STSResponse(
         type="chunk", transaction_id="earlier-response", voice_text=ACK_TEXT, audio_data=b"voice",
@@ -371,7 +374,7 @@ def test_playback_from_another_context_does_not_hide_pending_request(monkeypatch
 
 def test_nonfinal_audio_remains_eligible_after_playback_ends(monkeypatch):
     clock = fake_playback_clock(monkeypatch)
-    state = adapter_interruption.InterruptionState()
+    state = sts_playback.PlaybackLedger()
     state.observe(STSResponse(type="start", context_id="conversation", transaction_id="response"))
     state.observe(STSResponse(
         type="chunk", transaction_id="response", voice_text=FIRST_RESPONSE, audio_data=b"voice",
@@ -396,7 +399,7 @@ def test_nonfinal_audio_remains_eligible_after_playback_ends(monkeypatch):
 @pytest.mark.parametrize("final_first", [True, False], ids=["final-before-end", "final-after-end"])
 def test_final_playback_remains_eligible_only_until_completed(monkeypatch, final_first):
     clock = fake_playback_clock(monkeypatch)
-    state = adapter_interruption.InterruptionState()
+    state = sts_playback.PlaybackLedger()
     state.observe(STSResponse(type="start", context_id="conversation", transaction_id="response"))
     state.observe(STSResponse(
         type="chunk", transaction_id="response", voice_text=FIRST_RESPONSE, audio_data=b"voice",
@@ -445,7 +448,9 @@ async def test_spoken_prefix_is_captured_at_recording_onset_after_sts_final(monk
             prompt, text, params = await llm.calls.get()
             assert prompt == "Reply to Aki."
             assert params == {"name": "Aki"}
-            assert text.startswith("$The user started speaking during the previous response.")
+            assert text.startswith(
+                "$When the user started speaking, assistant audio had played up to the point shown below."
+            )
             assert text.endswith(
                 "\n\nAssistant audio played so far (estimated):\nAB\n\n"
                 f"Current user message:\n{FOLLOW_UP}"
@@ -555,7 +560,7 @@ async def test_websocket_voice_turn_resumes_deferred_answer_in_same_context(monk
             yield LLMResponse(context_id=context_id, text=text)
 
         monkeypatch.setattr(llm, "get_llm_stream_response", respond)
-        DeferredAnswerScheduler(socket.server.sts, silence_seconds=0.01)
+        DeferredAnswerScheduler(silence_seconds=0.01).bind(socket.server.sts)
 
         async with asyncio.timeout(3):
             await socket.feed(VOICE)
@@ -924,6 +929,46 @@ async def test_interruption_excludes_speech_from_replaced_queue_entry(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_direct_mode_follow_up_quotes_request_whose_start_is_still_being_delivered(monkeypatch, tmp_path):
+    async with connected_voice_app(
+        monkeypatch, tmp_path, turn_taking_gate=None, use_invoke_queue=False,
+        interruption_before_audio_template=BEFORE_AUDIO_TEMPLATE,
+    ) as (socket, llm, _):
+        server = socket.server
+        # Both turns continue a conversation with history, so neither starts a new one.
+        await llm.context_manager.add_histories("conversation", [{"role": "user", "content": "Hello"}])
+        server.sts.vad.set_session_data(SESSION_ID, "context_id", "conversation")
+
+        send_text = socket.send_text
+
+        async def send_over_network(text):
+            await asyncio.sleep(0)  # A real socket write yields to the event loop.
+            await send_text(text)
+
+        socket.send_text = send_over_network
+        first_start_held = asyncio.Event()
+        release_first_start = asyncio.Event()
+
+        @server.on_response
+        async def hold_first_start(_message, response):
+            if response.type == "start" and response.metadata["recognized_text"] == FIRST_REQUEST:
+                first_start_held.set()
+                await release_first_start.wait()
+
+        async with asyncio.timeout(3):
+            await socket.feed(VOICE)
+            await socket.feed(SILENCE)
+            await first_start_held.wait()
+
+            # Without the queue, the follow-up runs while the first start is still on its way.
+            await record_follow_up(socket)
+            expected = BEFORE_AUDIO_TEMPLATE.format(previous_request=FIRST_REQUEST, request_text=FOLLOW_UP)
+            assert await llm.calls.get() == ("Reply to Aki.", expected, {"name": "Aki"})
+            release_first_start.set()
+            llm.release_first_response.set()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("first_heard", [False, True], ids=["first-unheard", "first-heard-after-onset"])
 async def test_interruption_combines_processed_requests_before_audio(monkeypatch, tmp_path, first_heard):
     async with connected_voice_app(
@@ -1001,7 +1046,7 @@ async def test_interruption_requires_the_final_request_context(monkeypatch, tmp_
         @socket.server.sts.on_accepted(channels=socket.server.channel)
         async def change_context(request):
             if request.text == FOLLOW_UP:
-                seen_interruptions.append(request.request_context.interruption)
+                seen_interruptions.append(InterruptionContext.get_interruption(request))
                 request.context_id = new_context_id
 
         async with asyncio.timeout(3):
@@ -1052,7 +1097,7 @@ async def test_queued_spoken_context_is_ignored_after_session_finalization(monke
             monkeypatch.setattr(request_queue, "put", observe_enqueue)
             await record_follow_up(socket)
             queued_request = await enqueued.get()
-            assert queued_request.request_context.interruption.spoken_text == "AB"
+            assert InterruptionContext.get_interruption(queued_request).spoken_text == "AB"
             assert request_queue.qsize() == 1
 
             await pipeline.finalize(SESSION_ID)
@@ -1062,35 +1107,38 @@ async def test_queued_spoken_context_is_ignored_after_session_finalization(monke
             follow_up = await assert_new_start(socket, first_id, FOLLOW_UP, FOLLOW_UP)
             assert follow_up["context_id"] == first["context_id"]
             assert follow_up["user_id"] == USER_ID
-            assert SESSION_ID not in pipeline._interruption_chains
+            assert socket.server.interruption_context.get_ledger(SESSION_ID) is None
 
 
 @pytest.mark.asyncio
-async def test_accepted_request_does_not_recreate_finalized_interruption_chain(monkeypatch, tmp_path):
+async def test_accepted_request_does_not_recreate_finalized_interruption_session(monkeypatch, tmp_path):
     async with connected_voice_app(monkeypatch, tmp_path) as (socket, llm, _):
         pipeline = socket.server.sts
-        accepted_contexts = asyncio.Queue()
+        interruption_context = socket.server.interruption_context
+        accepted_requests = asyncio.Queue()
         resume_request = asyncio.Event()
 
         @pipeline.on_accepted(channels=socket.server.channel)
         async def pause_request(request):
-            accepted_contexts.put_nowait(request.request_context)
+            accepted_requests.put_nowait(request)
             await resume_request.wait()
 
         async with asyncio.timeout(3):
-            assert SESSION_ID in pipeline._interruption_chains
+            assert interruption_context.get_ledger(SESSION_ID) is not None
             await socket.feed(VOICE)
             await socket.feed(SILENCE)
             await socket.wait_for(lambda message: message["type"] == "accepted")
-            request_context = await accepted_contexts.get()
-            assert request_context.track_interruption is True
+            request = await accepted_requests.get()
+            # The recording marked this request as a user turn, with nothing to interrupt yet.
+            assert isinstance(request.metadata[sts_interruption._CAPTURE_KEY], sts_interruption._Capture)
+            assert InterruptionContext.get_interruption(request) is None
 
             await pipeline.finalize(SESSION_ID)
-            assert SESSION_ID not in pipeline._interruption_chains
+            assert interruption_context.get_ledger(SESSION_ID) is None
             resume_request.set()
             llm.release_first_response.set()
             assert await llm.calls.get() == ("Reply to Aki.", FIRST_REQUEST, {"name": "Aki"})
-            assert SESSION_ID not in pipeline._interruption_chains
+            assert interruption_context.get_ledger(SESSION_ID) is None
 
 
 @pytest.mark.asyncio
@@ -1106,8 +1154,7 @@ async def test_client_metadata_cannot_add_interruption_prefix(monkeypatch, tmp_p
                 context_id=first["context_id"],
                 text=FOLLOW_UP,
                 system_prompt_params={"name": "Aki"},
-                metadata={"request_context": {
-                    "track_interruption": True,
+                metadata={sts_interruption._CAPTURE_KEY: {
                     "interruption": {
                         "interrupted_response_transaction_id": first["transaction_id"],
                         "interrupted_response_context_id": first["context_id"],
